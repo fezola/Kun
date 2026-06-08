@@ -30,6 +30,7 @@ type Props = {
   live: string
   activeThreadId: string | null
   runtimeConnection: RuntimeConnectionStatus
+  runtimeError?: string | null
   onRetryConnection: () => void
   onOpenSettings: () => void
   onSelectSuggestion?: (prompt: string) => void
@@ -72,6 +73,7 @@ export function MessageTimeline({
   live,
   activeThreadId,
   runtimeConnection,
+  runtimeError,
   onRetryConnection,
   onOpenSettings,
   onSelectSuggestion,
@@ -155,6 +157,7 @@ export function MessageTimeline({
             route={heroRoute}
             ready={runtimeConnection === 'ready'}
             hasWorkspace={!!workspaceRoot}
+            runtimeError={runtimeError}
             activeClawChannel={activeClawChannel}
             onPickWorkspace={() => void chooseWorkspace()}
             onRetry={onRetryConnection}

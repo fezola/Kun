@@ -1646,6 +1646,7 @@ export function Workbench(): ReactElement {
               live={timelineLiveAssistant}
               activeThreadId={activeThreadId}
               runtimeConnection={runtimeConnection}
+              runtimeError={error}
               onRetryConnection={() => void probeRuntime('user')}
               onOpenSettings={() => openSettings('agents')}
               onSelectSuggestion={(text) => setInput(text)}
