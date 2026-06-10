@@ -82,6 +82,17 @@ describe('domain.turn', () => {
     expect(next.items).toHaveLength(1)
   })
 
+  it('persists the disableUserInput flag only when set', () => {
+    expect(baseTurn).not.toHaveProperty('disableUserInput')
+    const headless = createTurnRecord({
+      id: 'turn_im',
+      threadId: 'thr_1',
+      prompt: 'hi from wechat',
+      disableUserInput: true
+    })
+    expect(headless.disableUserInput).toBe(true)
+  })
+
   it('replaces an existing item with the same id', () => {
     const partial = makeToolResultItem({
       id: 'item_call_1',

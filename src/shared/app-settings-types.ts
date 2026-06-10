@@ -375,6 +375,8 @@ export type ClawImChannelV1 = {
   platformCredential?: ClawImPlatformCredentialV1
   remoteSession?: ClawImRemoteSessionV1
   conversations: ClawImConversationV1[]
+  /** When the one-time IM welcome/intro message was delivered. */
+  welcomeSentAt?: string
   createdAt: string
   updatedAt: string
 }

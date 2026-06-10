@@ -31,6 +31,8 @@ export type ClawRuntimeDeps = {
     to: string
     text: string
   }) => Promise<{ ok: true; messageId: string } | { ok: false; message: string }>
+  /** WeChat owner (`ilink_user_id`) for a bridge account; '' when unknown. */
+  resolveWeixinAccountUserId?: (accountId: string) => Promise<string>
   createScheduledTaskFromText?: (
     text: string,
     options?: { workspaceRoot?: string | null; modelHint?: string | null; mode?: ClawRunMode | null }

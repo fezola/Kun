@@ -131,6 +131,15 @@ describe('contracts', () => {
     expect(parsed.sandboxMode).toBe('read-only')
   })
 
+  it('accepts the IM/headless disableUserInput flag on start turn payloads', () => {
+    const parsed = StartTurnRequest.parse({
+      prompt: 'Reply to the WeChat user',
+      disableUserInput: true
+    })
+    expect(parsed.disableUserInput).toBe(true)
+    expect(StartTurnRequest.parse({ prompt: 'GUI turn' }).disableUserInput).toBeUndefined()
+  })
+
   it('accepts turn failure lifecycle messages', () => {
     const event = RuntimeEvent.parse({
       kind: 'turn_failed',

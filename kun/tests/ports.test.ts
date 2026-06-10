@@ -169,24 +169,21 @@ describe('LocalToolHost', () => {
     ).rejects.toThrow(/aborted/)
   })
 
-  it('returns an error result for user_input when no GUI gate is available', async () => {
+  it('rejects user_input as unadvertised when no GUI gate is available', async () => {
     const host = new LocalToolHost({ tools: defaultLocalTools })
-    const result = await host.execute(
-      { callId: 'c1', toolName: 'user_input', arguments: { prompt: '?' } },
-      {
-        threadId: 'th',
-        turnId: 'tu',
-        workspace: '/tmp',
-        approvalPolicy: 'on-request',
-        abortSignal: new AbortController().signal,
-        awaitApproval: async () => 'allow'
-      }
-    )
-    expect(result.item).toMatchObject({
-      kind: 'tool_result',
-      toolName: 'user_input',
-      isError: true
-    })
+    await expect(
+      host.execute(
+        { callId: 'c1', toolName: 'user_input', arguments: { prompt: '?' } },
+        {
+          threadId: 'th',
+          turnId: 'tu',
+          workspace: '/tmp',
+          approvalPolicy: 'on-request',
+          abortSignal: new AbortController().signal,
+          awaitApproval: async () => 'allow'
+        }
+      )
+    ).rejects.toThrow(/user_input is not advertised/)
   })
 
   it('updates in-memory session items in place', async () => {

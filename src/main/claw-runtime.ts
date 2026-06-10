@@ -140,6 +140,32 @@ function imNewTopicText(settings: AppSettingsV1): string {
     : 'Started a new topic. The next message will create a fresh local conversation.'
 }
 
+/**
+ * One-time intro sent to an IM conversation when the channel is first
+ * connected: who the assistant is, what it can do, and the IM commands.
+ */
+export function imWelcomeText(settings: AppSettingsV1, channel?: ClawImChannelV1): string {
+  const profile = channel?.agentProfile
+  const name = profile?.name.trim() || channel?.label.trim() || 'DeepSeek GUI'
+  const description = profile?.description.trim() ?? ''
+  if (isChineseLocale(settings)) {
+    return [
+      `你好，我是 ${name}，通过 DeepSeek GUI 连接到这个对话的 AI 助手。`,
+      ...(description ? [description] : []),
+      '你可以直接发消息让我帮忙：回答问题、查资料、读写已连接电脑工作区里的文件、生成文档等，完成后我会在这里回复你。',
+      imCommandHelpText(settings),
+      '直接发一条消息就可以开始。'
+    ].join('\n\n')
+  }
+  return [
+    `Hi, I am ${name}, an AI assistant connected to this chat through DeepSeek GUI.`,
+    ...(description ? [description] : []),
+    'Send me a message and I will handle it on the connected computer: answering questions, research, reading and writing workspace files, generating documents — I reply here once done.',
+    imCommandHelpText(settings),
+    'Send any message to get started.'
+  ].join('\n\n')
+}
+
 export class ClawRuntime {
   private readonly deps: ClawRuntimeDeps
   private server: Server | null = null
@@ -147,6 +173,10 @@ export class ClawRuntime {
   private feishuChannels = new Map<string, LarkChannel>()
   private feishuChannelKeys = new Map<string, string>()
   private feishuSyncVersion = 0
+  /** Channels with an in-flight first-message welcome delivery. */
+  private readonly welcomeInFlight = new Set<string>()
+  /** WeChat channels already greeted (or attempted) at connect time this run. */
+  private readonly weixinConnectWelcomeAttempted = new Set<string>()
 
   constructor(deps: ClawRuntimeDeps) {
     this.deps = deps
@@ -155,6 +185,98 @@ export class ClawRuntime {
   sync(settings: AppSettingsV1): void {
     this.syncWebhook(settings)
     void this.syncFeishuChannels(settings)
+    void this.syncWeixinConnectWelcomes(settings)
+  }
+
+  /**
+   * Greets the WeChat owner right after a channel is first connected.
+   * The QR login records the owner's user id, so the intro can be
+   * pushed before any inbound message. Failures fall back to the
+   * first-inbound-message welcome.
+   */
+  private async syncWeixinConnectWelcomes(settings: AppSettingsV1): Promise<void> {
+    if (!settings.claw.enabled || !settings.claw.im.enabled) return
+    if (!this.deps.sendWeixinBridgeMessage || !this.deps.resolveWeixinAccountUserId) return
+    for (const channel of settings.claw.channels) {
+      if (!channel.enabled || channel.provider !== 'weixin' || channel.welcomeSentAt) continue
+      const credential = channel.platformCredential
+      if (credential?.kind !== 'weixin' || !credential.accountId.trim()) continue
+      if (this.weixinConnectWelcomeAttempted.has(channel.id) || this.welcomeInFlight.has(channel.id)) continue
+      this.weixinConnectWelcomeAttempted.add(channel.id)
+      this.welcomeInFlight.add(channel.id)
+      try {
+        const owner = (await this.deps.resolveWeixinAccountUserId(credential.accountId)).trim()
+        if (!owner) continue
+        const result = await this.deps.sendWeixinBridgeMessage({
+          accountId: credential.accountId,
+          to: owner,
+          text: imWelcomeText(settings, channel)
+        })
+        if (result.ok) {
+          await this.markChannelWelcomeSent(channel.id)
+        } else {
+          this.deps.logError('claw-weixin', 'Failed to greet the WeChat owner after connect; the welcome will be sent on the first inbound message instead.', {
+            channelId: channel.id,
+            message: result.message
+          })
+        }
+      } catch (error) {
+        this.deps.logError('claw-weixin', 'Failed to greet the WeChat owner after connect', {
+          channelId: channel.id,
+          message: errorMessage(error)
+        })
+      } finally {
+        this.welcomeInFlight.delete(channel.id)
+      }
+    }
+  }
+
+  private async markChannelWelcomeSent(channelId: string): Promise<void> {
+    const settings = await this.deps.store.load()
+    const now = new Date().toISOString()
+    await this.deps.store.patch({
+      claw: {
+        channels: settings.claw.channels.map((item) =>
+          item.id === channelId ? { ...item, welcomeSentAt: now, updatedAt: now } : item
+        )
+      }
+    })
+  }
+
+  /** Welcome text still owed to this channel, or '' when already delivered. */
+  private pendingWelcomeText(settings: AppSettingsV1, channel: ClawImChannelV1 | undefined): string {
+    if (!channel || channel.welcomeSentAt || this.welcomeInFlight.has(channel.id)) return ''
+    return imWelcomeText(settings, channel)
+  }
+
+  /**
+   * Sends the welcome as its own WeChat bubble so it arrives ahead of
+   * the (slow) model reply. Returns false when the channel cannot push
+   * (non-WeChat provider, missing bridge, unknown recipient) so the
+   * caller falls back to prepending the text to the HTTP reply.
+   */
+  private async pushWeixinWelcome(
+    channel: ClawImChannelV1,
+    remoteSession: Pick<ClawImRemoteSessionV1, 'chatId' | 'messageId' | 'threadId' | 'senderId' | 'senderName'> | undefined,
+    text: string
+  ): Promise<boolean> {
+    if (channel.provider !== 'weixin' || !this.deps.sendWeixinBridgeMessage) return false
+    const credential = channel.platformCredential
+    if (credential?.kind !== 'weixin' || !credential.accountId.trim()) return false
+    const to = remoteSession?.chatId.trim() || channel.remoteSession?.chatId.trim() || ''
+    if (!to) return false
+    const result = await this.deps.sendWeixinBridgeMessage({
+      accountId: credential.accountId,
+      to,
+      text
+    })
+    if (!result.ok) {
+      this.deps.logError('claw-weixin', 'Failed to push the WeChat welcome message; prepending it to the reply instead.', {
+        channelId: channel.id,
+        message: result.message
+      })
+    }
+    return result.ok
   }
 
   stop(): void {
@@ -206,6 +328,9 @@ export class ClawRuntime {
     }
     if (displayText && displayText !== runtimePrompt) turnBody.displayText = displayText
     if (model) turnBody.model = model
+    // IM senders can only reply in their chat app; they cannot answer
+    // GUI prompts, so the runtime must not expose user-input tools.
+    if (options.source === 'im') turnBody.disableUserInput = true
     let turn = await this.startRuntimeTurn(settings, thread.id, turnBody)
     if (!turn.ok && existingThreadId && isMissingThreadResult(turn)) {
       this.deps.logError('claw-runtime', 'Configured IM thread was missing; creating a replacement thread.', {
@@ -480,6 +605,10 @@ export class ClawRuntime {
       onTurnStarted: async ({ threadId }) => {
         if (!channel) return
         const now = new Date().toISOString()
+        // Patch from a fresh settings snapshot: the request-scoped
+        // `settings` may be stale by now (e.g. the welcome marker was
+        // persisted while this turn was starting).
+        const latestSettings = await this.deps.store.load()
         if (remoteSession) {
           const existingConversation = conversation ?? this.findChannelConversation(channel, remoteSession)
           const nextConversation: ClawImConversationV1 = existingConversation
@@ -506,7 +635,7 @@ export class ClawRuntime {
               }
           await this.deps.store.patch({
             claw: {
-              channels: settings.claw.channels.map((item) =>
+              channels: latestSettings.claw.channels.map((item) =>
                 item.id === channel.id
                   ? {
                       ...item,
@@ -523,7 +652,7 @@ export class ClawRuntime {
         } else if (!initialThreadId) {
           await this.deps.store.patch({
             claw: {
-              channels: settings.claw.channels.map((item) =>
+              channels: latestSettings.claw.channels.map((item) =>
                 item.id === channel.id
                   ? {
                       ...item,
@@ -914,6 +1043,36 @@ export class ClawRuntime {
     })
     const workspaceRoot = this.resolveIncomingWorkspaceRoot(settings, channel, conversation, remoteSession)
     const replyOptions = { replyTo: message.messageId, replyInThread: Boolean(message.threadId) }
+
+    // Feishu has no recipient until someone messages the bot, so the
+    // one-time channel intro goes out before handling the first message.
+    const welcomeText = this.pendingWelcomeText(settings, channel)
+    if (welcomeText) {
+      this.welcomeInFlight.add(channel.id)
+      try {
+        await this.sendFeishuMessage(
+          bridge,
+          message.chatId,
+          { markdown: welcomeText },
+          {},
+          {
+            purpose: 'welcome',
+            channelId,
+            chatId: message.chatId,
+            inboundMessageId: message.messageId
+          }
+        )
+        await this.markChannelWelcomeSent(channel.id)
+      } catch (error) {
+        this.deps.logError('claw-feishu', 'Failed to send the Feishu welcome message; it will be retried on the next inbound message.', {
+          message: errorMessage(error),
+          channelId,
+          chatId: message.chatId
+        })
+      } finally {
+        this.welcomeInFlight.delete(channel.id)
+      }
+    }
 
     const commandReply = await this.handleIncomingImCommand(settings, {
       text: message.content,
@@ -1450,6 +1609,21 @@ export class ClawRuntime {
               threadId: remoteSession.threadId
             })
           : undefined
+      // First inbound message on a freshly connected channel: push the
+      // intro over the WeChat bridge when possible (it lands before the
+      // model reply), otherwise prepend it to this response.
+      let welcomePrefix = ''
+      const welcomeText = this.pendingWelcomeText(settings, channel)
+      if (welcomeText && channel) {
+        this.welcomeInFlight.add(channel.id)
+        try {
+          const pushed = await this.pushWeixinWelcome(channel, remoteSession ?? undefined, welcomeText)
+          if (!pushed) welcomePrefix = `${welcomeText}\n\n---\n\n`
+          await this.markChannelWelcomeSent(channel.id)
+        } finally {
+          this.welcomeInFlight.delete(channel.id)
+        }
+      }
       const commandReply = await this.handleIncomingImCommand(settings, {
         text: prompt,
         channel,
@@ -1457,7 +1631,7 @@ export class ClawRuntime {
         remoteSession: remoteSession ?? undefined
       })
       if (commandReply !== null) {
-        writeJson(res, 200, { ok: true, reply: commandReply })
+        writeJson(res, 200, { ok: true, reply: `${welcomePrefix}${commandReply}` })
         return
       }
       const taskCreation = await this.deps.createScheduledTaskFromText?.(prompt, {
@@ -1466,7 +1640,7 @@ export class ClawRuntime {
         mode: im.mode
       }) ?? { kind: 'noop' as const }
       if (taskCreation.kind === 'created') {
-        writeJson(res, 200, { ok: true, createdTaskId: taskCreation.taskId, reply: taskCreation.confirmationText })
+        writeJson(res, 200, { ok: true, createdTaskId: taskCreation.taskId, reply: `${welcomePrefix}${taskCreation.confirmationText}` })
         return
       }
       if (taskCreation.kind === 'error') {
@@ -1481,7 +1655,7 @@ export class ClawRuntime {
         conversation,
         remoteSession: remoteSession ?? undefined
       })
-      writeJson(res, result.ok ? 200 : 500, result.ok ? { ...result, reply: result.text ?? '' } : result)
+      writeJson(res, result.ok ? 200 : 500, result.ok ? { ...result, reply: `${welcomePrefix}${result.text ?? ''}` } : result)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       this.deps.logError('claw-webhook', 'Claw IM webhook request failed', { message })

@@ -53,7 +53,8 @@ export class TurnService {
       reasoningEffort: input.request.reasoningEffort,
       attachmentIds: input.request.attachmentIds ?? [],
       guiPlan: input.request.guiPlan,
-      mode: input.request.mode
+      mode: input.request.mode,
+      disableUserInput: input.request.disableUserInput
     })
     const userItem = makeUserItem({
       id: `item_${turnId}_user`,

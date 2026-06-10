@@ -248,6 +248,19 @@ function latestUserMessageText(items: readonly TurnItem[], turnId: string): stri
   return ''
 }
 
+/**
+ * Injected when the turn runs without an interactive user (IM bridges,
+ * headless runs). The user-input tools are also withheld from the tool
+ * catalog; this line keeps the model from promising a GUI dialog that
+ * nobody can answer.
+ */
+function userInputUnavailableInstruction(): string {
+  return [
+    'Interactive user input is unavailable for this turn: the user is on a remote channel (IM) and cannot answer GUI prompts.',
+    'Do not ask for structured input or wait for confirmation. If information is missing, state your assumption and continue, or finish your reply with the question so the user can answer in their next message.'
+  ].join(' ')
+}
+
 function allowedToolNamesWithGuiStateTools(
   allowedToolNames: readonly string[] | undefined,
   activeGoal: boolean
@@ -571,6 +584,10 @@ export class AgentLoop {
       skillResolution.allowedToolNames,
       activeGoalInstruction !== null
     )
+    // IM/headless turns run without the user-input gate; the tools key
+    // their advertisement off `awaitUserInput`, so omitting it hides
+    // `user_input`/`request_user_input` and rejects stray calls.
+    const userInputDisabled = turn?.disableUserInput === true
     const toolContext: ToolHostContext = {
       threadId,
       turnId,
@@ -586,7 +603,9 @@ export class AgentLoop {
       sandboxMode,
       abortSignal: signal,
       awaitApproval: async () => 'allow',
-      awaitUserInput: (input) => this.awaitUserInput(threadId, turnId, input, signal)
+      ...(userInputDisabled
+        ? {}
+        : { awaitUserInput: (input) => this.awaitUserInput(threadId, turnId, input, signal) })
     }
     const tools = await this.opts.toolHost.listTools(toolContext)
     const toolSpecs: ModelToolSpec[] = tools
@@ -601,6 +620,7 @@ export class AgentLoop {
       model: modelCapabilities.id,
       activeSkillIds: skillResolution.activeSkillIds,
       allowedToolNames,
+      userInputDisabled,
       fingerprint: toolCatalog.fingerprint,
       toolNames: toolCatalog.toolNames,
       toolHashes: toolCatalog.toolHashes
@@ -655,6 +675,7 @@ export class AgentLoop {
       ...(activeTodoInstruction ? [activeTodoInstruction] : []),
       ...memoryInstructions(memories),
       ...skillResolution.instructions,
+      ...(userInputDisabled ? [userInputUnavailableInstruction()] : []),
       ...(effectiveToolSpecs.some((tool) => tool.name === 'bash') ? [shellRuntimeInstruction()] : []),
       ...(toolCatalogDriftMessage ? [toolCatalogDriftMessage] : [])
     ]
@@ -966,6 +987,7 @@ export class AgentLoop {
       modelCapabilities,
       activeSkillIds: skillResolution.activeSkillIds,
       allowedToolNames,
+      userInputDisabled,
       toolProviderKinds: new Map(tools.map((tool) => [tool.name, tool.providerKind])),
       approvalPolicy,
       sandboxMode,
@@ -985,6 +1007,7 @@ export class AgentLoop {
     modelCapabilities: ModelCapabilityMetadata
     activeSkillIds: readonly string[]
     allowedToolNames?: readonly string[]
+    userInputDisabled?: boolean
     toolProviderKinds: ReadonlyMap<string, ToolProviderKind | undefined>
     approvalPolicy: ToolHostContext['approvalPolicy']
     sandboxMode: NonNullable<ToolHostContext['sandboxMode']>
@@ -1094,6 +1117,7 @@ export class AgentLoop {
     modelCapabilities: ModelCapabilityMetadata
     activeSkillIds: readonly string[]
     allowedToolNames?: readonly string[]
+    userInputDisabled?: boolean
     approvalPolicy: ToolHostContext['approvalPolicy']
     sandboxMode: NonNullable<ToolHostContext['sandboxMode']>
     signal: AbortSignal
@@ -1124,8 +1148,12 @@ export class AgentLoop {
         })
         return this.opts.approvalGate.request(approval)
       },
-      awaitUserInput: (inputRequest) =>
-        this.awaitUserInput(input.threadId, input.turnId, inputRequest, input.signal)
+      ...(input.userInputDisabled
+        ? {}
+        : {
+            awaitUserInput: (inputRequest) =>
+              this.awaitUserInput(input.threadId, input.turnId, inputRequest, input.signal)
+          })
     }
   }
 
@@ -1648,6 +1676,7 @@ export class AgentLoop {
     model: string
     activeSkillIds: readonly string[]
     allowedToolNames?: readonly string[]
+    userInputDisabled?: boolean
     fingerprint: string
     toolNames: string[]
     toolHashes: Record<string, string>
@@ -1658,7 +1687,8 @@ export class AgentLoop {
       mode: input.mode,
       model: input.model,
       activeSkillIds: [...input.activeSkillIds].sort(),
-      allowedToolNames: input.allowedToolNames ? [...input.allowedToolNames].sort() : []
+      allowedToolNames: input.allowedToolNames ? [...input.allowedToolNames].sort() : [],
+      userInputDisabled: input.userInputDisabled === true
     })
     const current: ToolCatalogSnapshot = {
       fingerprint: input.fingerprint,

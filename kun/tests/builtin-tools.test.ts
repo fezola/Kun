@@ -171,7 +171,9 @@ describe('Kun built-in tools', () => {
   })
 
   it('advertises structured GUI input choices and normalizes single-question options', async () => {
-    const tools = await host.listTools(buildContext(workspace))
+    const tools = await host.listTools(
+      buildContext(workspace, { awaitUserInput: async () => ({ status: 'cancelled' }) })
+    )
     const requestInputTool = tools.find((tool) => tool.name === 'request_user_input')
     expect(requestInputTool?.inputSchema).toMatchObject({
       properties: {
@@ -213,6 +215,13 @@ describe('Kun built-in tools', () => {
       toolName: 'request_user_input',
       isError: false
     })
+  })
+
+  it('hides GUI input tools when the turn context has no user-input gate', async () => {
+    const tools = await host.listTools(buildContext(workspace))
+    const names = tools.map((tool) => tool.name)
+    expect(names).not.toContain('user_input')
+    expect(names).not.toContain('request_user_input')
   })
 
   it('exposes pi-style coding and read-only tool groups', () => {

@@ -268,6 +268,21 @@ describe('claw settings', () => {
       { label: 'Support Bot', name: 'Support Bot' }
     ])
   })
+
+  it('keeps the channel welcomeSentAt marker and drops empty values', () => {
+    const welcomed = { ...clawChannel('weixin', 'WeChat Agent'), welcomeSentAt: '2026-06-10T00:00:00.000Z' }
+    const fresh = { ...clawChannel('feishu', 'Feishu / Lark'), welcomeSentAt: '' }
+    const normalized = normalizeAppSettings({
+      ...settings(),
+      claw: {
+        ...defaultClawSettings(),
+        channels: [welcomed, fresh]
+      }
+    })
+
+    expect(normalized.claw.channels[0].welcomeSentAt).toBe('2026-06-10T00:00:00.000Z')
+    expect(normalized.claw.channels[1]).not.toHaveProperty('welcomeSentAt')
+  })
 })
 
 describe('isKunRuntimeInsecure', () => {

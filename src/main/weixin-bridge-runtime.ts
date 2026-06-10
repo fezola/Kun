@@ -1073,6 +1073,22 @@ export async function ensureWeixinBridgeRpcUrl(): Promise<string> {
   return startPromise
 }
 
+/**
+ * WeChat user id (`ilink_user_id`) that bound this bot account during QR
+ * login, or '' when the account is not configured. Used by Claw to greet
+ * the owner right after the first connection.
+ */
+export async function getWeixinBridgeAccountUserId(accountId: string): Promise<string> {
+  const normalized = normalizeAccountId(accountId)
+  if (!normalized) return ''
+  try {
+    const account = await resolveWeixinAccount(normalized)
+    return account.configured ? account.userId ?? '' : ''
+  } catch {
+    return ''
+  }
+}
+
 export async function sendWeixinBridgeMessage(options: {
   accountId: string
   to: string

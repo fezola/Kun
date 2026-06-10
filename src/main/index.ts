@@ -62,6 +62,7 @@ import { registerRuntimeSseIpc } from './runtime-sse-ipc'
 import {
   configureWeixinBridgeRuntimeContextProvider,
   ensureWeixinBridgeRpcUrl,
+  getWeixinBridgeAccountUserId,
   sendWeixinBridgeMessage,
   stopWeixinBridgeRuntime
 } from './weixin-bridge-runtime'
@@ -875,6 +876,7 @@ app.whenReady().then(async () => {
     logError,
     notifyChannelActivity: emitClawChannelActivity,
     sendWeixinBridgeMessage,
+    resolveWeixinAccountUserId: getWeixinBridgeAccountUserId,
     createScheduledTaskFromText: (text, options) =>
       scheduleRuntime?.createScheduledTaskFromText(text, options) ?? Promise.resolve({ kind: 'noop' })
   })

@@ -146,6 +146,9 @@ export function normalizeClawSettings(input: ClawSettingsPatchV1 | undefined): C
                   .map((conversation) => normalizeClawImConversation(conversation))
                   .filter((conversation): conversation is ClawImConversationV1 => conversation != null)
               : [],
+            ...(typeof raw.welcomeSentAt === 'string' && raw.welcomeSentAt.trim()
+              ? { welcomeSentAt: raw.welcomeSentAt }
+              : {}),
             createdAt: typeof raw.createdAt === 'string' && raw.createdAt ? raw.createdAt : now,
             updatedAt: typeof raw.updatedAt === 'string' && raw.updatedAt ? raw.updatedAt : now
           }

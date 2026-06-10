@@ -79,7 +79,12 @@ describe('create_plan tool: advertisement', () => {
 
   it('limits default plan-mode tool advertisement to read-only investigation and create_plan', async () => {
     const host = new LocalToolHost({ tools: buildDefaultLocalTools() })
-    const tools = await host.listTools(buildContext({ threadMode: 'plan' }))
+    const tools = await host.listTools(
+      buildContext({
+        threadMode: 'plan',
+        awaitUserInput: async () => ({ status: 'cancelled' })
+      })
+    )
     const names = tools.map((tool) => tool.name)
 
     expect(names).toEqual([
@@ -92,6 +97,14 @@ describe('create_plan tool: advertisement', () => {
       CREATE_PLAN_TOOL_NAME
     ])
     expect(names).not.toEqual(expect.arrayContaining(['bash', 'edit', 'write', 'echo']))
+  })
+
+  it('drops the GUI input tools from plan-mode advertisement when no user-input gate is wired', async () => {
+    const host = new LocalToolHost({ tools: buildDefaultLocalTools() })
+    const tools = await host.listTools(buildContext({ threadMode: 'plan' }))
+    const names = tools.map((tool) => tool.name)
+
+    expect(names).toEqual(['read', 'grep', 'find', 'ls', CREATE_PLAN_TOOL_NAME])
   })
 
   it('keeps the normal agent-mode default tool advertisement unchanged', async () => {
