@@ -74,6 +74,7 @@ export type SendMessageOverrides = {
 export type InitialSetupMode = 'required' | 'preview'
 export type SettingsRouteSection =
   | 'general'
+  | 'providers'
   | 'write'
   | 'imageGeneration'
   | 'agents'

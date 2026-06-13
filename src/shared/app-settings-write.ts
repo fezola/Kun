@@ -8,13 +8,17 @@ import {
   DEFAULT_WRITE_INLINE_LONG_COMPLETION_MAX_TOKENS,
   DEFAULT_WRITE_INLINE_LONG_COMPLETION_MIN_ACCEPT_SCORE,
   DEFAULT_WRITE_WORKSPACE_ROOT,
+  DEFAULT_MODEL_ENDPOINT_FORMAT,
+  DEFAULT_MODEL_PROVIDER_ID,
   type AppSettingsV1,
+  type ModelEndpointFormat,
+  type ModelProviderProfileV1,
   type WriteInlineCompletionSettingsV1,
   type WriteSettingsPatchV1,
   type WriteSettingsV1
 } from './app-settings-types'
 import { getActiveAgentApiKey, getKunRuntimeSettings } from './app-settings-kun'
-import { resolveModelProviderBaseUrl } from './app-settings-provider'
+import { getModelProviderProfile, resolveModelProviderBaseUrl } from './app-settings-provider'
 import { compactStrings } from './app-settings-normalizers'
 
 export function defaultWriteSettings(): WriteSettingsV1 {
@@ -26,6 +30,8 @@ export function defaultWriteSettings(): WriteSettingsV1 {
       enabled: true,
       retrievalEnabled: true,
       longCompletionEnabled: true,
+      inheritProvider: true,
+      providerId: '',
       apiKey: '',
       baseUrl: '',
       inheritModel: true,
@@ -55,6 +61,8 @@ function normalizeWriteInlineCompletionSettings(
     enabled: input?.enabled !== false,
     retrievalEnabled: input?.retrievalEnabled !== false,
     longCompletionEnabled: input?.longCompletionEnabled !== false,
+    inheritProvider: shouldInheritWriteInlineCompletionProvider(input),
+    providerId: typeof input?.providerId === 'string' ? input.providerId.trim() : defaults.providerId,
     apiKey: typeof input?.apiKey === 'string' ? input.apiKey.trim() : defaults.apiKey,
     baseUrl: typeof input?.baseUrl === 'string' ? input.baseUrl.trim() : defaults.baseUrl,
     inheritModel: shouldInheritWriteInlineCompletionModel(input),
@@ -86,6 +94,14 @@ function normalizeWriteInlineCompletionSettings(
   }
 }
 
+export function shouldInheritWriteInlineCompletionProvider(
+  input: Partial<Pick<WriteInlineCompletionSettingsV1, 'inheritProvider' | 'providerId'>> | undefined
+): boolean {
+  if (typeof input?.inheritProvider === 'boolean') return input.inheritProvider
+  const providerId = typeof input?.providerId === 'string' ? input.providerId.trim() : ''
+  return !providerId
+}
+
 export function normalizeWriteInlineCompletionModel(value: unknown): string {
   const trimmed = typeof value === 'string' ? value.trim() : ''
   if (!trimmed || trimmed === 'auto') return DEFAULT_WRITE_INLINE_COMPLETION_MODEL
@@ -111,12 +127,31 @@ export function resolveWriteInlineCompletionBaseUrl(settings: AppSettingsV1): st
   if (configured && configured !== DEFAULT_WRITE_INLINE_COMPLETION_BASE_URL) {
     return configured
   }
-  return resolveModelProviderBaseUrl(settings)
+  return resolveWriteInlineCompletionProviderProfile(settings).baseUrl.trim() || resolveModelProviderBaseUrl(settings)
 }
 
 export function resolveWriteInlineCompletionApiKey(settings: AppSettingsV1): string {
-  const configured = getNormalizedWriteInlineCompletionSettings(settings).apiKey.trim()
-  return configured || getActiveAgentApiKey(settings)
+  const inlineCompletion = getNormalizedWriteInlineCompletionSettings(settings)
+  const configured = inlineCompletion.apiKey.trim()
+  if (configured) return configured
+  const provider = resolveWriteInlineCompletionProviderProfile(settings)
+  return provider.apiKey.trim() || (inlineCompletion.inheritProvider ? getActiveAgentApiKey(settings) : '')
+}
+
+export function resolveWriteInlineCompletionEndpointFormat(settings: AppSettingsV1): ModelEndpointFormat {
+  return resolveWriteInlineCompletionProviderProfile(settings).endpointFormat ?? DEFAULT_MODEL_ENDPOINT_FORMAT
+}
+
+export function resolveWriteInlineCompletionProviderId(settings: AppSettingsV1): string {
+  const inlineCompletion = getNormalizedWriteInlineCompletionSettings(settings)
+  if (!inlineCompletion.inheritProvider && inlineCompletion.providerId.trim()) {
+    return inlineCompletion.providerId.trim()
+  }
+  return getKunRuntimeSettings(settings).providerId?.trim() || DEFAULT_MODEL_PROVIDER_ID
+}
+
+export function resolveWriteInlineCompletionProviderProfile(settings: AppSettingsV1): ModelProviderProfileV1 {
+  return getModelProviderProfile(settings, resolveWriteInlineCompletionProviderId(settings))
 }
 
 export function resolveWriteInlineCompletionModel(
@@ -129,6 +164,10 @@ export function resolveWriteInlineCompletionModel(
   const configured = configuredSettings.model.trim()
   if (!configuredSettings.inheritModel) {
     return normalizeWriteInlineCompletionModel(configured)
+  }
+  if (!configuredSettings.inheritProvider && configuredSettings.providerId.trim()) {
+    const providerModel = resolveWriteInlineCompletionProviderProfile(settings).models[0]?.trim()
+    if (providerModel) return providerModel
   }
   const runtimeModel = getKunRuntimeSettings(settings).model?.trim() ?? ''
   if (runtimeModel) return runtimeModel
@@ -171,6 +210,9 @@ export function mergeWriteSettings(
 
   if ('model' in inlinePatch && !('inheritModel' in inlinePatch)) {
     delete (nextInlineCompletion as { inheritModel?: boolean }).inheritModel
+  }
+  if ('providerId' in inlinePatch && !('inheritProvider' in inlinePatch)) {
+    delete (nextInlineCompletion as { inheritProvider?: boolean }).inheritProvider
   }
 
   return normalizeWriteSettings({

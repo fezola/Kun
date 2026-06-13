@@ -57,6 +57,8 @@ export const useWriteWorkspaceStore = create<WriteWorkspaceState>((set, get) => 
     enabled: true,
     retrievalEnabled: true,
     longCompletionEnabled: true,
+    inheritProvider: true,
+    providerId: '',
     apiKey: '',
     baseUrl: '',
     inheritModel: true,

@@ -6,6 +6,7 @@ import {
   type ClawImPlatformCredentialV1,
   type ClawImRemoteSessionV1
 } from './app-settings-types'
+import { resolveKunImageGenerationSettings } from './app-settings-provider'
 
 export const CLAW_CURRENT_USER_REQUEST_HEADING = '[Current user request]'
 export const CLAW_MANAGED_INSTRUCTIONS_HEADING = '[Claw managed instructions]'
@@ -166,7 +167,7 @@ export function buildClawImAgentInstructions(channel: ClawImChannelV1 | null | u
 }
 
 export function buildClawRuntimePrompt(
-  settings: Pick<AppSettingsV1, 'claw'> & Partial<Pick<AppSettingsV1, 'agents'>>,
+  settings: Pick<AppSettingsV1, 'claw'> & Partial<Pick<AppSettingsV1, 'agents' | 'provider'>>,
   prompt: string,
   options: { channel?: ClawImChannelV1 | null } = {}
 ): string {
@@ -182,7 +183,9 @@ export function buildClawRuntimePrompt(
   if (prefix) instructions.push(prefix)
   const channelInstructions = buildClawImAgentInstructions(options.channel)
   if (channelInstructions) instructions.push(channelInstructions)
-  const imageGeneration = settings.agents?.kun?.imageGeneration
+  const imageGeneration = settings.provider && settings.agents
+    ? resolveKunImageGenerationSettings(settings as AppSettingsV1)
+    : settings.agents?.kun?.imageGeneration
   if (imageGeneration?.enabled && imageGeneration.baseUrl.trim() && imageGeneration.apiKey.trim() && imageGeneration.model.trim()) {
     instructions.push(
       'Image generation is enabled for this Claw agent. When the user asks you to create, draw, generate, or edit an image, call the `generate_image` tool. After the tool succeeds the image file is delivered to the user automatically (IM chats receive it as a picture message), so simply confirm the image is ready — never paste base64 data, local file paths, or fabricated links into your reply.'

@@ -1,9 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import {
   DEFAULT_WRITE_INLINE_COMPLETION_MAX_TOKENS,
+  modelEndpointPath,
+  resolveWriteInlineCompletionEndpointFormat,
   resolveWriteInlineCompletionApiKey,
   resolveWriteInlineCompletionBaseUrl,
   resolveWriteInlineCompletionModel,
+  type ModelEndpointFormat,
   type AppSettingsV1
 } from '../../shared/app-settings'
 import {
@@ -38,10 +41,21 @@ type ChatCompletionResponse = {
   }>
 }
 
+type ResponsesApiResponse = {
+  output_text?: string
+  output?: Array<Record<string, unknown>>
+}
+
+type AnthropicMessageResponse = {
+  content?: Array<Record<string, unknown>>
+}
+
 type ChatCompletionMessage = {
   role: 'system' | 'user'
   content: string
 }
+
+type WriteInlineProviderResponseFormat = ModelEndpointFormat | 'fim_completions'
 
 function shouldDisableThinkingForInlineCompletion(model: string): boolean {
   const normalized = model.trim().toLowerCase()
@@ -377,17 +391,166 @@ function debugPromptFromMessages(messages: ChatCompletionMessage[]): string {
     .join('\n\n')
 }
 
-function providerTextFromResponse(responseText: string): string {
-  let parsed: ChatCompletionResponse
+function compatibleModelEndpointUrl(baseUrl: string, endpointFormat: ModelEndpointFormat): string {
+  if (endpointFormat === 'chat_completions') return upstreamOpenAiChatCompletionsUrl(baseUrl)
+  const path = modelEndpointPath(endpointFormat)
+  const normalized = baseUrl.trim().replace(/\/+$/, '')
+  if (!normalized) return `/v1/${path}`
+  if (normalized.toLowerCase().endsWith(`/${path}`)) return normalized
+  const withoutEndpoint = stripKnownModelEndpointPath(normalized)
+  const lastSegment = withoutEndpoint.split('/').pop()?.toLowerCase() ?? ''
+  if (lastSegment === 'beta') {
+    return `${withoutEndpoint.slice(0, -'/beta'.length)}/v1/${path}`
+  }
+  if (/^v\d+$/.test(lastSegment)) {
+    return `${withoutEndpoint}/${path}`
+  }
+  return `${withoutEndpoint}/v1/${path}`
+}
+
+function stripKnownModelEndpointPath(baseUrl: string): string {
+  const lower = baseUrl.toLowerCase()
+  for (const path of ['chat/completions', 'responses', 'messages']) {
+    if (lower.endsWith(`/${path}`)) {
+      return baseUrl.slice(0, -path.length).replace(/\/+$/, '')
+    }
+  }
+  return baseUrl
+}
+
+function isDeepSeekInlineCompletionBaseUrl(baseUrl: string): boolean {
   try {
-    parsed = JSON.parse(responseText) as ChatCompletionResponse
+    const parsed = new URL(baseUrl)
+    return parsed.hostname.toLowerCase().endsWith('deepseek.com')
+  } catch {
+    return baseUrl.toLowerCase().includes('deepseek.com')
+  }
+}
+
+function buildProviderHeaders(apiKey: string, responseFormat: WriteInlineProviderResponseFormat): Record<string, string> {
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    Authorization: `Bearer ${apiKey}`,
+    'Content-Type': 'application/json'
+  }
+  if (responseFormat === 'messages') {
+    headers['x-api-key'] = apiKey
+    headers['anthropic-version'] = '2023-06-01'
+  }
+  return headers
+}
+
+function buildAnthropicMessages(messages: ChatCompletionMessage[]): {
+  system: string
+  messages: Array<{ role: 'user' | 'assistant'; content: string }>
+} {
+  const system: string[] = []
+  const out: Array<{ role: 'user' | 'assistant'; content: string }> = []
+  for (const message of messages) {
+    if (message.role === 'system') {
+      system.push(message.content)
+      continue
+    }
+    out.push({ role: 'user', content: message.content })
+  }
+  return { system: system.join('\n\n'), messages: out }
+}
+
+function buildProviderRequestBody(input: {
+  responseFormat: WriteInlineProviderResponseFormat
+  model: string
+  messages: ChatCompletionMessage[] | null
+  prompt: string
+  suffix: string
+  maxTokens: number
+}): Record<string, unknown> {
+  if (input.responseFormat === 'fim_completions') {
+    return {
+      model: input.model,
+      prompt: input.prompt,
+      suffix: input.suffix,
+      max_tokens: input.maxTokens
+    }
+  }
+  const messages = input.messages ?? [
+    { role: 'user' as const, content: input.prompt }
+  ]
+  if (input.responseFormat === 'messages') {
+    const converted = buildAnthropicMessages(messages)
+    return {
+      model: input.model,
+      messages: converted.messages,
+      max_tokens: input.maxTokens,
+      ...(converted.system ? { system: converted.system } : {})
+    }
+  }
+  if (input.responseFormat === 'responses') {
+    return {
+      model: input.model,
+      input: messages.map((message) => ({
+        role: message.role,
+        content: message.content
+      })),
+      max_output_tokens: input.maxTokens
+    }
+  }
+  return {
+    model: input.model,
+    messages,
+    max_tokens: input.maxTokens,
+    ...(shouldDisableThinkingForInlineCompletion(input.model)
+      ? { thinking: { type: 'disabled' } }
+      : {})
+  }
+}
+
+function providerTextFromResponse(
+  responseText: string,
+  format: WriteInlineProviderResponseFormat = 'chat_completions'
+): string {
+  let parsed: ChatCompletionResponse | ResponsesApiResponse | AnthropicMessageResponse
+  try {
+    parsed = JSON.parse(responseText) as ChatCompletionResponse | ResponsesApiResponse | AnthropicMessageResponse
   } catch {
     throw new Error('Inline completion provider returned non-JSON data.')
   }
-  const firstChoice = parsed.choices?.[0]
+  if (format === 'responses') {
+    return textFromResponsesPayload(parsed as ResponsesApiResponse)
+  }
+  if (format === 'messages') {
+    return textFromAnthropicPayload(parsed as AnthropicMessageResponse)
+  }
+  const chatPayload = parsed as ChatCompletionResponse
+  const firstChoice = chatPayload.choices?.[0]
   if (typeof firstChoice?.text === 'string') return firstChoice.text
   const first = firstChoice?.message?.content
   return flattenMessageContent(first)
+}
+
+function textFromResponsesPayload(payload: ResponsesApiResponse): string {
+  if (typeof payload.output_text === 'string') return payload.output_text
+  const parts: string[] = []
+  for (const item of payload.output ?? []) {
+    const content = item.content
+    if (!Array.isArray(content)) continue
+    for (const block of content) {
+      if (!block || typeof block !== 'object') continue
+      const record = block as Record<string, unknown>
+      const text = record.text
+      if (typeof text === 'string') parts.push(text)
+    }
+  }
+  return parts.join('')
+}
+
+function textFromAnthropicPayload(payload: AnthropicMessageResponse): string {
+  const parts: string[] = []
+  for (const block of payload.content ?? []) {
+    if (block.type === 'text' && typeof block.text === 'string') {
+      parts.push(block.text)
+    }
+  }
+  return parts.join('')
 }
 
 export type WriteInlineActionEditTarget = {
@@ -525,9 +688,10 @@ export function extractWriteInlineAction(
   options: {
     fallbackKind?: WriteInlineCompletionAction['kind']
     editTarget?: WriteInlineActionEditTarget
+    responseFormat?: WriteInlineProviderResponseFormat
   } = {}
 ): WriteInlineCompletionAction {
-  return parseWriteInlineAction(providerTextFromResponse(responseText), options)
+  return parseWriteInlineAction(providerTextFromResponse(responseText, options.responseFormat), options)
 }
 
 export async function requestWriteInlineCompletion(
@@ -551,9 +715,17 @@ export async function requestWriteInlineCompletion(
   const actionMayEdit = Boolean(request.editCandidate && request.recentEdits?.length)
   const useChatCompletions = mode === 'edit' || actionMayEdit
   const baseUrl = resolveWriteInlineCompletionBaseUrl(settings)
-  const url = useChatCompletions
-    ? upstreamOpenAiChatCompletionsUrl(baseUrl)
-    : upstreamDeepSeekFimCompletionsUrl(baseUrl)
+  const endpointFormat = resolveWriteInlineCompletionEndpointFormat(settings)
+  const useFimCompletions =
+    !useChatCompletions &&
+    endpointFormat === 'chat_completions' &&
+    isDeepSeekInlineCompletionBaseUrl(baseUrl)
+  const responseFormat: WriteInlineProviderResponseFormat = useFimCompletions
+    ? 'fim_completions'
+    : endpointFormat
+  const url = useFimCompletions
+    ? upstreamDeepSeekFimCompletionsUrl(baseUrl)
+    : compatibleModelEndpointUrl(baseUrl, endpointFormat)
   const maxTokens = mode === 'long' || mode === 'edit' || actionMayEdit
     ? settings.write.inlineCompletion.longMaxTokens || settings.write.inlineCompletion.maxTokens || DEFAULT_WRITE_INLINE_COMPLETION_MAX_TOKENS
     : settings.write.inlineCompletion.maxTokens || DEFAULT_WRITE_INLINE_COMPLETION_MAX_TOKENS
@@ -562,9 +734,9 @@ export async function requestWriteInlineCompletion(
     : await retrieveWriteInlineCompletionContext(request, {
         maxSnippets: mode === 'long' || mode === 'edit' || actionMayEdit ? 5 : 3
       }).catch(() => null)
-  const messages = useChatCompletions
-    ? buildWriteInlineCompletionChatMessages(request, retrieval)
-    : null
+  const messages = useFimCompletions
+    ? null
+    : buildWriteInlineCompletionChatMessages(request, retrieval)
   const prompt = messages
     ? debugPromptFromMessages(messages)
     : buildWriteInlineCompletionPrompt(request, retrieval)
@@ -583,28 +755,17 @@ export async function requestWriteInlineCompletion(
   }
 
   try {
-    const body = useChatCompletions
-      ? {
-          model,
-          messages,
-          max_tokens: maxTokens,
-          ...(shouldDisableThinkingForInlineCompletion(model)
-            ? { thinking: { type: 'disabled' } }
-            : {})
-        }
-      : {
-          model,
-          prompt,
-          suffix: request.suffix,
-          max_tokens: maxTokens
-        }
+    const body = buildProviderRequestBody({
+      responseFormat,
+      model,
+      messages,
+      prompt,
+      suffix: request.suffix,
+      maxTokens
+    })
     const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
-      },
+      headers: buildProviderHeaders(apiKey, responseFormat),
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(INLINE_COMPLETION_TIMEOUT_MS)
     })
@@ -627,6 +788,7 @@ export async function requestWriteInlineCompletion(
 
     const action = extractWriteInlineAction(text, {
       fallbackKind: mode,
+      responseFormat,
       editTarget: request.editCandidate
         ? {
             from: request.editCandidate.from,

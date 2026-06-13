@@ -28,6 +28,10 @@ export type ClawTaskStatus = ScheduleTaskStatus
 export type ClawModel = ScheduleModel
 
 export const DEFAULT_DEEPSEEK_BASE_URL = 'https://api.deepseek.com'
+export const CUSTOM_IMAGE_GENERATION_PROVIDER_ID = 'custom'
+export const IMAGE_GENERATION_PROTOCOLS = ['openai-images', 'minimax-image'] as const
+export type ImageGenerationProtocol = (typeof IMAGE_GENERATION_PROTOCOLS)[number]
+export const DEFAULT_IMAGE_GENERATION_PROTOCOL: ImageGenerationProtocol = 'openai-images'
 export const DEFAULT_CLAW_MODEL = 'auto'
 export const CLAW_MODEL_IDS = ['auto', 'deepseek-v4-pro', 'deepseek-v4-flash'] as const
 export const DEFAULT_SCHEDULE_MODEL = DEFAULT_CLAW_MODEL
@@ -53,6 +57,11 @@ export const DEFAULT_KUN_PORT = 8899
 export const DEFAULT_WEIXIN_BRIDGE_RPC_URL = 'http://127.0.0.1:18790/api/v1/admin/rpc'
 export const DEFAULT_MODEL_PROVIDER_ID = 'deepseek'
 export type { ModelEndpointFormat }
+export type ModelProviderImageCapabilityV1 = {
+  protocol: ImageGenerationProtocol
+  baseUrl: string
+  models: string[]
+}
 export type ModelProviderProfileV1 = {
   id: string
   name: string
@@ -60,6 +69,7 @@ export type ModelProviderProfileV1 = {
   baseUrl: string
   endpointFormat: ModelEndpointFormat
   models: string[]
+  image?: ModelProviderImageCapabilityV1
 }
 export type ModelProviderSettingsV1 = {
   apiKey: string
@@ -67,7 +77,10 @@ export type ModelProviderSettingsV1 = {
   providers: ModelProviderProfileV1[]
 }
 
-export type ModelProviderProfilePatchV1 = Partial<ModelProviderProfileV1>
+export type ModelProviderImageCapabilityPatchV1 = Partial<ModelProviderImageCapabilityV1>
+export type ModelProviderProfilePatchV1 = Partial<Omit<ModelProviderProfileV1, 'image'>> & {
+  image?: ModelProviderImageCapabilityPatchV1 | null
+}
 export type ModelProviderSettingsPatchV1 = Partial<
   Omit<ModelProviderSettingsV1, 'providers'>
 > & {
@@ -111,8 +124,13 @@ export type KunRuntimeSettingsV1 = {
 
 export type KunImageGenerationSettingsV1 = {
   enabled: boolean
+  /** Existing provider profile to use for image generation. Empty or "custom" uses the fields below. */
+  providerId: string
+  /** Request protocol used when providerId is custom. Provider presets override this with their image capability. */
+  protocol: ImageGenerationProtocol
+  /** Custom image API root, or an override for the selected provider image API root. */
   baseUrl: string
-  /** Stored in plaintext inside Kun config.json, same as the runtime apiKey. */
+  /** Custom image API key override. Empty inherits the selected provider API key when providerId is set. */
   apiKey: string
   model: string
   /** Default "WxH" or "auto" used when the model omits aspect ratio and size. Empty means provider default. */
@@ -395,6 +413,10 @@ export type WriteInlineCompletionSettingsV1 = {
   enabled: boolean
   retrievalEnabled: boolean
   longCompletionEnabled: boolean
+  /** When true, Write inherits Kun's selected provider instead of using `providerId`. */
+  inheritProvider: boolean
+  /** Selected provider for Write inline completion when `inheritProvider` is false. */
+  providerId: string
   apiKey: string
   baseUrl: string
   /** When true, Write inherits Kun's runtime model instead of using `model` as an override. */

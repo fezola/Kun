@@ -1,6 +1,7 @@
 import {
   DEFAULT_APPROVAL_POLICY,
   DEFAULT_DEEPSEEK_BASE_URL,
+  DEFAULT_IMAGE_GENERATION_PROTOCOL,
   DEFAULT_KUN_DATA_DIR,
   DEFAULT_KUN_MODEL,
   DEFAULT_KUN_PORT,
@@ -18,6 +19,7 @@ import {
   type KunSettingsEnvelopeV1,
   type KunStorageSettingsV1,
   type KunTokenEconomySettingsV1,
+  type ImageGenerationProtocol,
   type ModelProviderSettingsV1,
   type ApprovalPolicy,
   type SandboxMode
@@ -117,6 +119,8 @@ export function defaultKunRuntimeSettings(
 export function defaultKunImageGenerationSettings(): KunImageGenerationSettingsV1 {
   return {
     enabled: false,
+    providerId: '',
+    protocol: DEFAULT_IMAGE_GENERATION_PROTOCOL,
     baseUrl: '',
     apiKey: '',
     model: '',
@@ -288,12 +292,18 @@ function normalizeKunImageGenerationSettings(
   const defaultSize = typeof input?.defaultSize === 'string' ? input.defaultSize.trim() : ''
   return {
     enabled: input?.enabled === true,
+    providerId: typeof input?.providerId === 'string' ? input.providerId.trim() : defaults.providerId,
+    protocol: normalizeKunImageGenerationProtocol(input?.protocol),
     baseUrl: typeof input?.baseUrl === 'string' ? input.baseUrl.trim() : defaults.baseUrl,
     apiKey: typeof input?.apiKey === 'string' ? input.apiKey.trim() : defaults.apiKey,
     model: typeof input?.model === 'string' ? input.model.trim() : defaults.model,
     defaultSize: /^(auto|\d+x\d+)$/.test(defaultSize) ? defaultSize : '',
     timeoutMs: boundedPositiveInt(input?.timeoutMs, defaults.timeoutMs, 600_000)
   }
+}
+
+function normalizeKunImageGenerationProtocol(value: unknown): ImageGenerationProtocol {
+  return value === 'minimax-image' ? 'minimax-image' : DEFAULT_IMAGE_GENERATION_PROTOCOL
 }
 
 function normalizeKunTokenEconomySettings(

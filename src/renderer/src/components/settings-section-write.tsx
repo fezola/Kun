@@ -1,22 +1,15 @@
 import type { ReactElement } from 'react'
-import type { ApprovalPolicy, AppSettingsV1, SandboxMode } from '@shared/app-settings'
 import {
-  DEFAULT_WRITE_INLINE_COMPLETION_BASE_URL,
   DEFAULT_WRITE_INLINE_COMPLETION_MAX_TOKENS,
   DEFAULT_WRITE_INLINE_COMPLETION_MODEL,
   DEFAULT_WRITE_INLINE_LONG_COMPLETION_MAX_TOKENS,
-  DEFAULT_KUN_DATA_DIR,
+  DEFAULT_MODEL_PROVIDER_ID,
   WRITE_INLINE_COMPLETION_MODEL_IDS,
-  isKunRuntimeInsecure
+  defaultModelProviderSettings,
+  resolveWriteInlineCompletionProviderId
 } from '@shared/app-settings'
-import type { GuiUpdateChannel } from '@shared/gui-update'
-import type { SkillRootId } from '../lib/skill-root-preference'
-import { FolderOpen, Loader2, PencilLine, RefreshCw, Settings } from 'lucide-react'
-import { GuiUpdateControl } from './settings-gui-update'
+import { PencilLine } from 'lucide-react'
 import {
-  InlineNoticeView,
-  SecretInput,
-  SectionJumpButton,
   SettingsCard,
   SettingRow,
   Toggle
@@ -25,77 +18,26 @@ import {
 export function WriteSettingsSection({ ctx }: { ctx: Record<string, any> }): ReactElement {
   const {
     t,
-    tCommon,
     form,
-    kun,
-    activeApiKey,
+    provider,
     update,
-    updateKun,
-    updateSharedCredential,
-    sharedApiKey,
-    sharedBaseUrl,
-    showApiKey,
-    setShowApiKey,
-    showRuntimeToken,
-    setShowRuntimeToken,
-    portError,
     selectControlClass,
-    openOnboardingPreview,
-    pickWorkspace,
-    resetWorkspaceToDefault,
-    workspacePickerError,
-    guiUpdateInfo,
-    checkingGuiUpdate,
-    downloadingGuiUpdate,
-    installingGuiUpdate,
-    guiUpdateDownloaded,
-    guiUpdateProgress,
-    guiUpdateError,
-    checkGuiUpdate,
-    downloadGuiUpdate,
-    installGuiUpdate,
-    logPath,
-    logDirOpenError,
-    setLogDirOpenError,
     pickWriteWorkspace,
     resetWriteWorkspaceToDefault,
     writeWorkspacePickerError,
-    writeInlineApiKeyInherited,
-    effectiveWriteInlineApiKey,
-    writeInlineBaseUrlInherited,
-    effectiveWriteInlineBaseUrl,
     writeInlineModelInherited,
     effectiveWriteInlineModel,
     setWriteDebugModalOpen,
-    loadWriteDebugEntries,
-    scrollToAgentSection,
-    agentsSectionRef,
-    skillSectionRef,
-    mcpSectionRef,
-    permissionsSectionRef,
-    selectedSkillRoot,
-    skillRootOptions,
-    skillRootId,
-    setSkillRootId,
-    skillNotice,
-    openSkillRoot,
-    openPlugins,
-    mcpConfigPath,
-    mcpConfigExists,
-    mcpConfigText,
-    setMcpConfigText,
-    mcpLoading,
-    mcpBusy,
-    mcpNotice,
-    saveMcpConfig,
-    loadMcpConfig,
-    openMcpConfigDir,
-    pickClawWorkspace,
-    resetClawWorkspaceToDefault,
-    clawWorkspacePickerError,
-    splitSettingsList,
-    listSettingsText
+    loadWriteDebugEntries
   } = ctx
+  const providerSettings = provider ?? defaultModelProviderSettings()
+  const effectiveWriteProviderId = resolveWriteInlineCompletionProviderId(form)
+  const effectiveWriteProvider =
+    providerSettings.providers.find((item: { id: string }) => item.id === effectiveWriteProviderId) ??
+    providerSettings.providers.find((item: { id: string }) => item.id === DEFAULT_MODEL_PROVIDER_ID) ??
+    providerSettings.providers[0]
+  const writeInlineProviderInherited = form.write.inlineCompletion.inheritProvider !== false
+  const writeInlineProviderModels = effectiveWriteProvider?.models ?? []
 
   return (
             <>
@@ -144,26 +86,42 @@ export function WriteSettingsSection({ ctx }: { ctx: Record<string, any> }): Rea
                   }
                 />
                 <SettingRow
-                  title={t('writeInlineCompletionApiKey')}
-                  description={t('writeInlineCompletionApiKeyDesc')}
+                  title={t('writeInlineCompletionProvider')}
+                  description={t('writeInlineCompletionProviderDesc')}
                   control={
                     <div className="w-full min-w-0 md:max-w-md">
-                      <SecretInput
-                        value={form.write.inlineCompletion.apiKey}
-                        onChange={(value) => update({ write: { inlineCompletion: { apiKey: value } } })}
-                        visible={showApiKey}
-                        onToggleVisibility={() => setShowApiKey((value: boolean) => !value)}
-                        placeholder={t('writeInlineCompletionApiKeyPlaceholder')}
-                        autoComplete="off"
-                        showLabel={t('showSecret')}
-                        hideLabel={t('hideSecret')}
-                      />
+                      <select
+                        className={selectControlClass}
+                        value={writeInlineProviderInherited ? '' : form.write.inlineCompletion.providerId}
+                        onChange={(e) => {
+                          const providerId = e.target.value
+                          update({
+                            write: {
+                              inlineCompletion: {
+                                inheritProvider: !providerId,
+                                providerId
+                              }
+                            }
+                          })
+                        }}
+                      >
+                        <option value="">
+                          {t('writeInlineCompletionProviderInherit', {
+                            value: effectiveWriteProvider?.name ?? t('modelProviderDefault')
+                          })}
+                        </option>
+                        {providerSettings.providers.map((item: { id: string; name: string }) => (
+                          <option key={item.id} value={item.id}>{item.name}</option>
+                        ))}
+                      </select>
                       <p className="mt-2 text-[12px] text-ds-muted">
-                        {writeInlineApiKeyInherited
-                          ? effectiveWriteInlineApiKey
-                            ? t('writeInlineCompletionApiKeyInherited')
-                            : t('writeInlineCompletionApiKeyMissing')
-                          : t('writeInlineCompletionApiKeyOverride')}
+                        {writeInlineProviderInherited
+                          ? t('writeInlineCompletionProviderInherited', {
+                            value: effectiveWriteProvider?.name ?? effectiveWriteProviderId
+                          })
+                          : t('writeInlineCompletionProviderOverride', {
+                            value: effectiveWriteProvider?.name ?? effectiveWriteProviderId
+                          })}
                       </p>
                     </div>
                   }
@@ -192,25 +150,6 @@ export function WriteSettingsSection({ ctx }: { ctx: Record<string, any> }): Rea
                   }
                 />
                 <SettingRow
-                  title={t('writeInlineCompletionBaseUrl')}
-                  description={t('writeInlineCompletionBaseUrlDesc')}
-                  control={
-                    <div className="w-full min-w-0 md:max-w-md">
-                      <input
-                        className="w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
-                        value={form.write.inlineCompletion.baseUrl}
-                        placeholder={DEFAULT_WRITE_INLINE_COMPLETION_BASE_URL}
-                        onChange={(e) => update({ write: { inlineCompletion: { baseUrl: e.target.value } } })}
-                      />
-                      <p className="mt-2 text-[12px] text-ds-muted">
-                        {writeInlineBaseUrlInherited
-                          ? t('writeInlineCompletionBaseUrlInherited', { value: effectiveWriteInlineBaseUrl })
-                          : t('writeInlineCompletionBaseUrlOverride', { value: effectiveWriteInlineBaseUrl })}
-                      </p>
-                    </div>
-                  }
-                />
-                <SettingRow
                   title={t('writeInlineCompletionModel')}
                   description={t('writeInlineCompletionModelDesc')}
                   control={
@@ -233,15 +172,17 @@ export function WriteSettingsSection({ ctx }: { ctx: Record<string, any> }): Rea
                         }}
                       />
                       <datalist id="write-inline-completion-model-options">
-                        {WRITE_INLINE_COMPLETION_MODEL_IDS.map((model) => (
+                        {[...new Set([...writeInlineProviderModels, ...WRITE_INLINE_COMPLETION_MODEL_IDS])].map((model) => (
                           <option
                             key={model}
                             value={model}
-                            label={t(
+                            label={
                               model === DEFAULT_WRITE_INLINE_COMPLETION_MODEL
-                                ? 'writeInlineCompletionModelFlash'
-                                : 'writeInlineCompletionModelPro'
-                            )}
+                                ? t('writeInlineCompletionModelFlash')
+                                : model === 'deepseek-v4-pro'
+                                  ? t('writeInlineCompletionModelPro')
+                                  : model
+                            }
                           />
                         ))}
                       </datalist>

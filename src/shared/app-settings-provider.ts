@@ -1,9 +1,15 @@
 import {
   DEFAULT_DEEPSEEK_BASE_URL,
+  DEFAULT_IMAGE_GENERATION_PROTOCOL,
   DEFAULT_MODEL_ENDPOINT_FORMAT,
   DEFAULT_MODEL_PROVIDER_ID,
+  CUSTOM_IMAGE_GENERATION_PROVIDER_ID,
   type AppSettingsV1,
+  type ImageGenerationProtocol,
+  type KunImageGenerationSettingsV1,
   type KunRuntimeSettingsV1,
+  type ModelProviderImageCapabilityPatchV1,
+  type ModelProviderImageCapabilityV1,
   type ModelProviderProfilePatchV1,
   type ModelProviderProfileV1,
   type ModelProviderSettingsPatchV1,
@@ -110,6 +116,40 @@ export function listModelProviderModelIds(settings: AppSettingsV1): string[] {
   return [...ids].sort((a, b) => a.localeCompare(b))
 }
 
+export function listImageGenerationProviderProfiles(settings: AppSettingsV1): ModelProviderProfileV1[] {
+  return getModelProviderSettings(settings).providers.filter((provider) => Boolean(provider.image))
+}
+
+export function resolveKunImageGenerationSettings(settings: AppSettingsV1): KunImageGenerationSettingsV1 {
+  const runtime = getKunRuntimeSettings(settings)
+  const imageGeneration = runtime.imageGeneration
+  const providerId = normalizeModelProviderId(imageGeneration.providerId)
+  if (!providerId || providerId === CUSTOM_IMAGE_GENERATION_PROVIDER_ID) {
+    return {
+      ...imageGeneration,
+      providerId,
+      protocol: normalizeImageGenerationProtocol(imageGeneration.protocol)
+    }
+  }
+  const provider = getModelProviderProfile(settings, providerId)
+  const image = provider.image
+  if (!image) {
+    return {
+      ...imageGeneration,
+      providerId,
+      protocol: normalizeImageGenerationProtocol(imageGeneration.protocol)
+    }
+  }
+  return {
+    ...imageGeneration,
+    providerId: provider.id,
+    protocol: image.protocol,
+    baseUrl: imageGeneration.baseUrl.trim() || image.baseUrl,
+    apiKey: imageGeneration.apiKey.trim() || provider.apiKey.trim(),
+    model: imageGeneration.model.trim() || (image.models[0] ?? '')
+  }
+}
+
 export function resolveKunRuntimeSettings(settings: AppSettingsV1): KunRuntimeSettingsV1 {
   const runtime = getKunRuntimeSettings(settings)
   const provider = getModelProviderProfile(settings, runtime.providerId)
@@ -124,7 +164,8 @@ export function resolveKunRuntimeSettings(settings: AppSettingsV1): KunRuntimeSe
       runtimeBaseUrl && runtimeBaseUrl !== DEFAULT_DEEPSEEK_BASE_URL
         ? normalizeDeepseekBaseUrl(runtimeBaseUrl)
         : normalizeDeepseekBaseUrl(providerBaseUrl),
-    endpointFormat: provider.endpointFormat
+    endpointFormat: provider.endpointFormat,
+    imageGeneration: resolveKunImageGenerationSettings(settings)
   }
 }
 
@@ -150,14 +191,36 @@ function normalizeModelProviderProfile(
       ? normalizeDeepseekBaseUrl(input.baseUrl)
       : DEFAULT_DEEPSEEK_BASE_URL
   const models = normalizeProviderModels(input?.models)
+  const image = normalizeModelProviderImageCapability(input?.image)
   return {
     id,
     name,
     apiKey: typeof input?.apiKey === 'string' ? input.apiKey.trim() : '',
     baseUrl,
     endpointFormat: normalizeModelEndpointFormat(input?.endpointFormat),
+    models,
+    ...(image ? { image } : {})
+  }
+}
+
+function normalizeModelProviderImageCapability(
+  input: ModelProviderImageCapabilityPatchV1 | null | undefined
+): ModelProviderImageCapabilityV1 | undefined {
+  if (!input || typeof input !== 'object') return undefined
+  const baseUrl = typeof input.baseUrl === 'string' && input.baseUrl.trim()
+    ? normalizeDeepseekBaseUrl(input.baseUrl)
+    : ''
+  const models = normalizeProviderModels(input.models)
+  if (!baseUrl && models.length === 0) return undefined
+  return {
+    protocol: normalizeImageGenerationProtocol(input.protocol),
+    baseUrl,
     models
   }
+}
+
+export function normalizeImageGenerationProtocol(value: unknown): ImageGenerationProtocol {
+  return value === 'minimax-image' ? 'minimax-image' : DEFAULT_IMAGE_GENERATION_PROTOCOL
 }
 
 function normalizeProviderModels(models: unknown): string[] {

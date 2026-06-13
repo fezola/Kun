@@ -52,10 +52,11 @@ import {
   GeneralSettingsSection,
   ImageGenerationSettingsSection,
   KeyboardShortcutsSettingsSection,
+  ProvidersSettingsSection,
   WriteSettingsSection
 } from './settings-sections'
 
-type SettingsCategory = 'general' | 'write' | 'imageGeneration' | 'agents' | 'shortcuts' | 'claw'
+type SettingsCategory = 'general' | 'providers' | 'write' | 'imageGeneration' | 'agents' | 'shortcuts' | 'claw'
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error'
 type SettingsPatch = AppSettingsPatch
 type SkillRootOption = {
@@ -206,13 +207,17 @@ export function SettingsView(): ReactElement {
     if (!form || initializedCategory.current) return
     initializedCategory.current = true
     if (!getActiveAgentApiKey(form).trim()) {
-      setCategory('general')
+      setCategory('providers')
     }
   }, [form])
 
   useEffect(() => {
     if (settingsSection === 'general') {
       setCategory('general')
+      return
+    }
+    if (settingsSection === 'providers') {
+      setCategory('providers')
       return
     }
     if (settingsSection === 'write') {
@@ -238,6 +243,7 @@ export function SettingsView(): ReactElement {
     if (!form) return
     if (
       settingsSection === 'general' ||
+      settingsSection === 'providers' ||
       settingsSection === 'write' ||
       settingsSection === 'imageGeneration' ||
       settingsSection === 'claw' ||
@@ -247,7 +253,7 @@ export function SettingsView(): ReactElement {
       return
     }
     const refs: Record<
-      Exclude<SettingsRouteSection, 'general' | 'write' | 'imageGeneration' | 'claw' | 'shortcuts'>,
+      Exclude<SettingsRouteSection, 'general' | 'providers' | 'write' | 'imageGeneration' | 'claw' | 'shortcuts'>,
       HTMLDivElement | null
     > = {
       agents: agentsSectionRef.current,
@@ -842,6 +848,7 @@ export function SettingsView(): ReactElement {
           </div>
 
           {category === 'general' ? <GeneralSettingsSection ctx={settingsSectionContext} /> : null}
+          {category === 'providers' ? <ProvidersSettingsSection ctx={settingsSectionContext} /> : null}
           {category === 'write' ? <WriteSettingsSection ctx={settingsSectionContext} /> : null}
           {category === 'imageGeneration' ? <ImageGenerationSettingsSection ctx={settingsSectionContext} /> : null}
           {category === 'agents' ? <AgentsSettingsSection ctx={settingsSectionContext} /> : null}

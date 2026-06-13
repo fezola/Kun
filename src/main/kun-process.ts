@@ -624,6 +624,7 @@ function imageGenConfigForRuntime(
     timeoutMs: imageGeneration.timeoutMs
   }
   const fields = {
+    protocol: imageGeneration.protocol,
     baseUrl: imageGeneration.baseUrl,
     apiKey: imageGeneration.apiKey,
     model: imageGeneration.model,

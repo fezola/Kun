@@ -1681,6 +1681,8 @@ describe('ClawRuntime', () => {
       settings.claw.im.responseTimeoutMs = 2_000
       settings.agents.kun.imageGeneration = {
         enabled: true,
+        providerId: '',
+        protocol: 'openai-images',
         baseUrl: 'https://images.example.test/v1',
         apiKey: 'sk-image',
         model: 'test-image-model',
@@ -1811,6 +1813,8 @@ describe('ClawRuntime', () => {
       settings.claw.im.responseTimeoutMs = 2_000
       settings.agents.kun.imageGeneration = {
         enabled: true,
+        providerId: '',
+        protocol: 'openai-images',
         baseUrl: 'https://images.example.test/v1',
         apiKey: 'sk-image',
         model: 'test-image-model',

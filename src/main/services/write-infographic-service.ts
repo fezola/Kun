@@ -3,7 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { normalizePathSeparators, resolveTargetPathWithinWorkspace } from './workspace-paths'
 import {
-  getKunRuntimeSettings,
+  resolveKunImageGenerationSettings,
   type AppSettingsV1,
   type KunImageGenerationSettingsV1
 } from '../../shared/app-settings'
@@ -14,7 +14,7 @@ import {
 } from '../../shared/write-infographic'
 import {
   mapImageSize,
-  OpenAiCompatImageClient,
+  createImageGenClient,
   type ImageGenClient
 } from '../../../kun/src/adapters/tool/image-gen-tool-provider.js'
 
@@ -53,7 +53,7 @@ export async function requestWriteInfographic(
   request: WriteInfographicRequest,
   options: { client?: ImageGenClient } = {}
 ): Promise<WriteInfographicResult> {
-  const imageGeneration = getKunRuntimeSettings(settings).imageGeneration
+  const imageGeneration = resolveKunImageGenerationSettings(settings)
   if (!isWriteInfographicConfigured(imageGeneration)) {
     return { ok: false, message: 'image generation provider is not configured' }
   }
@@ -68,10 +68,7 @@ export async function requestWriteInfographic(
     return { ok: false, message: 'document must be inside the write workspace' }
   }
 
-  const client = options.client ?? new OpenAiCompatImageClient(
-    imageGeneration.baseUrl.trim(),
-    imageGeneration.apiKey.trim()
-  )
+  const client = options.client ?? createImageGenClient(imageGeneration)
   // An explicit defaultSize wins: users set it when their provider only
   // accepts fixed sizes (e.g. gpt-image's 1024x1536). Otherwise use a
   // portrait size that suits infographics.

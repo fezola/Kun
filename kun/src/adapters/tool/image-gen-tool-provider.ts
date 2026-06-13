@@ -161,7 +161,7 @@ export function buildImageGenToolProviders(
     }
   }
 
-  const client = options.client ?? new OpenAiCompatImageClient(config.baseUrl!, config.apiKey!)
+  const client = options.client ?? createImageGenClient(config)
   const model = config.model!
 
   const tool = LocalToolHost.defineTool({
@@ -338,6 +338,27 @@ async function collectReferenceImages(
 }
 
 type ImagesApiPayload = { data?: { b64_json?: string; url?: string }[] }
+type MiniMaxImagePayload = {
+  data?: {
+    image_base64?: string[]
+    image_urls?: string[]
+  }
+  base_resp?: {
+    status_code?: number
+    status_msg?: string
+  }
+}
+
+export function createImageGenClient(config: {
+  protocol?: string
+  baseUrl?: string
+  apiKey?: string
+}): ImageGenClient {
+  if (config.protocol === 'minimax-image') {
+    return new MiniMaxImageClient(config.baseUrl!, config.apiKey!)
+  }
+  return new OpenAiCompatImageClient(config.baseUrl!, config.apiKey!)
+}
 
 export class OpenAiCompatImageClient implements ImageGenClient {
   readonly id = 'openai-compat'
@@ -437,6 +458,110 @@ export class OpenAiCompatImageClient implements ImageGenClient {
     }
     throw new Error('image provider returned no image data')
   }
+}
+
+export class MiniMaxImageClient implements ImageGenClient {
+  readonly id = 'minimax-image'
+  private readonly endpointUrl: string
+
+  constructor(
+    baseUrl: string,
+    private readonly apiKey: string
+  ) {
+    this.endpointUrl = minimaxImageGenerationUrl(baseUrl)
+  }
+
+  async generate(request: ImageGenRequest): Promise<GeneratedImage> {
+    return this.requestImage({
+      model: request.model,
+      prompt: request.prompt,
+      ...minimaxSizeFields(request.size),
+      response_format: 'base64',
+      n: 1
+    }, request)
+  }
+
+  async edit(request: ImageGenEditRequest): Promise<GeneratedImage> {
+    return this.requestImage({
+      model: request.model,
+      prompt: request.prompt,
+      ...minimaxSizeFields(request.size),
+      subject_reference: request.images.map((image) => ({
+        type: 'character',
+        image_file: `data:${image.mimeType};base64,${image.data.toString('base64')}`
+      })),
+      response_format: 'base64',
+      n: 1
+    }, request)
+  }
+
+  private async requestImage(
+    body: Record<string, unknown>,
+    request: { timeoutMs: number; signal: AbortSignal }
+  ): Promise<GeneratedImage> {
+    const signal = withTimeout(request.signal, request.timeoutMs)
+    let response: Response
+    try {
+      response = await fetch(this.endpointUrl, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(body),
+        signal
+      })
+    } catch (error) {
+      throw imageFetchFailure(this.endpointUrl, error, request)
+    }
+    const text = await response.text()
+    if (!response.ok) throw new ImageGenHttpError(response.status, text)
+    let payload: MiniMaxImagePayload
+    try {
+      payload = JSON.parse(text) as MiniMaxImagePayload
+    } catch {
+      throw new Error('MiniMax image provider returned invalid JSON')
+    }
+    const statusCode = payload.base_resp?.status_code
+    if (typeof statusCode === 'number' && statusCode !== 0) {
+      throw new Error(`MiniMax image provider failed (${statusCode}): ${payload.base_resp?.status_msg ?? 'unknown error'}`)
+    }
+    const b64 = payload.data?.image_base64?.[0]
+    if (b64) {
+      return { data: Buffer.from(b64, 'base64'), mimeType: 'image/jpeg' }
+    }
+    const imageUrl = payload.data?.image_urls?.[0]
+    if (imageUrl) {
+      let download: Response
+      try {
+        download = await fetch(imageUrl, { signal })
+      } catch (error) {
+        throw imageFetchFailure(imageUrl, error, request)
+      }
+      if (!download.ok) throw new ImageGenHttpError(download.status, await download.text())
+      const mimeType = download.headers.get('content-type')?.split(';')[0] || 'image/jpeg'
+      return { data: Buffer.from(await download.arrayBuffer()), mimeType }
+    }
+    throw new Error('MiniMax image provider returned no image data')
+  }
+}
+
+function minimaxImageGenerationUrl(baseUrl: string): string {
+  const normalized = baseUrl.trim().replace(/\/+$/, '')
+  const lower = normalized.toLowerCase()
+  if (!normalized) return '/v1/image_generation'
+  if (lower.endsWith('/v1/image_generation') || lower.endsWith('/image_generation')) return normalized
+  if (lower.endsWith('/v1')) return `${normalized}/image_generation`
+  return `${normalized}/v1/image_generation`
+}
+
+function minimaxSizeFields(size: string | undefined): Record<string, number> {
+  const match = size?.trim().match(/^(\d+)x(\d+)$/)
+  if (!match) return {}
+  const width = Number(match[1])
+  const height = Number(match[2])
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return {}
+  return { width, height }
 }
 
 function withTimeout(signal: AbortSignal, timeoutMs: number): AbortSignal {

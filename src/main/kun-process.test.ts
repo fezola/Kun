@@ -214,7 +214,11 @@ describe('syncGuiManagedKunConfig', () => {
     expect(parsed.capabilities.attachments).toMatchObject({ enabled: true })
     expect(parsed.capabilities.web).toMatchObject({ enabled: true, fetchEnabled: true })
     expect(parsed.capabilities.mcp.search).toMatchObject({ enabled: false, mode: 'auto' })
-    expect(parsed.capabilities.imageGen).toEqual({ enabled: false, timeoutMs: 180000 })
+    expect(parsed.capabilities.imageGen).toEqual({
+      enabled: false,
+      protocol: 'openai-images',
+      timeoutMs: 180000
+    })
   })
 
   it('writes the image generation capability and omits cleared fields', async () => {
@@ -225,6 +229,8 @@ describe('syncGuiManagedKunConfig', () => {
       ...defaultKunRuntimeSettings(),
       imageGeneration: {
         enabled: true,
+        providerId: '',
+        protocol: 'openai-images' as const,
         baseUrl: 'https://api.siliconflow.cn/v1',
         apiKey: 'sk-image-test',
         model: 'Kwai-Kolors/Kolors',
@@ -238,6 +244,7 @@ describe('syncGuiManagedKunConfig', () => {
     const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as any
     expect(parsed.capabilities.imageGen).toEqual({
       enabled: true,
+      protocol: 'openai-images',
       baseUrl: 'https://api.siliconflow.cn/v1',
       apiKey: 'sk-image-test',
       model: 'Kwai-Kolors/Kolors',
@@ -262,6 +269,8 @@ describe('syncGuiManagedKunConfig', () => {
       ...defaultKunRuntimeSettings(),
       imageGeneration: {
         enabled: true,
+        providerId: '',
+        protocol: 'openai-images' as const,
         baseUrl: 'https://api.siliconflow.cn/v1',
         apiKey: 'sk-image-test',
         model: 'Kwai-Kolors/Kolors',

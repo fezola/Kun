@@ -15,7 +15,6 @@ import { FolderOpen, Loader2, PencilLine, RefreshCw, Settings } from 'lucide-rea
 import { GuiUpdateControl } from './settings-gui-update'
 import {
   InlineNoticeView,
-  SecretInput,
   SectionJumpButton,
   SettingsCard,
   SettingRow,
@@ -28,14 +27,8 @@ export function GeneralSettingsSection({ ctx }: { ctx: Record<string, any> }): R
     tCommon,
     form,
     kun,
-    activeApiKey,
     update,
     updateKun,
-    updateSharedCredential,
-    sharedApiKey,
-    sharedBaseUrl,
-    showApiKey,
-    setShowApiKey,
     showRuntimeToken,
     setShowRuntimeToken,
     portError,
@@ -102,36 +95,6 @@ export function GeneralSettingsSection({ ctx }: { ctx: Record<string, any> }): R
   return (
             <>
               <SettingsCard title={t('sectionGeneral')}>
-                <SettingRow
-                  title={t('apiKey')}
-                  description={t('apiKeySharedDesc')}
-                  control={
-                    <SecretInput
-                      value={sharedApiKey}
-                      onChange={(value) => updateSharedCredential({ apiKey: value })}
-                      visible={showApiKey}
-                      onToggleVisibility={() => setShowApiKey((value: boolean) => !value)}
-                      placeholder="sk-..."
-                      autoComplete="off"
-                      invalid={!activeApiKey.trim()}
-                      showLabel={t('showSecret')}
-                      hideLabel={t('hideSecret')}
-                      className="md:max-w-md"
-                    />
-                  }
-                />
-                <SettingRow
-                  title={t('baseUrl')}
-                  description={t('baseUrlSharedDesc')}
-                  control={
-                    <input
-                      className="w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30 md:max-w-md"
-                      placeholder={t('baseUrlPlaceholder')}
-                      value={sharedBaseUrl}
-                      onChange={(e) => updateSharedCredential({ baseUrl: e.target.value })}
-                    />
-                  }
-                />
                 <SettingRow
                   title={t('language')}
                   description={t('languageDesc')}

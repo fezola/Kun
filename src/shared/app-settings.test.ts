@@ -129,6 +129,8 @@ describe('kun defaults', () => {
   it('defaults image generation to off with empty provider fields', () => {
     expect(defaultKunRuntimeSettings().imageGeneration).toEqual({
       enabled: false,
+      providerId: '',
+      protocol: 'openai-images',
       baseUrl: '',
       apiKey: '',
       model: '',
@@ -404,6 +406,8 @@ describe('mergeKunRuntimeSettings', () => {
 
     expect(next.imageGeneration).toEqual({
       enabled: true,
+      providerId: '',
+      protocol: 'openai-images',
       baseUrl: 'https://api.siliconflow.cn/v1',
       apiKey: 'sk-image',
       model: 'Kwai-Kolors/Kolors',
@@ -506,6 +510,8 @@ describe('legacy Kun defaults migration', () => {
 
     expect(migrated.agents?.kun?.imageGeneration).toEqual({
       enabled: false,
+      providerId: '',
+      protocol: 'openai-images',
       baseUrl: '',
       apiKey: '',
       model: '',
@@ -708,6 +714,8 @@ describe('claw runtime prompts', () => {
     const state = settings()
     state.agents.kun.imageGeneration = {
       enabled: true,
+      providerId: '',
+      protocol: 'openai-images',
       baseUrl: 'https://images.example.test/v1',
       apiKey: 'sk-image',
       model: 'test-image-model',

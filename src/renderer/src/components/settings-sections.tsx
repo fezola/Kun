@@ -1,4 +1,5 @@
 export { GeneralSettingsSection } from './settings-section-general'
+export { ProvidersSettingsSection } from './settings-section-providers'
 export { WriteSettingsSection } from './settings-section-write'
 export { ImageGenerationSettingsSection } from './settings-section-image-generation'
 export { AgentsSettingsSection } from './settings-section-agents'

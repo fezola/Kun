@@ -28,6 +28,7 @@ import {
 } from '../../shared/kun-endpoints'
 import {
   CLAW_MODEL_IDS,
+  IMAGE_GENERATION_PROTOCOLS,
   MODEL_ENDPOINT_FORMATS,
   SCHEDULE_MODEL_IDS,
   SCHEDULE_REASONING_EFFORT_IDS,
@@ -182,6 +183,7 @@ const writeInlineCompletionModelSchema = z.union([
   trimmedString(128)
 ])
 const modelEndpointFormatSchema = z.enum(MODEL_ENDPOINT_FORMATS)
+const imageGenerationProtocolSchema = z.enum(IMAGE_GENERATION_PROTOCOLS)
 
 const modelProviderPatchSchema = z.object({
   apiKey: z.string().max(MAX_BODY_BYTES).optional(),
@@ -192,7 +194,12 @@ const modelProviderPatchSchema = z.object({
     apiKey: z.string().max(MAX_BODY_BYTES).optional(),
     baseUrl: z.string().trim().max(MAX_URL_LENGTH).optional(),
     endpointFormat: modelEndpointFormatSchema.optional(),
-    models: z.array(z.string().trim().min(1).max(128)).max(200).optional()
+    models: z.array(z.string().trim().min(1).max(128)).max(200).optional(),
+    image: z.object({
+      protocol: imageGenerationProtocolSchema.optional(),
+      baseUrl: z.string().trim().max(MAX_URL_LENGTH).optional(),
+      models: z.array(z.string().trim().min(1).max(128)).max(50).optional()
+    }).strict().nullable().optional()
   }).strict()).max(50).optional()
 }).strict()
 
@@ -257,6 +264,8 @@ const kunRuntimePatchSchema = z.object({
   }).strict().optional(),
   imageGeneration: z.object({
     enabled: z.boolean().optional(),
+    providerId: z.string().trim().max(64).optional(),
+    protocol: imageGenerationProtocolSchema.optional(),
     baseUrl: z.string().trim().max(MAX_URL_LENGTH).optional(),
     apiKey: z.string().max(MAX_BODY_BYTES).optional(),
     model: z.string().trim().max(128).optional(),
@@ -296,6 +305,8 @@ const writeInlineCompletionPatchSchema = z.object({
   enabled: z.boolean().optional(),
   retrievalEnabled: z.boolean().optional(),
   longCompletionEnabled: z.boolean().optional(),
+  inheritProvider: z.boolean().optional(),
+  providerId: z.string().trim().max(64).optional(),
   apiKey: z.string().max(MAX_BODY_BYTES).optional(),
   baseUrl: z.string().trim().max(MAX_URL_LENGTH).optional(),
   inheritModel: z.boolean().optional(),

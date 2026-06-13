@@ -104,6 +104,10 @@ export function normalizeWriteSettings(settings?: Partial<WriteSettingsV1> | nul
       enabled: rawInlineCompletion.enabled !== false,
       retrievalEnabled: rawInlineCompletion.retrievalEnabled !== false,
       longCompletionEnabled: rawInlineCompletion.longCompletionEnabled !== false,
+      inheritProvider: typeof rawInlineCompletion.inheritProvider === 'boolean'
+        ? rawInlineCompletion.inheritProvider
+        : !rawInlineCompletion.providerId?.trim(),
+      providerId: rawInlineCompletion.providerId?.trim() || '',
       apiKey: rawInlineCompletion.apiKey?.trim() || '',
       baseUrl: rawInlineCompletion.baseUrl?.trim() || '',
       inheritModel: typeof rawInlineCompletion.inheritModel === 'boolean'

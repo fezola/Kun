@@ -5,9 +5,12 @@ import {
   DEFAULT_MODEL_PROVIDER_ID,
   defaultKunRuntimeSettings,
   defaultModelProviderSettings,
+  getModelProviderPreset,
+  modelProviderPresetProfile,
   type ModelProviderProfileV1
 } from '@shared/app-settings'
 import { AgentsSettingsSection, modelProvidersSettingsPatch } from './settings-section-agents'
+import { ProvidersSettingsSection } from './settings-section-providers'
 
 const labels: Record<string, string> = {
   agentsQuickBase: 'Base',
@@ -15,12 +18,36 @@ const labels: Record<string, string> = {
   agentsQuickMcp: 'MCP',
   agentsQuickPermissions: 'Permissions',
   agents: 'Agents',
+  providers: 'Providers',
+  providersDesc: 'Providers description',
   kunProvider: 'Provider',
   kunProviderDesc: 'Provider description',
+  kunProviderSelectDesc: 'Provider select description',
+  modelProviderPreset: 'Provider preset',
+  modelProviderPresetDesc: 'Preset description',
+  modelProviderAddPreset: 'Add preset',
+  modelProviderAdd: 'Add provider',
+  modelProviderRemove: 'Remove provider',
+  modelProviderName: 'Provider name',
+  modelProviderId: 'Provider ID',
+  modelProviderApiKey: 'Provider API key',
+  modelProviderBaseUrl: 'Provider base URL',
   modelProviderEndpointFormat: 'Endpoint format',
   modelEndpointChatCompletions: '/v1/chat/completions',
   modelEndpointResponses: '/v1/responses',
   modelEndpointMessages: '/v1/messages',
+  modelProviderModels: 'Provider models',
+  modelProviderImageCapability: 'Image capability',
+  modelProviderImageCapabilityDesc: 'Image capability description',
+  modelProviderImageEnable: 'Enable image',
+  modelProviderImageDisable: 'Disable image',
+  imageGenProtocol: 'Image protocol',
+  imageGenProtocolOpenAi: 'OpenAI Images',
+  imageGenProtocolMiniMax: 'MiniMax image_generation',
+  imageGenBaseUrl: 'Image base URL',
+  imageGenModel: 'Image model',
+  imageGenBaseUrlPlaceholder: 'https://api.example.com/v1',
+  baseUrlPlaceholder: 'https://api.example.com/v1',
   kunApiKey: 'Kun API key',
   kunApiKeyDesc: 'Kun API key description',
   kunApiKeyPlaceholder: 'Inherit API key',
@@ -349,6 +376,35 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
     expect(patch.agents?.kun?.providerId).toBe(DEFAULT_MODEL_PROVIDER_ID)
   })
 
+  it('builds a single patch when adding a preset model provider', () => {
+    const provider = defaultModelProviderSettings()
+    const xiaomi = getModelProviderPreset('xiaomi')
+    expect(xiaomi).not.toBeNull()
+    const xiaomiProvider = modelProviderPresetProfile(xiaomi!)
+
+    const patch = modelProvidersSettingsPatch({
+      provider,
+      providers: [...provider.providers, xiaomiProvider],
+      kun: {
+        providerId: xiaomiProvider.id,
+        model: xiaomiProvider.models[0]
+      }
+    })
+
+    expect(patch.provider?.providers).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'xiaomi',
+        baseUrl: 'https://api.xiaomimimo.com/v1',
+        endpointFormat: 'chat_completions',
+        models: expect.arrayContaining(['mimo-v2-flash'])
+      })
+    ]))
+    expect(patch.agents?.kun).toEqual(expect.objectContaining({
+      providerId: 'xiaomi',
+      model: 'mimo-v2-omni'
+    }))
+  })
+
   it('renders custom model provider id as editable', () => {
     const provider = defaultModelProviderSettings()
     const customProvider = {
@@ -359,7 +415,7 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
       endpointFormat: 'messages',
       models: []
     } satisfies ModelProviderProfileV1
-    const html = renderToStaticMarkup(createElement(AgentsSettingsSection, {
+    const html = renderToStaticMarkup(createElement(ProvidersSettingsSection, {
       ctx: {
         ...baseCtx(),
         provider: {
@@ -379,6 +435,10 @@ describe('AgentsSettingsSection Kun diagnostics smoke', () => {
     expect(providerIdInput).not.toContain('readonly')
     expect(html).toContain('Endpoint format')
     expect(html).toContain('<option value="messages" selected="">/v1/messages</option>')
+    expect(html).toContain('Provider preset')
+    expect(html).toContain('<option value="xiaomi" selected="">Xiaomi</option>')
+    expect(html).toContain('<option value="minimax">MiniMax</option>')
+    expect(html).toContain('Add preset')
   })
 
   it('keeps advanced agent controls behind collapsed disclosures', () => {

@@ -1,16 +1,12 @@
 import { useEffect, useState, type ReactElement, type ReactNode } from 'react'
 import type {
   ApprovalPolicy,
-  AppSettingsPatch,
   AppSettingsV1,
-  ModelEndpointFormat,
   ModelProviderProfileV1,
-  ModelProviderSettingsV1,
   SandboxMode
 } from '@shared/app-settings'
 import {
   DEFAULT_MODEL_PROVIDER_ID,
-  MODEL_ENDPOINT_FORMATS,
   DEFAULT_WRITE_INLINE_COMPLETION_BASE_URL,
   DEFAULT_WRITE_INLINE_COMPLETION_MAX_TOKENS,
   DEFAULT_WRITE_INLINE_COMPLETION_MODEL,
@@ -19,11 +15,10 @@ import {
   WRITE_INLINE_COMPLETION_MODEL_IDS,
   defaultModelProviderSettings,
   isKunRuntimeInsecure,
-  normalizeModelProviderId
 } from '@shared/app-settings'
 import type { GuiUpdateChannel } from '@shared/gui-update'
 import type { SkillRootId } from '../lib/skill-root-preference'
-import { Ban, ChevronDown, FolderOpen, Loader2, Plus, RefreshCw, Settings, Trash2 } from 'lucide-react'
+import { Ban, ChevronDown, FolderOpen, Loader2, RefreshCw, Settings, Trash2 } from 'lucide-react'
 import { GuiUpdateControl } from './settings-gui-update'
 import {
   InlineNoticeView,
@@ -35,6 +30,8 @@ import {
 } from './settings-controls'
 import { formatCompactNumber, formatCost } from '../hooks/use-thread-usage'
 import { parseUsageResponse } from '../hooks/usage-response'
+
+export { modelProvidersSettingsPatch } from './settings-section-providers'
 
 function statusPill(status: string | undefined): string {
   if (status === 'available') return 'border-emerald-400/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200'
@@ -66,28 +63,6 @@ const EMPTY_TOKEN_ECONOMY_SAVINGS_STATE: TokenEconomySavingsState = {
   loading: false,
   loaded: false,
   summary: null
-}
-
-const MODEL_ENDPOINT_FORMAT_LABEL_KEYS: Record<ModelEndpointFormat, string> = {
-  chat_completions: 'modelEndpointChatCompletions',
-  responses: 'modelEndpointResponses',
-  messages: 'modelEndpointMessages'
-}
-
-export function modelProvidersSettingsPatch(input: {
-  provider: ModelProviderSettingsV1
-  providers: ModelProviderProfileV1[]
-  kun?: Partial<AppSettingsV1['agents']['kun']>
-}): AppSettingsPatch {
-  const defaultProvider = input.providers.find((item) => item.id === DEFAULT_MODEL_PROVIDER_ID)
-  return {
-    provider: {
-      apiKey: defaultProvider?.apiKey ?? input.provider.apiKey,
-      baseUrl: defaultProvider?.baseUrl ?? input.provider.baseUrl,
-      providers: input.providers
-    },
-    ...(input.kun ? { agents: { kun: input.kun } } : {})
-  }
 }
 
 type ModelContextProfileSummary = {
@@ -196,16 +171,9 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
     t,
     tCommon,
     form,
-    provider: providerFromContext,
     kun,
-    activeApiKey,
     update,
     updateKun,
-    updateSharedCredential,
-    sharedApiKey,
-    sharedBaseUrl,
-    showApiKey,
-    setShowApiKey,
     showRuntimeToken,
     setShowRuntimeToken,
     portError,
@@ -419,61 +387,18 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
       }
     })
   }
-  const provider = providerFromContext ?? form.provider ?? defaultModelProviderSettings()
+  const provider = form.provider ?? defaultModelProviderSettings()
   const modelProviders = provider.providers as ModelProviderProfileV1[]
   const activeProviderId = kun.providerId?.trim() || DEFAULT_MODEL_PROVIDER_ID
   const activeProvider = modelProviders.find((item) => item.id === activeProviderId) ?? modelProviders[0]
-  const updateModelProviders = (
-    providers: ModelProviderProfileV1[],
-    kunPatch?: Partial<AppSettingsV1['agents']['kun']>
-  ): void => {
-    update(modelProvidersSettingsPatch({
-      provider,
-      providers,
-      kun: kunPatch
-    }))
+  const activeProviderModels = activeProvider?.models ?? []
+  const selectKunProvider = (providerId: string): void => {
+    const nextProvider = modelProviders.find((item) => item.id === providerId) ?? activeProvider
+    const nextModel = nextProvider?.models.includes(kun.model)
+      ? kun.model
+      : nextProvider?.models[0] ?? kun.model
+    updateKun({ providerId, model: nextModel })
   }
-  const updateModelProvider = (id: string, patch: Partial<ModelProviderProfileV1>): void => {
-    updateModelProviders(modelProviders.map((item) => item.id === id ? { ...item, ...patch } : item))
-  }
-  const updateModelProviderId = (id: string, value: string): void => {
-    if (id === DEFAULT_MODEL_PROVIDER_ID) return
-    const nextId = normalizeModelProviderId(value)
-    if (!nextId || nextId === id) return
-    if (modelProviders.some((item) => item.id === nextId && item.id !== id)) return
-    updateModelProviders(
-      modelProviders.map((item) => item.id === id ? { ...item, id: nextId } : item),
-      activeProviderId === id ? { providerId: nextId } : undefined
-    )
-  }
-  const addModelProvider = (): void => {
-    const baseId = 'custom-provider'
-    let index = modelProviders.length + 1
-    let id = `${baseId}-${index}`
-    const used = new Set(modelProviders.map((item) => item.id))
-    while (used.has(id)) {
-      index += 1
-      id = `${baseId}-${index}`
-    }
-    const nextProvider: ModelProviderProfileV1 = {
-      id,
-      name: t('modelProviderNewName', { index }),
-      apiKey: '',
-      baseUrl: 'https://api.example.com/v1',
-      endpointFormat: 'chat_completions',
-      models: []
-    }
-    updateModelProviders([...modelProviders, nextProvider], { providerId: id })
-  }
-  const removeModelProvider = (id: string): void => {
-    if (id === DEFAULT_MODEL_PROVIDER_ID) return
-    const nextProviders = modelProviders.filter((item) => item.id !== id)
-    updateModelProviders(
-      nextProviders,
-      activeProviderId === id ? { providerId: DEFAULT_MODEL_PROVIDER_ID } : undefined
-    )
-  }
-  const canEditActiveProviderId = Boolean(activeProvider && activeProvider.id !== DEFAULT_MODEL_PROVIDER_ID)
 
   return (
             <>
@@ -500,6 +425,40 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                     }
                   />
                   <SettingRow
+                    title={t('kunProvider')}
+                    description={t('kunProviderSelectDesc')}
+                    control={
+                      <select
+                        className={selectControlClass}
+                        value={activeProvider?.id ?? DEFAULT_MODEL_PROVIDER_ID}
+                        onChange={(e) => selectKunProvider(e.target.value)}
+                      >
+                        {modelProviders.map((item) => (
+                          <option key={item.id} value={item.id}>{item.name}</option>
+                        ))}
+                      </select>
+                    }
+                  />
+                  <SettingRow
+                    title={t('kunModel')}
+                    description={t('kunModelDesc')}
+                    control={
+                      <div className="w-full min-w-0 md:max-w-md">
+                        <input
+                          list="kun-model-options"
+                          className="w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
+                          value={kun.model}
+                          onChange={(e) => updateKun({ model: e.target.value })}
+                        />
+                        <datalist id="kun-model-options">
+                          {activeProviderModels.map((model) => (
+                            <option key={model} value={model} />
+                          ))}
+                        </datalist>
+                      </div>
+                    }
+                  />
+                  <SettingRow
                     title={t('codePromptPrefix')}
                     description={t('codePromptPrefixDesc')}
                     wideControl
@@ -518,165 +477,6 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                       description={t('kunAssistantAdvancedDesc')}
                     >
                       <div className="divide-y divide-ds-border-muted">
-                  <SettingRow
-                    title={t('kunProvider')}
-                    description={t('kunProviderDesc')}
-                    wideControl
-                    control={
-                      <div className="grid gap-3 lg:grid-cols-[260px_minmax(0,1fr)]">
-                        <div className="space-y-2">
-                          <select
-                            className={selectControlClass}
-                            value={activeProvider?.id ?? DEFAULT_MODEL_PROVIDER_ID}
-                            onChange={(e) => updateKun({ providerId: e.target.value })}
-                          >
-                            {modelProviders.map((item) => (
-                              <option key={item.id} value={item.id}>{item.name}</option>
-                            ))}
-                          </select>
-                          <button
-                            type="button"
-                            onClick={addModelProvider}
-                            className="inline-flex h-9 items-center gap-2 rounded-full border border-ds-border bg-ds-card px-3 text-[12.5px] font-medium text-ds-muted shadow-sm transition hover:bg-ds-hover hover:text-ds-ink"
-                          >
-                            <Plus className="h-3.5 w-3.5" strokeWidth={1.9} />
-                            {t('modelProviderAdd')}
-                          </button>
-                        </div>
-                        {activeProvider ? (
-                          <div className="grid gap-3 rounded-xl border border-ds-border-muted bg-ds-main/35 p-3">
-                            <div className="grid gap-3 md:grid-cols-2">
-                              <label className="grid gap-1.5 text-[12px] font-semibold text-ds-muted">
-                                {t('modelProviderName')}
-                                <input
-                                  className="w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] font-normal text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
-                                  value={activeProvider.name}
-                                  onChange={(e) => updateModelProvider(activeProvider.id, { name: e.target.value })}
-                                />
-                              </label>
-                              <label className="grid gap-1.5 text-[12px] font-semibold text-ds-muted">
-                                {t('modelProviderId')}
-                                <input
-                                  className={`w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 font-mono text-[13px] font-normal shadow-sm ${
-                                    canEditActiveProviderId
-                                      ? 'text-ds-ink focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30'
-                                      : 'text-ds-faint'
-                                  }`}
-                                  value={activeProvider.id}
-                                  readOnly={!canEditActiveProviderId}
-                                  spellCheck={false}
-                                  onChange={(e) => updateModelProviderId(activeProvider.id, e.target.value)}
-                                />
-                              </label>
-                            </div>
-                            <label className="grid gap-1.5 text-[12px] font-semibold text-ds-muted">
-                              {t('modelProviderApiKey')}
-                              <SecretInput
-                                value={activeProvider.apiKey}
-                                onChange={(value) => updateModelProvider(activeProvider.id, { apiKey: value })}
-                                visible={showApiKey}
-                                onToggleVisibility={() => setShowApiKey((value: boolean) => !value)}
-                                placeholder={t('kunApiKeyPlaceholder')}
-                                autoComplete="off"
-                                showLabel={t('showSecret')}
-                                hideLabel={t('hideSecret')}
-                              />
-                            </label>
-                            <label className="grid gap-1.5 text-[12px] font-semibold text-ds-muted">
-                              {t('modelProviderBaseUrl')}
-                              <input
-                                className="w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] font-normal text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
-                                value={activeProvider.baseUrl}
-                                placeholder={t('baseUrlPlaceholder')}
-                                onChange={(e) => updateModelProvider(activeProvider.id, { baseUrl: e.target.value })}
-                              />
-                            </label>
-                            <label className="grid gap-1.5 text-[12px] font-semibold text-ds-muted">
-                              {t('modelProviderEndpointFormat')}
-                              <select
-                                className={selectControlClass}
-                                value={activeProvider.endpointFormat}
-                                onChange={(e) => updateModelProvider(activeProvider.id, {
-                                  endpointFormat: e.target.value as ModelEndpointFormat
-                                })}
-                              >
-                                {MODEL_ENDPOINT_FORMATS.map((format) => (
-                                  <option key={format} value={format}>
-                                    {t(MODEL_ENDPOINT_FORMAT_LABEL_KEYS[format])}
-                                  </option>
-                                ))}
-                              </select>
-                            </label>
-                            <label className="grid gap-1.5 text-[12px] font-semibold text-ds-muted">
-                              {t('modelProviderModels')}
-                              <textarea
-                                className="min-h-24 w-full min-w-0 resize-y rounded-xl border border-ds-border bg-ds-card px-3 py-2 font-mono text-[12.5px] font-normal text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
-                                value={activeProvider.models.join('\n')}
-                                placeholder="deepseek-v4-pro&#10;deepseek-v4-flash"
-                                onChange={(e) => updateModelProvider(activeProvider.id, {
-                                  models: e.target.value.split('\n').map((item) => item.trim()).filter(Boolean)
-                                })}
-                              />
-                            </label>
-                            {activeProvider.id !== DEFAULT_MODEL_PROVIDER_ID ? (
-                              <button
-                                type="button"
-                                onClick={() => removeModelProvider(activeProvider.id)}
-                                className="inline-flex h-9 w-fit items-center gap-2 rounded-full border border-red-200/70 bg-red-50 px-3 text-[12.5px] font-medium text-red-700 transition hover:bg-red-100 dark:border-red-900/70 dark:bg-red-950/25 dark:text-red-200 dark:hover:bg-red-950/40"
-                              >
-                                <Trash2 className="h-3.5 w-3.5" strokeWidth={1.9} />
-                                {t('modelProviderRemove')}
-                              </button>
-                            ) : null}
-                          </div>
-                        ) : null}
-                      </div>
-                    }
-                  />
-                  <SettingRow
-                    title={t('kunApiKey')}
-                    description={t('kunApiKeyDesc')}
-                    control={
-                      <div className="w-full min-w-0 md:max-w-md">
-                        <SecretInput
-                          value={kun.apiKey}
-                          onChange={(value) => updateKun({ apiKey: value })}
-                          visible={showApiKey}
-                          onToggleVisibility={() => setShowApiKey((value: boolean) => !value)}
-                          placeholder={t('kunApiKeyPlaceholder')}
-                          autoComplete="off"
-                          showLabel={t('showSecret')}
-                          hideLabel={t('hideSecret')}
-                        />
-                        <p className="mt-2 text-[12px] text-ds-muted">
-                          {kun.apiKey.trim()
-                            ? t('kunApiKeyOverride')
-                            : sharedApiKey.trim()
-                              ? t('kunApiKeyInherited')
-                              : t('kunApiKeyMissing')}
-                        </p>
-                      </div>
-                    }
-                  />
-                  <SettingRow
-                    title={t('kunBaseUrl')}
-                    description={t('kunBaseUrlDesc')}
-                    control={
-                      <div className="w-full min-w-0 md:max-w-md">
-                        <input
-                          className="w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
-                          value={kun.baseUrl}
-                          placeholder={t('kunBaseUrlPlaceholder')}
-                          onChange={(e) => updateKun({ baseUrl: e.target.value })}
-                        />
-                        <p className="mt-2 text-[12px] text-ds-muted">
-                          {kun.baseUrl.trim()
-                            ? t('kunBaseUrlOverride', { value: kun.baseUrl.trim() })
-                            : t('kunBaseUrlInherited', { value: sharedBaseUrl.trim() || t('kunBaseUrlOfficial') })}
-                        </p>
-                      </div>
-                    }
-                  />
                   <SettingRow
                     title={t('port')}
                     description={t('portDesc')}
@@ -721,17 +521,6 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                         placeholder={DEFAULT_KUN_DATA_DIR}
                         value={kun.dataDir}
                         onChange={(e) => updateKun({ dataDir: e.target.value })}
-                      />
-                    }
-                  />
-                  <SettingRow
-                    title={t('kunModel')}
-                    description={t('kunModelDesc')}
-                    control={
-                      <input
-                        className="w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30 md:max-w-md"
-                        value={kun.model}
-                        onChange={(e) => updateKun({ model: e.target.value })}
                       />
                     }
                   />
