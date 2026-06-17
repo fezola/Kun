@@ -34,7 +34,12 @@ async function loadMacPermissions(): Promise<MacPermissions | null> {
   if (!macPermissionsLoaded) {
     macPermissionsLoaded = true
     try {
-      const ns = (await import('@computer-use/node-mac-permissions')) as Record<string, unknown>
+      // node-mac-permissions is a transitive native dep (a .node addon), so it
+      // is NOT externalized by electron-vite's direct-deps plugin. Load it via
+      // a variable specifier + @vite-ignore so Rollup leaves it as a runtime
+      // import instead of trying (and failing) to bundle the native binary.
+      const specifier = '@computer-use/node-mac-permissions'
+      const ns = (await import(/* @vite-ignore */ specifier)) as Record<string, unknown>
       macPermissions = ((ns as { default?: unknown }).default ?? ns) as MacPermissions
     } catch {
       macPermissions = null
