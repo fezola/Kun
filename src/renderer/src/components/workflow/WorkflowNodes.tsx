@@ -6,11 +6,14 @@ import {
   Braces,
   Brain,
   CalendarClock,
+  Code2,
   GitBranch,
+  GitMerge,
   Globe,
   Hand,
   Play,
   Power,
+  Split,
   Timer,
   Trash2,
   type LucideIcon
@@ -38,8 +41,11 @@ export const NODE_ICONS: Record<WorkflowNodeKind, LucideIcon> = {
   'schedule-trigger': CalendarClock,
   'ai-agent': Brain,
   condition: GitBranch,
+  switch: Split,
   'set-fields': Braces,
+  code: Code2,
   'http-request': Globe,
+  merge: GitMerge,
   delay: Timer
 }
 
@@ -72,10 +78,16 @@ function nodeSummary(node: WorkflowNodeV1): string {
       return node.config.prompt.trim().slice(0, 60) || node.config.model || 'AI task'
     case 'condition':
       return `${node.config.leftExpr || 'text'} ${node.config.operator} ${node.config.rightValue}`.trim()
+    case 'switch':
+      return `${node.config.rules.length} rules${node.config.fallback ? ' + fallback' : ''}`
     case 'set-fields':
       return node.config.fields.map((field) => field.key).filter(Boolean).join(', ')
+    case 'code':
+      return 'JS'
     case 'http-request':
       return `${node.config.method} ${node.config.url}`.trim()
+    case 'merge':
+      return node.config.mode
     case 'delay':
       return `${Math.round(node.config.delayMs / 1000)}s`
     default:
@@ -157,26 +169,37 @@ function WorkflowCanvasNode({ id, data, selected }: NodeProps): ReactElement {
         <span className={`h-2 w-2 shrink-0 rounded-full ${statusDotClass(status)}`} />
       </div>
 
-      {isCondition ? (
+      {node.type === 'condition' ? (
         <>
-          <Handle
-            type="source"
-            position={Position.Right}
-            id="true"
-            style={{ top: '38%' }}
-          />
-          <Handle
-            type="source"
-            position={Position.Right}
-            id="false"
-            style={{ top: '70%' }}
-          />
+          <Handle type="source" position={Position.Right} id="true" style={{ top: '38%' }} />
+          <Handle type="source" position={Position.Right} id="false" style={{ top: '70%' }} />
           <div className="pointer-events-none absolute right-1 top-[30%] text-[9px] font-medium text-emerald-600">
             {t('workflowConditionTrue')}
           </div>
           <div className="pointer-events-none absolute right-1 top-[62%] text-[9px] font-medium text-red-500">
             {t('workflowConditionFalse')}
           </div>
+        </>
+      ) : node.type === 'switch' ? (
+        <>
+          {node.config.rules.map((_, index) => {
+            const total = node.config.rules.length + (node.config.fallback ? 1 : 0)
+            const top = ((index + 1) / (total + 1)) * 100
+            return (
+              <div key={`case-${index}`}>
+                <Handle type="source" position={Position.Right} id={`case-${index}`} style={{ top: `${top}%` }} />
+                <div
+                  className="pointer-events-none absolute right-1 text-[9px] font-medium text-ds-faint"
+                  style={{ top: `calc(${top}% - 7px)` }}
+                >
+                  {index + 1}
+                </div>
+              </div>
+            )
+          })}
+          {node.config.fallback ? (
+            <Handle type="source" position={Position.Right} id="fallback" style={{ top: '88%' }} />
+          ) : null}
         </>
       ) : (
         <Handle type="source" position={Position.Right} id="out" />

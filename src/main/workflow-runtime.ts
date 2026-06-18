@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { URL } from 'node:url'
+import { runInNewContext } from 'node:vm'
 import type {
   AppSettingsV1,
   WorkflowConditionConfigV1,
@@ -28,6 +29,8 @@ import {
 
 const MAX_NODE_EXECUTIONS = 200
 const MAX_RUN_DURATION_MS = 30 * 60_000
+/** Sentinel branch that matches no output handle (e.g. switch with no rule + no fallback). */
+const NO_BRANCH = '__none__'
 const AI_NODE_RESPONSE_TIMEOUT_MS = 30 * 60_000
 const HTTP_MAX_RESPONSE_BYTES = 5_000_000
 const LIVE_STATUS_LINGER_MS = 8_000
@@ -303,6 +306,25 @@ async function runHttpNode(config: WorkflowHttpRequestConfigV1, payload: Workflo
   }
 }
 
+const CODE_TIMEOUT_MS = 2_000
+
+function runCodeNode(code: string, payload: WorkflowPayload): NodeOutcome {
+  const sandbox: Record<string, unknown> = { $json: payload.json, $text: payload.text, __result: undefined }
+  try {
+    runInNewContext(`__result = (function(){\n${code}\n})()`, sandbox, {
+      timeout: CODE_TIMEOUT_MS,
+      displayErrors: true
+    })
+  } catch (error) {
+    throw new Error(`Code error: ${error instanceof Error ? error.message : String(error)}`)
+  }
+  const out = sandbox.__result
+  if (out === undefined || out === null) return { payload: { json: {}, text: '' }, message: 'ok' }
+  if (typeof out === 'string') return { payload: { json: { value: out }, text: out }, message: 'ok' }
+  const json = typeof out === 'object' ? out : { value: out }
+  return { payload: { json, text: safeJson(json) }, message: 'ok' }
+}
+
 function summarizeRun(results: WorkflowNodeRunResultV1[]): string {
   const lastMeaningful = [...results].reverse().find((result) => result.status === 'success' && result.message.trim())
   if (lastMeaningful) return lastMeaningful.message
@@ -517,20 +539,64 @@ export class WorkflowRuntime {
     }))
 
     const settings = await this.deps.store.load()
-    const adjacency = buildAdjacency(workflow.connections)
     const nodeById = new Map(workflow.nodes.map((node) => [node.id, node]))
+    const outEdges = new Map<string, WorkflowConnectionV1[]>()
+    const inEdges = new Map<string, WorkflowConnectionV1[]>()
+    for (const edge of workflow.connections) {
+      const outList = outEdges.get(edge.source) ?? []
+      outList.push(edge)
+      outEdges.set(edge.source, outList)
+      const inList = inEdges.get(edge.target) ?? []
+      inList.push(edge)
+      inEdges.set(edge.target, inList)
+    }
+
     const nodeResults: WorkflowNodeRunResultV1[] = []
-    const visited = new Set<string>()
-    const queue: Array<{ nodeId: string; payload: WorkflowPayload }> = [
-      { nodeId: triggerNodeId, payload: { json: {}, text: '' } }
-    ]
+    const delivered = new Set<string>()
+    const prunedEdges = new Set<string>()
+    const payloadByEdge = new Map<string, WorkflowPayload>()
+    const settledNodes = new Set<string>()
+    const readyQueue: string[] = []
     const deadline = Date.now() + MAX_RUN_DURATION_MS
     let executions = 0
     let runStatus: WorkflowRunStatus = 'success'
     let runMessage = ''
 
+    // Pruning dataflow scheduler: a node runs once all its incoming edges are
+    // resolved (delivered a payload, or pruned). Conditions/switches prune the
+    // branches they don't take, which cascades to make downstream nodes
+    // unreachable — so joins (Merge) wait only for the branches that fire.
+    const incoming = (nodeId: string): WorkflowConnectionV1[] => inEdges.get(nodeId) ?? []
+    const edgeResolved = (edge: WorkflowConnectionV1): boolean =>
+      delivered.has(edge.id) || prunedEdges.has(edge.id)
+    const allResolved = (nodeId: string): boolean => incoming(nodeId).every(edgeResolved)
+    const hasLiveInput = (nodeId: string): boolean => incoming(nodeId).some((edge) => delivered.has(edge.id))
+    const markReady = (nodeId: string): void => {
+      if (!settledNodes.has(nodeId) && !readyQueue.includes(nodeId)) readyQueue.push(nodeId)
+    }
+    function pruneEdge(edge: WorkflowConnectionV1): void {
+      if (delivered.has(edge.id) || prunedEdges.has(edge.id)) return
+      prunedEdges.add(edge.id)
+      settleTarget(edge.target)
+    }
+    function pruneNode(nodeId: string): void {
+      if (settledNodes.has(nodeId)) return
+      settledNodes.add(nodeId)
+      for (const edge of outEdges.get(nodeId) ?? []) pruneEdge(edge)
+    }
+    function settleTarget(nodeId: string): void {
+      if (settledNodes.has(nodeId) || !allResolved(nodeId)) return
+      if (hasLiveInput(nodeId)) markReady(nodeId)
+      else pruneNode(nodeId)
+    }
+    const handleActive = (outcome: NodeOutcome | null, sourceHandle: string): boolean => {
+      if (!outcome || outcome.branch === undefined) return true
+      return sourceHandle === outcome.branch
+    }
+
+    markReady(triggerNodeId)
     try {
-      while (queue.length > 0) {
+      while (readyQueue.length > 0) {
         if (this.cancelRequested.has(workflow.id)) {
           runStatus = 'error'
           runMessage = 'Canceled.'
@@ -546,59 +612,70 @@ export class WorkflowRuntime {
           runMessage = 'Workflow exceeded the maximum node count.'
           break
         }
-        const item = queue.shift()
-        if (!item) break
-        if (visited.has(item.nodeId)) continue
-        visited.add(item.nodeId)
-        const node = nodeById.get(item.nodeId)
+        const nodeId = readyQueue.shift()
+        if (!nodeId || settledNodes.has(nodeId)) continue
+        const node = nodeById.get(nodeId)
+        settledNodes.add(nodeId)
         if (!node) continue
         executions += 1
 
+        const inputs = incoming(nodeId)
+          .filter((edge) => delivered.has(edge.id))
+          .map((edge) => payloadByEdge.get(edge.id))
+          .filter((value): value is WorkflowPayload => Boolean(value))
+        const primary = inputs[0] ?? { json: {}, text: '' }
+
+        let outcome: NodeOutcome | null
         if (node.disabled) {
           this.setLive(workflow.id, node.id, 'skipped')
-          for (const edge of adjacency.get(node.id) ?? []) {
-            queue.push({ nodeId: edge.target, payload: item.payload })
+          outcome = null
+        } else {
+          this.setLive(workflow.id, node.id, 'running')
+          const nodeStartedAt = new Date()
+          try {
+            const produced = await this.executeNode(node, primary, settings, inputs.length ? inputs : [primary])
+            nodeResults.push({
+              nodeId: node.id,
+              status: 'success',
+              startedAt: nodeStartedAt.toISOString(),
+              finishedAt: new Date().toISOString(),
+              message: produced.message,
+              outputJson: safeJson(produced.payload.json),
+              threadId: produced.threadId ?? '',
+              error: ''
+            })
+            this.setLive(workflow.id, node.id, 'success')
+            outcome = produced
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            nodeResults.push({
+              nodeId: node.id,
+              status: 'error',
+              startedAt: nodeStartedAt.toISOString(),
+              finishedAt: new Date().toISOString(),
+              message: '',
+              outputJson: '',
+              threadId: '',
+              error: message
+            })
+            this.setLive(workflow.id, node.id, 'error')
+            runStatus = 'error'
+            runMessage = message
+            break
           }
-          continue
         }
 
-        this.setLive(workflow.id, node.id, 'running')
-        const nodeStartedAt = new Date()
-        try {
-          const outcome = await this.executeNode(node, item.payload, settings)
-          const result: WorkflowNodeRunResultV1 = {
-            nodeId: node.id,
-            status: 'success',
-            startedAt: nodeStartedAt.toISOString(),
-            finishedAt: new Date().toISOString(),
-            message: outcome.message,
-            outputJson: safeJson(outcome.payload.json),
-            threadId: outcome.threadId ?? '',
-            error: ''
+        const outPayload = outcome ? outcome.payload : primary
+        const edges = outEdges.get(node.id) ?? []
+        for (const edge of edges) {
+          if (handleActive(outcome, edge.sourceHandle || 'out')) {
+            delivered.add(edge.id)
+            payloadByEdge.set(edge.id, outPayload)
+          } else {
+            prunedEdges.add(edge.id)
           }
-          nodeResults.push(result)
-          this.setLive(workflow.id, node.id, 'success')
-          for (const edge of adjacency.get(node.id) ?? []) {
-            if (outcome.branch !== undefined && edge.sourceHandle !== outcome.branch) continue
-            queue.push({ nodeId: edge.target, payload: outcome.payload })
-          }
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error)
-          nodeResults.push({
-            nodeId: node.id,
-            status: 'error',
-            startedAt: nodeStartedAt.toISOString(),
-            finishedAt: new Date().toISOString(),
-            message: '',
-            outputJson: '',
-            threadId: '',
-            error: message
-          })
-          this.setLive(workflow.id, node.id, 'error')
-          runStatus = 'error'
-          runMessage = message
-          break
         }
+        for (const edge of edges) settleTarget(edge.target)
       }
     } catch (error) {
       runStatus = 'error'
@@ -630,7 +707,8 @@ export class WorkflowRuntime {
   private async executeNode(
     node: WorkflowNodeV1,
     payload: WorkflowPayload,
-    settings: AppSettingsV1
+    settings: AppSettingsV1,
+    inputs: WorkflowPayload[] = [payload]
   ): Promise<NodeOutcome> {
     switch (node.type) {
       case 'manual-trigger':
@@ -667,6 +745,36 @@ export class WorkflowRuntime {
       case 'condition': {
         const matched = evaluateCondition(node.config, payload)
         return { payload, message: matched ? 'true' : 'false', branch: matched ? 'true' : 'false' }
+      }
+      case 'switch': {
+        for (let index = 0; index < node.config.rules.length; index += 1) {
+          if (evaluateCondition(node.config.rules[index], payload)) {
+            return { payload, message: `case ${index + 1}`, branch: `case-${index}` }
+          }
+        }
+        return {
+          payload,
+          message: node.config.fallback ? 'fallback' : 'no match',
+          branch: node.config.fallback ? 'fallback' : NO_BRANCH
+        }
+      }
+      case 'code':
+        return runCodeNode(node.config.code, payload)
+      case 'merge': {
+        if (node.config.mode === 'object') {
+          const merged: Record<string, unknown> = {}
+          for (const input of inputs) {
+            if (input.json && typeof input.json === 'object' && !Array.isArray(input.json)) {
+              Object.assign(merged, input.json as Record<string, unknown>)
+            }
+          }
+          return { payload: { json: merged, text: safeJson(merged) }, message: `merged ${inputs.length}` }
+        }
+        const collected = inputs.map((input) => input.json)
+        return {
+          payload: { json: collected, text: inputs.map((input) => input.text).filter(Boolean).join('\n') },
+          message: `merged ${inputs.length}`
+        }
       }
       case 'set-fields': {
         const base =

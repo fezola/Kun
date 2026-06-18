@@ -542,8 +542,11 @@ export type WorkflowNodeKind =
   | 'schedule-trigger'
   | 'ai-agent'
   | 'condition'
+  | 'switch'
   | 'set-fields'
+  | 'code'
   | 'http-request'
+  | 'merge'
   | 'delay'
 
 export const WORKFLOW_NODE_KINDS: readonly WorkflowNodeKind[] = [
@@ -551,8 +554,11 @@ export const WORKFLOW_NODE_KINDS: readonly WorkflowNodeKind[] = [
   'schedule-trigger',
   'ai-agent',
   'condition',
+  'switch',
   'set-fields',
+  'code',
   'http-request',
+  'merge',
   'delay'
 ]
 
@@ -610,6 +616,32 @@ export type WorkflowConditionConfigV1 = {
   caseSensitive: boolean
 }
 
+/** One rule of a Switch node; matches feed the output handle `case-<index>`. */
+export type WorkflowSwitchRuleV1 = {
+  leftExpr: string
+  operator: WorkflowConditionOperator
+  rightValue: string
+  caseSensitive: boolean
+}
+
+export type WorkflowSwitchConfigV1 = {
+  rules: WorkflowSwitchRuleV1[]
+  /** When true, expose a `fallback` output for inputs that match no rule. */
+  fallback: boolean
+}
+
+export type WorkflowMergeMode = 'array' | 'object'
+
+export type WorkflowMergeConfigV1 = {
+  /** 'array' collects upstream outputs into a list; 'object' shallow-merges object outputs. */
+  mode: WorkflowMergeMode
+}
+
+export type WorkflowCodeConfigV1 = {
+  /** JS function body. Receives $json / $text, may `return` a value. Sandboxed with a timeout. */
+  code: string
+}
+
 export type WorkflowHttpHeaderV1 = {
   key: string
   value: string
@@ -647,8 +679,11 @@ export type WorkflowNodeConfigByKind = {
   'schedule-trigger': WorkflowScheduleTriggerConfigV1
   'ai-agent': WorkflowAiAgentConfigV1
   condition: WorkflowConditionConfigV1
+  switch: WorkflowSwitchConfigV1
   'set-fields': WorkflowSetFieldsConfigV1
+  code: WorkflowCodeConfigV1
   'http-request': WorkflowHttpRequestConfigV1
+  merge: WorkflowMergeConfigV1
   delay: WorkflowDelayConfigV1
 }
 

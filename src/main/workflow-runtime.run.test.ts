@@ -286,4 +286,147 @@ describe('WorkflowRuntime end-to-end execution', () => {
 
     runtime.stop()
   }, 15_000)
+
+  it('switch routes to the matching case and prunes the others', async () => {
+    const store = createStore(
+      settingsWithWorkflows([
+        buildWorkflow({
+          id: 'wf-sw',
+          name: 'Sw',
+          enabled: true,
+          nodes: [
+            { id: 'm', type: 'manual-trigger', config: {} },
+            { id: 's', type: 'set-fields', config: { fields: [{ key: 'v', value: 'B' }], keepIncoming: false } },
+            {
+              id: 'sw',
+              type: 'switch',
+              config: {
+                rules: [
+                  { leftExpr: 'json.v', operator: 'equals', rightValue: 'A', caseSensitive: false },
+                  { leftExpr: 'json.v', operator: 'equals', rightValue: 'B', caseSensitive: false }
+                ],
+                fallback: false
+              }
+            },
+            { id: 'out0', type: 'set-fields', config: { fields: [{ key: 'hit', value: '0' }], keepIncoming: false } },
+            { id: 'out1', type: 'set-fields', config: { fields: [{ key: 'hit', value: '1' }], keepIncoming: false } }
+          ],
+          connections: [
+            { id: 'e1', source: 'm', sourceHandle: 'out', target: 's', targetHandle: 'in' },
+            { id: 'e2', source: 's', sourceHandle: 'out', target: 'sw', targetHandle: 'in' },
+            { id: 'e3', source: 'sw', sourceHandle: 'case-0', target: 'out0', targetHandle: 'in' },
+            { id: 'e4', source: 'sw', sourceHandle: 'case-1', target: 'out1', targetHandle: 'in' }
+          ]
+        })
+      ])
+    )
+    const runtime = createWorkflowRuntime({ store: store as never, runtimeRequest: vi.fn() as never, logError: vi.fn() })
+    const runId = requireOk(await runtime.runWorkflow('wf-sw'))
+    await waitFor(async () => {
+      const run = (await store.load()).workflow.workflows[0].runs.find((entry) => entry.id === runId)
+      return Boolean(run && run.status !== 'running')
+    }, 10_000)
+    const run = store.read().workflow.workflows[0].runs.find((entry) => entry.id === runId)!
+    const ids = run.nodeResults.map((result) => result.nodeId)
+    expect(run.status).toBe('success')
+    expect(ids).toEqual(expect.arrayContaining(['m', 's', 'sw', 'out1']))
+    expect(ids).not.toContain('out0')
+    runtime.stop()
+  }, 15_000)
+
+  it('merge waits for all branches and combines their outputs', async () => {
+    const store = createStore(
+      settingsWithWorkflows([
+        buildWorkflow({
+          id: 'wf-mg',
+          name: 'Mg',
+          enabled: true,
+          nodes: [
+            { id: 'm', type: 'manual-trigger', config: {} },
+            { id: 'a', type: 'set-fields', config: { fields: [{ key: 'x', value: '1' }], keepIncoming: false } },
+            { id: 'b', type: 'set-fields', config: { fields: [{ key: 'y', value: '2' }], keepIncoming: false } },
+            { id: 'mg', type: 'merge', config: { mode: 'object' } }
+          ],
+          connections: [
+            { id: 'e1', source: 'm', sourceHandle: 'out', target: 'a', targetHandle: 'in' },
+            { id: 'e2', source: 'm', sourceHandle: 'out', target: 'b', targetHandle: 'in' },
+            { id: 'e3', source: 'a', sourceHandle: 'out', target: 'mg', targetHandle: 'in' },
+            { id: 'e4', source: 'b', sourceHandle: 'out', target: 'mg', targetHandle: 'in' }
+          ]
+        })
+      ])
+    )
+    const runtime = createWorkflowRuntime({ store: store as never, runtimeRequest: vi.fn() as never, logError: vi.fn() })
+    const runId = requireOk(await runtime.runWorkflow('wf-mg'))
+    await waitFor(async () => {
+      const run = (await store.load()).workflow.workflows[0].runs.find((entry) => entry.id === runId)
+      return Boolean(run && run.status !== 'running')
+    }, 10_000)
+    const run = store.read().workflow.workflows[0].runs.find((entry) => entry.id === runId)!
+    expect(run.status).toBe('success')
+    const merge = run.nodeResults.find((result) => result.nodeId === 'mg')!
+    expect(JSON.parse(merge.outputJson)).toEqual({ x: '1', y: '2' })
+    runtime.stop()
+  }, 15_000)
+
+  it('code node evaluates JS against the upstream payload', async () => {
+    const store = createStore(
+      settingsWithWorkflows([
+        buildWorkflow({
+          id: 'wf-code',
+          name: 'Code',
+          enabled: true,
+          nodes: [
+            { id: 'm', type: 'manual-trigger', config: {} },
+            { id: 's', type: 'set-fields', config: { fields: [{ key: 'n', value: '5' }], keepIncoming: false } },
+            { id: 'c', type: 'code', config: { code: 'return { doubled: Number($json.n) * 2 }' } }
+          ],
+          connections: [
+            { id: 'e1', source: 'm', sourceHandle: 'out', target: 's', targetHandle: 'in' },
+            { id: 'e2', source: 's', sourceHandle: 'out', target: 'c', targetHandle: 'in' }
+          ]
+        })
+      ])
+    )
+    const runtime = createWorkflowRuntime({ store: store as never, runtimeRequest: vi.fn() as never, logError: vi.fn() })
+    const runId = requireOk(await runtime.runWorkflow('wf-code'))
+    await waitFor(async () => {
+      const run = (await store.load()).workflow.workflows[0].runs.find((entry) => entry.id === runId)
+      return Boolean(run && run.status !== 'running')
+    }, 10_000)
+    const run = store.read().workflow.workflows[0].runs.find((entry) => entry.id === runId)!
+    expect(run.status).toBe('success')
+    const code = run.nodeResults.find((result) => result.nodeId === 'c')!
+    expect(JSON.parse(code.outputJson)).toEqual({ doubled: 10 })
+    runtime.stop()
+  }, 15_000)
+
+  it('code node times out on an infinite loop and errors the run', async () => {
+    const store = createStore(
+      settingsWithWorkflows([
+        buildWorkflow({
+          id: 'wf-loop',
+          name: 'Loop',
+          enabled: true,
+          nodes: [
+            { id: 'm', type: 'manual-trigger', config: {} },
+            { id: 'c', type: 'code', config: { code: 'while (true) {}' } }
+          ],
+          connections: [{ id: 'e1', source: 'm', sourceHandle: 'out', target: 'c', targetHandle: 'in' }]
+        })
+      ])
+    )
+    const runtime = createWorkflowRuntime({ store: store as never, runtimeRequest: vi.fn() as never, logError: vi.fn() })
+    const runId = requireOk(await runtime.runWorkflow('wf-loop'))
+    await waitFor(async () => {
+      const run = (await store.load()).workflow.workflows[0].runs.find((entry) => entry.id === runId)
+      return Boolean(run && run.status !== 'running')
+    }, 10_000)
+    const run = store.read().workflow.workflows[0].runs.find((entry) => entry.id === runId)!
+    expect(run.status).toBe('error')
+    const code = run.nodeResults.find((result) => result.nodeId === 'c')!
+    expect(code.status).toBe('error')
+    expect(code.error.toLowerCase()).toContain('code')
+    runtime.stop()
+  }, 15_000)
 })

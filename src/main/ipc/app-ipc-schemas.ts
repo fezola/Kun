@@ -776,6 +776,27 @@ const workflowSetFieldsConfigSchema = z
   })
   .strict()
 
+const workflowSwitchRuleSchema = z
+  .object({
+    leftExpr: z.string().max(2_000),
+    operator: workflowConditionOperatorSchema,
+    rightValue: z.string().max(4_000),
+    caseSensitive: z.boolean()
+  })
+  .partial()
+  .strict()
+
+const workflowSwitchConfigSchema = z
+  .object({
+    rules: z.array(workflowSwitchRuleSchema).max(20).optional(),
+    fallback: z.boolean().optional()
+  })
+  .strict()
+
+const workflowCodeConfigSchema = z.object({ code: z.string().max(MAX_BODY_BYTES).optional() }).strict()
+
+const workflowMergeConfigSchema = z.object({ mode: z.enum(['array', 'object']).optional() }).strict()
+
 const workflowNodeBaseShape = {
   id: z.string().max(MAX_ID_LENGTH),
   name: z.string().max(512).optional(),
@@ -794,8 +815,11 @@ const workflowNodePatchSchema = z.discriminatedUnion('type', [
     .strict(),
   z.object({ ...workflowNodeBaseShape, type: z.literal('ai-agent'), config: workflowAiAgentConfigSchema.optional() }).strict(),
   z.object({ ...workflowNodeBaseShape, type: z.literal('condition'), config: workflowConditionConfigSchema.optional() }).strict(),
+  z.object({ ...workflowNodeBaseShape, type: z.literal('switch'), config: workflowSwitchConfigSchema.optional() }).strict(),
   z.object({ ...workflowNodeBaseShape, type: z.literal('set-fields'), config: workflowSetFieldsConfigSchema.optional() }).strict(),
+  z.object({ ...workflowNodeBaseShape, type: z.literal('code'), config: workflowCodeConfigSchema.optional() }).strict(),
   z.object({ ...workflowNodeBaseShape, type: z.literal('http-request'), config: workflowHttpRequestConfigSchema.optional() }).strict(),
+  z.object({ ...workflowNodeBaseShape, type: z.literal('merge'), config: workflowMergeConfigSchema.optional() }).strict(),
   z.object({ ...workflowNodeBaseShape, type: z.literal('delay'), config: workflowDelayConfigSchema.optional() }).strict()
 ])
 

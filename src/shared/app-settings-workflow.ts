@@ -11,6 +11,7 @@ import {
   type WorkflowNodeV1,
   type WorkflowRunV1,
   type WorkflowScheduleV1,
+  type WorkflowSwitchRuleV1,
   type WorkflowSettingsPatchV1,
   type WorkflowSettingsV1,
   type WorkflowTriggerScheduleKind,
@@ -115,6 +116,21 @@ function normalizeFields(value: unknown): WorkflowFieldV1[] {
     .slice(0, MAX_WORKFLOW_HTTP_HEADERS)
 }
 
+function normalizeSwitchRules(value: unknown): WorkflowSwitchRuleV1[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((entry) => {
+      const r = record(entry)
+      return {
+        leftExpr: asText(r.leftExpr),
+        operator: normalizeConditionOperator(r.operator),
+        rightValue: asText(r.rightValue),
+        caseSensitive: normalizeBoolean(r.caseSensitive, false)
+      }
+    })
+    .slice(0, 20)
+}
+
 export function normalizeWorkflowNode(value: unknown, index: number): WorkflowNodeV1 | null {
   const n = record(value)
   const type = n.type
@@ -156,6 +172,15 @@ export function normalizeWorkflowNode(value: unknown, index: number): WorkflowNo
           caseSensitive: normalizeBoolean(config.caseSensitive, false)
         }
       }
+    case 'switch':
+      return {
+        ...base,
+        type: 'switch',
+        config: {
+          rules: normalizeSwitchRules(config.rules),
+          fallback: normalizeBoolean(config.fallback, true)
+        }
+      }
     case 'set-fields':
       return {
         ...base,
@@ -164,6 +189,18 @@ export function normalizeWorkflowNode(value: unknown, index: number): WorkflowNo
           fields: normalizeFields(config.fields),
           keepIncoming: normalizeBoolean(config.keepIncoming, false)
         }
+      }
+    case 'code':
+      return {
+        ...base,
+        type: 'code',
+        config: { code: asText(config.code) }
+      }
+    case 'merge':
+      return {
+        ...base,
+        type: 'merge',
+        config: { mode: config.mode === 'object' ? 'object' : 'array' }
       }
     case 'http-request':
       return {

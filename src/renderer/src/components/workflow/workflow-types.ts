@@ -13,8 +13,11 @@ export const WORKFLOW_PALETTE: readonly WorkflowNodeKind[] = [
   'schedule-trigger',
   'ai-agent',
   'condition',
+  'switch',
   'set-fields',
+  'code',
   'http-request',
+  'merge',
   'delay'
 ]
 
@@ -64,12 +67,26 @@ export function createWorkflowNode(
         type: 'condition',
         config: { leftExpr: '', operator: 'contains', rightValue: '', caseSensitive: false }
       }
+    case 'switch':
+      return {
+        ...base,
+        type: 'switch',
+        config: { rules: [{ leftExpr: '', operator: 'contains', rightValue: '', caseSensitive: false }], fallback: true }
+      }
     case 'set-fields':
       return {
         ...base,
         type: 'set-fields',
         config: { fields: [{ key: '', value: '' }], keepIncoming: false }
       }
+    case 'code':
+      return {
+        ...base,
+        type: 'code',
+        config: { code: 'return $json' }
+      }
+    case 'merge':
+      return { ...base, type: 'merge', config: { mode: 'array' } }
     case 'http-request':
       return {
         ...base,
