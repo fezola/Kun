@@ -381,6 +381,8 @@ function WorkflowEditorInner({
                 onNodeClick={(_, node) => setSelectedNodeId(node.id)}
                 onPaneClick={() => setSelectedNodeId(null)}
                 fitView
+                fitViewOptions={{ maxZoom: 1, padding: 0.2 }}
+                minZoom={0.2}
                 proOptions={{ hideAttribution: true }}
               >
                 <Background variant={BackgroundVariant.Dots} gap={18} size={1} />
