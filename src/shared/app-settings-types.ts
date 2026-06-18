@@ -542,6 +542,7 @@ export type WorkflowNodeKind =
   | 'schedule-trigger'
   | 'webhook-trigger'
   | 'ai-agent'
+  | 'generate-image'
   | 'condition'
   | 'switch'
   | 'set-fields'
@@ -557,6 +558,7 @@ export const WORKFLOW_NODE_KINDS: readonly WorkflowNodeKind[] = [
   'schedule-trigger',
   'webhook-trigger',
   'ai-agent',
+  'generate-image',
   'condition',
   'switch',
   'set-fields',
@@ -620,6 +622,13 @@ export type WorkflowAiAgentConfigV1 = {
   model: string
   reasoningEffort: ScheduleReasoningEffort
   mode: ScheduleRunMode
+}
+
+export type WorkflowGenerateImageConfigV1 = {
+  /** Image prompt; supports {{json.x}} / {{text}} interpolation. */
+  prompt: string
+  /** Optional size override (e.g. "1024x1024"); empty uses the provider default. */
+  size: string
 }
 
 export type WorkflowConditionConfigV1 = {
@@ -714,6 +723,7 @@ export type WorkflowNodeConfigByKind = {
   'schedule-trigger': WorkflowScheduleTriggerConfigV1
   'webhook-trigger': WorkflowWebhookTriggerConfigV1
   'ai-agent': WorkflowAiAgentConfigV1
+  'generate-image': WorkflowGenerateImageConfigV1
   condition: WorkflowConditionConfigV1
   switch: WorkflowSwitchConfigV1
   'set-fields': WorkflowSetFieldsConfigV1

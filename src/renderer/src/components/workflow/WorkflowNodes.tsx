@@ -11,6 +11,7 @@ import {
   GitMerge,
   Globe,
   Hand,
+  ImagePlus,
   Play,
   Power,
   Repeat,
@@ -44,6 +45,7 @@ export const NODE_ICONS: Record<WorkflowNodeKind, LucideIcon> = {
   'schedule-trigger': CalendarClock,
   'webhook-trigger': Webhook,
   'ai-agent': Brain,
+  'generate-image': ImagePlus,
   condition: GitBranch,
   switch: Split,
   'set-fields': Braces,
@@ -84,6 +86,8 @@ function nodeSummary(node: WorkflowNodeV1): string {
       return `${node.config.method} ${node.config.path}`.trim()
     case 'ai-agent':
       return node.config.prompt.trim().slice(0, 60) || node.config.model || 'AI task'
+    case 'generate-image':
+      return node.config.prompt.trim().slice(0, 60) || 'image'
     case 'condition':
       return `${node.config.leftExpr || 'text'} ${node.config.operator} ${node.config.rightValue}`.trim()
     case 'switch':

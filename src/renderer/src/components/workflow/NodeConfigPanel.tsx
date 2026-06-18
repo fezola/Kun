@@ -262,6 +262,28 @@ export function NodeConfigPanel({ node, settings, lastResult, onChange, onDelete
           </>
         ) : null}
 
+        {node.type === 'generate-image' ? (
+          <>
+            <Field label={t('workflowImagePrompt')}>
+              <textarea
+                className={`${INPUT_CLASS} min-h-[100px] resize-y`}
+                value={node.config.prompt}
+                placeholder={t('workflowImagePromptPlaceholder', { token: '{{text}}' })}
+                onChange={(event) => onChange({ ...node, config: { ...node.config, prompt: event.target.value } })}
+              />
+            </Field>
+            <Field label={t('workflowImageSize')}>
+              <input
+                className={INPUT_CLASS}
+                value={node.config.size}
+                placeholder="1024x1024"
+                onChange={(event) => onChange({ ...node, config: { ...node.config, size: event.target.value } })}
+              />
+            </Field>
+            <p className="text-[11.5px] leading-5 text-ds-faint">{t('workflowImageHint')}</p>
+          </>
+        ) : null}
+
         {node.type === 'condition' ? (
           <>
             <Field label={t('workflowConditionLeft')}>

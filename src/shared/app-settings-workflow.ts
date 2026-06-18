@@ -180,6 +180,12 @@ export function normalizeWorkflowNode(value: unknown, index: number): WorkflowNo
           mode: normalizeRunMode(config.mode)
         }
       }
+    case 'generate-image':
+      return {
+        ...base,
+        type: 'generate-image',
+        config: { prompt: asText(config.prompt), size: asTrimmed(config.size) }
+      }
     case 'condition':
       return {
         ...base,

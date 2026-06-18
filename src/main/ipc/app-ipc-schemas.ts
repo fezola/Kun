@@ -734,6 +734,13 @@ const workflowAiAgentConfigSchema = z
   })
   .strict()
 
+const workflowGenerateImageConfigSchema = z
+  .object({
+    prompt: z.string().max(MAX_CHANNEL_TEXT_LENGTH).optional(),
+    size: z.string().max(32).optional()
+  })
+  .strict()
+
 const workflowConditionConfigSchema = z
   .object({
     leftExpr: z.string().max(2_000).optional(),
@@ -843,6 +850,7 @@ const workflowNodePatchSchema = z.discriminatedUnion('type', [
     })
     .strict(),
   z.object({ ...workflowNodeBaseShape, type: z.literal('ai-agent'), config: workflowAiAgentConfigSchema.optional() }).strict(),
+  z.object({ ...workflowNodeBaseShape, type: z.literal('generate-image'), config: workflowGenerateImageConfigSchema.optional() }).strict(),
   z.object({ ...workflowNodeBaseShape, type: z.literal('condition'), config: workflowConditionConfigSchema.optional() }).strict(),
   z.object({ ...workflowNodeBaseShape, type: z.literal('switch'), config: workflowSwitchConfigSchema.optional() }).strict(),
   z.object({ ...workflowNodeBaseShape, type: z.literal('set-fields'), config: workflowSetFieldsConfigSchema.optional() }).strict(),

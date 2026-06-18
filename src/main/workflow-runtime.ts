@@ -1,5 +1,7 @@
-import { randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { join } from 'node:path'
 import { URL } from 'node:url'
 import { runInNewContext } from 'node:vm'
 import type {
@@ -17,6 +19,7 @@ import type {
   WorkflowScheduleV1,
   WorkflowV1
 } from '../shared/app-settings'
+import { resolveKunImageGenerationSettings } from '../shared/app-settings'
 import { MAX_WORKFLOW_RUNS } from '../shared/app-settings-workflow'
 import {
   SCHEDULER_INTERVAL_MS,
@@ -886,6 +889,35 @@ export class WorkflowRuntime {
         if (!result.ok) throw new Error(result.message)
         const text = result.text ?? ''
         return { payload: { json: { text }, text }, message: summarizeTaskResult(text), threadId: result.threadId }
+      }
+      case 'generate-image': {
+        const imageGen = resolveKunImageGenerationSettings(settings)
+        if (!imageGen.enabled || !imageGen.baseUrl.trim() || !imageGen.apiKey.trim() || !imageGen.model.trim()) {
+          throw new Error('Image generation is not configured in Settings.')
+        }
+        const workspace = (settings.workflow.defaultWorkspaceRoot.trim() || settings.workspaceRoot).trim()
+        if (!workspace) throw new Error('No workspace configured to save the image.')
+        // Lazy import keeps the kun image module out of the unit-test graph.
+        const { createImageGenClient } = await import('../../kun/src/adapters/tool/image-gen-tool-provider.js')
+        const client = createImageGenClient(imageGen)
+        const size = node.config.size.trim() || imageGen.defaultSize.trim()
+        const image = await client.generate({
+          prompt: interpolate(node.config.prompt, payload),
+          model: imageGen.model.trim(),
+          ...(size && size !== 'auto' ? { size } : {}),
+          timeoutMs: imageGen.timeoutMs,
+          signal: AbortSignal.timeout(imageGen.timeoutMs)
+        })
+        const ext = image.mimeType === 'image/jpeg' ? 'jpg' : image.mimeType === 'image/webp' ? 'webp' : 'png'
+        const dir = join(workspace, 'workflow-images')
+        await mkdir(dir, { recursive: true })
+        const fileName = `image-${Date.now().toString(36)}-${randomBytes(2).toString('hex')}.${ext}`
+        const filePath = join(dir, fileName)
+        await writeFile(filePath, image.data)
+        return {
+          payload: { json: { imagePath: filePath, mimeType: image.mimeType }, text: filePath },
+          message: `image saved: ${fileName}`
+        }
       }
       case 'condition': {
         const matched = evaluateCondition(node.config, payload)

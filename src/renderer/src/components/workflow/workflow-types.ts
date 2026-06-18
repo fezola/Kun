@@ -13,6 +13,7 @@ export const WORKFLOW_PALETTE: readonly WorkflowNodeKind[] = [
   'schedule-trigger',
   'webhook-trigger',
   'ai-agent',
+  'generate-image',
   'condition',
   'switch',
   'set-fields',
@@ -67,6 +68,8 @@ export function createWorkflowNode(
         type: 'ai-agent',
         config: { prompt: '', workspaceRoot: '', providerId: '', model: '', reasoningEffort: 'medium', mode: 'agent' }
       }
+    case 'generate-image':
+      return { ...base, type: 'generate-image', config: { prompt: '', size: '' } }
     case 'condition':
       return {
         ...base,
