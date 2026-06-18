@@ -49,6 +49,7 @@
   "schedule": "定时任务",
   "workflow": "工作流",
   "workflowSubtitle": "用节点搭建自动化流程，可手动运行或按计划自动触发。",
+  "workflowSidebarHint": "打开一个工作流，在画布上编辑节点。",
   "workflowNew": "新建工作流",
   "workflowEmpty": "暂无工作流",
   "workflowEmptyHint": "创建工作流，把 AI 任务、条件判断和 HTTP 请求串联起来。",

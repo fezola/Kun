@@ -144,8 +144,8 @@ function WorkflowEditorInner({
   }, [buildGraph, onPersist, onRun])
 
   return (
-    <div className="ds-no-drag flex h-full min-h-0 flex-col bg-ds-main">
-      <header className="flex shrink-0 items-center gap-3 border-b border-ds-border px-4 py-2.5">
+    <div className="fixed inset-0 z-[60] flex flex-col bg-ds-main">
+      <header className="ds-drag ds-window-controls-safe-inset flex shrink-0 items-center gap-3 border-b border-ds-border py-2.5 pr-4">
         <button
           type="button"
           onClick={onBack}

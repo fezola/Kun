@@ -219,7 +219,12 @@ export function Sidebar({
           onOpenSettings={() => setImDialogMode('edit')}
           t={t}
         />
-      ) : activeView === 'schedule' || activeView === 'workflow' ? (
+      ) : activeView === 'workflow' ? (
+        <div className="ds-no-drag flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
+          <Workflow className="h-7 w-7 text-ds-faint" strokeWidth={1.5} />
+          <p className="text-[12.5px] leading-5 text-ds-faint">{t('workflowSidebarHint')}</p>
+        </div>
+      ) : activeView === 'schedule' ? (
         <SidebarProjectsSection
           threads={threads}
           activeView="chat"

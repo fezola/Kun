@@ -49,6 +49,7 @@
   "schedule": "Scheduled tasks",
   "workflow": "Workflows",
   "workflowSubtitle": "Build node-based automations and run them manually or on a schedule.",
+  "workflowSidebarHint": "Open a workflow to edit its nodes on the canvas.",
   "workflowNew": "New workflow",
   "workflowEmpty": "No workflows yet",
   "workflowEmptyHint": "Create a workflow to chain AI tasks, conditions and HTTP calls.",
