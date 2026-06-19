@@ -1,7 +1,7 @@
 import type { ReactElement } from 'react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Bot, Pencil, Play, Plus, Power, Trash2, Workflow as WorkflowIcon } from 'lucide-react'
+import { Bot, Download, Pencil, Play, Plus, Power, Trash2, Upload, Workflow as WorkflowIcon } from 'lucide-react'
 import {
   mergeWorkflowSettings,
   normalizeWorkflowSettings,
@@ -16,6 +16,7 @@ import {
 import { rendererRuntimeClient } from '../../agent/runtime-client'
 import { confirmDialog } from '../../lib/confirm-dialog'
 import { SidebarTitlebarToggleButton } from '../sidebar/SidebarPrimitives'
+import { parseWorkflowDsl, serializeWorkflowDsl } from '@shared/workflow-dsl'
 import { WorkflowEditorView } from './WorkflowEditorView'
 import { createWorkflow } from './workflow-types'
 
@@ -138,6 +139,41 @@ export function WorkflowView({ leftSidebarCollapsed, onToggleLeftSidebar }: Prop
     await persist([...workflows, created])
     setEditingId(created.id)
   }, [persist, t, workflows])
+
+  const importInputRef = useRef<HTMLInputElement | null>(null)
+
+  const handleExport = useCallback((workflow: WorkflowV1): void => {
+    const text = serializeWorkflowDsl(workflow, 'deepseek-gui', new Date().toISOString())
+    const blob = new Blob([text], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `${(workflow.name || 'workflow').replace(/[^\w.-]+/g, '_') || 'workflow'}.loop.json`
+    anchor.click()
+    URL.revokeObjectURL(url)
+  }, [])
+
+  const handleImportFile = useCallback(
+    async (file: File): Promise<void> => {
+      const result = parseWorkflowDsl(await file.text(), new Date().toISOString())
+      if (!result.ok) {
+        setError(t(`workflowImportError_${result.error}`))
+        return
+      }
+      const existing = new Set(workflows.map((workflow) => workflow.name))
+      let name = result.workflow.name || t('workflowUntitled')
+      if (existing.has(name)) {
+        let suffix = 2
+        while (existing.has(`${name} (${suffix})`)) suffix += 1
+        name = `${name} (${suffix})`
+      }
+      const imported: WorkflowV1 = { ...result.workflow, id: `workflow-${crypto.randomUUID()}`, name }
+      setError(null)
+      await persist([...workflows, imported])
+      setEditingId(imported.id)
+    },
+    [persist, t, workflows]
+  )
 
   const handleDelete = useCallback(
     async (id: string): Promise<void> => {
@@ -283,14 +319,35 @@ export function WorkflowView({ leftSidebarCollapsed, onToggleLeftSidebar }: Prop
         <div className="mx-auto flex w-full max-w-[880px] flex-col gap-6">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="text-[14px] leading-6 text-ds-faint">{t('workflowSubtitle')}</p>
-            <button
-              type="button"
-              onClick={() => void handleCreate()}
-              className="inline-flex items-center gap-2 rounded-xl bg-ds-userbubble px-4 py-2 text-[13px] font-semibold text-ds-userbubbleFg shadow-sm transition hover:opacity-90"
-            >
-              <Plus className="h-4 w-4" strokeWidth={2} />
-              {t('workflowNew')}
-            </button>
+            <div className="flex items-center gap-2">
+              <input
+                ref={importInputRef}
+                type="file"
+                accept="application/json,.json"
+                className="hidden"
+                onChange={(event) => {
+                  const file = event.target.files?.[0]
+                  event.target.value = ''
+                  if (file) void handleImportFile(file)
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => importInputRef.current?.click()}
+                className="inline-flex items-center gap-2 rounded-xl border border-ds-border bg-ds-card px-3.5 py-2 text-[13px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+              >
+                <Upload className="h-4 w-4" strokeWidth={1.8} />
+                {t('workflowImport')}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleCreate()}
+                className="inline-flex items-center gap-2 rounded-xl bg-ds-userbubble px-4 py-2 text-[13px] font-semibold text-ds-userbubbleFg shadow-sm transition hover:opacity-90"
+              >
+                <Plus className="h-4 w-4" strokeWidth={2} />
+                {t('workflowNew')}
+              </button>
+            </div>
           </div>
 
           {error ? (
@@ -366,6 +423,15 @@ export function WorkflowView({ leftSidebarCollapsed, onToggleLeftSidebar }: Prop
                         >
                           <Play className="h-3.5 w-3.5" strokeWidth={1.9} />
                           {t('workflowRunNow')}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleExport(workflow)}
+                          className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-ds-border text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+                          title={t('workflowExport')}
+                          aria-label={t('workflowExport')}
+                        >
+                          <Download className="h-4 w-4" strokeWidth={1.8} />
                         </button>
                         <button
                           type="button"
