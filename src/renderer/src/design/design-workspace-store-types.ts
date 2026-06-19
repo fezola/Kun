@@ -40,10 +40,16 @@ export type DesignWorkspaceState = {
   /** Stamp an artifact as handed to code (provenance + drift baseline). */
   markImplemented: (artifactId: string, threadId: string) => void
   removeArtifact: (artifactId: string) => void
+  /** Rename an artifact's title (persisted to its meta.json sidecar). */
+  renameArtifact: (artifactId: string, title: string) => void
+  /** Set or clear the design-mode error banner. */
+  setFileError: (error: string | null) => void
   setAgentPanelOpen: (open: boolean) => void
   setAssistantModel: (model: string, providerId?: string) => void
   updateDesignContext: (patch: Partial<DesignContext>) => void
   /** Hydrate workspace root + design context defaults from persisted settings. */
   loadDesignSettings: () => Promise<void>
+  /** Rebuild the artifact list from `.kun-design/` on disk (durable list). */
+  rehydrateArtifacts: () => Promise<void>
   resetWorkspace: () => void
 }

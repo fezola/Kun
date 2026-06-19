@@ -16,6 +16,7 @@ import type {
   WriteRichClipboardPayload,
   WriteRichClipboardResult
 } from '../../shared/write-export'
+import type { DesignExportPayload, DesignExportResult } from '../../shared/design-export'
 import { resolveWriteMarkdownResource } from '../../shared/write-markdown-resource'
 import { resolveWorkspaceFile } from './workspace-service'
 
@@ -564,6 +565,57 @@ export async function exportWriteDocument(
       format: payload.format,
       exportedAt: new Date().toISOString()
     }
+  } catch (error) {
+    return {
+      ok: false,
+      canceled: false,
+      message: error instanceof Error ? error.message : String(error)
+    }
+  }
+}
+
+function designExportSaveDialog(
+  sourcePath: string,
+  format: DesignExportPayload['format'],
+  suggestedName: string,
+  parentWindow?: BrowserWindow | null
+): Promise<Electron.SaveDialogReturnValue> {
+  const ext = format === 'pdf' ? 'pdf' : 'html'
+  const safe = suggestedName.replace(/[^\w.\- ]+/g, '').trim()
+  const base = safe || basename(dirname(sourcePath)) || 'design'
+  const options: Electron.SaveDialogOptions = {
+    title: 'Export design',
+    defaultPath: join(dirname(sourcePath), `${base}.${ext}`),
+    filters: [{ name: format === 'pdf' ? 'PDF' : 'HTML', extensions: [ext] }]
+  }
+  return parentWindow ? dialog.showSaveDialog(parentWindow, options) : dialog.showSaveDialog(options)
+}
+
+/**
+ * Export a design prototype (an already-complete single-file HTML document) to
+ * a standalone .html or a .pdf (rendered via a hidden BrowserWindow). Reuses the
+ * write-mode renderHtmlToPdf pipeline.
+ */
+export async function exportDesignPrototype(
+  payload: DesignExportPayload,
+  options?: { parentWindow?: BrowserWindow | null }
+): Promise<DesignExportResult> {
+  try {
+    const resolved = await resolveWorkspaceFile({ path: payload.path, workspaceRoot: payload.workspaceRoot })
+    if (!resolved.ok) return { ok: false, canceled: false, message: resolved.message }
+    const html = await readFile(resolved.path, 'utf8')
+    const dialogResult = await designExportSaveDialog(resolved.path, payload.format, payload.filename ?? '', options?.parentWindow)
+    if (dialogResult.canceled || !dialogResult.filePath) return { ok: false, canceled: true }
+    const ext = payload.format === 'pdf' ? '.pdf' : '.html'
+    const targetPath = dialogResult.filePath.toLowerCase().endsWith(ext)
+      ? dialogResult.filePath
+      : `${dialogResult.filePath}${ext}`
+    if (payload.format === 'pdf') {
+      await writeFile(targetPath, await renderHtmlToPdf(html))
+    } else {
+      await writeFile(targetPath, html, 'utf8')
+    }
+    return { ok: true, path: targetPath, format: payload.format, exportedAt: new Date().toISOString() }
   } catch (error) {
     return {
       ok: false,

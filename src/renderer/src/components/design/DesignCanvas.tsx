@@ -2,8 +2,10 @@ import type { ReactElement, ReactNode } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import {
   Code2,
+  Download,
   ExternalLink,
   Eye,
+  FileDown,
   Globe,
   Monitor,
   Moon,
@@ -57,6 +59,7 @@ export function DesignCanvas(): ReactElement {
   const setCanvasView = useDesignWorkspaceStore((s) => s.setCanvasView)
   const setViewport = useDesignWorkspaceStore((s) => s.setViewport)
   const setCanvasBackground = useDesignWorkspaceStore((s) => s.setCanvasBackground)
+  const setFileError = useDesignWorkspaceStore((s) => s.setFileError)
 
   const activeArtifact = artifacts.find((item) => item.id === activeArtifactId) ?? null
   const relativePath = activeArtifact?.relativePath ?? ''
@@ -169,6 +172,16 @@ export function DesignCanvas(): ReactElement {
   const copyCode = (): void => {
     void navigator?.clipboard?.writeText?.(sourceRef.current)
   }
+  const exportPrototype = (format: 'html' | 'pdf'): void => {
+    if (!relativePath || !workspaceRoot || typeof window.kunGui?.exportDesignPrototype !== 'function') return
+    setFileError(null)
+    void window.kunGui
+      .exportDesignPrototype({ path: relativePath, workspaceRoot, format, filename: activeArtifact?.title })
+      .then((res) => {
+        if (!res.ok && !res.canceled) setFileError(res.message ?? t('designExportFailed'))
+      })
+      .catch(() => setFileError(t('designExportFailed')))
+  }
 
   const framed = viewport !== 'desktop' && deviceFrame
   const viewportWidth = DESIGN_VIEWPORT_WIDTHS[viewport]
@@ -280,6 +293,16 @@ export function DesignCanvas(): ReactElement {
             <button type="button" aria-label={t('designCopyCode')} title={t('designCopyCode')} onClick={copyCode} className={actionButton}>
               <Code2 className="h-4 w-4" strokeWidth={1.9} />
             </button>
+          ) : null}
+          {relativePath && canvasView !== 'live' ? (
+            <>
+              <button type="button" aria-label={t('designExportHtml')} title={t('designExportHtml')} onClick={() => exportPrototype('html')} className={actionButton}>
+                <Download className="h-4 w-4" strokeWidth={1.9} />
+              </button>
+              <button type="button" aria-label={t('designExportPdf')} title={t('designExportPdf')} onClick={() => exportPrototype('pdf')} className={actionButton}>
+                <FileDown className="h-4 w-4" strokeWidth={1.9} />
+              </button>
+            </>
           ) : null}
           {isWebViewSurface ? (
             <button type="button" aria-label={t('designOpenExternal')} title={t('designOpenExternal')} onClick={openExternal} className={actionButton}>

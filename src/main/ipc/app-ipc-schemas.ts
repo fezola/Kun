@@ -955,6 +955,15 @@ export const writeExportPayloadSchema = z
   })
   .strict()
 
+export const designExportPayloadSchema = z
+  .object({
+    path: trimmedString(MAX_PATH_LENGTH),
+    workspaceRoot: optionalTrimmedString(MAX_PATH_LENGTH),
+    format: z.enum(['html', 'pdf']),
+    filename: optionalTrimmedString(MAX_PATH_LENGTH)
+  })
+  .strict()
+
 export const writeRichClipboardPayloadSchema = z
   .object({
     path: trimmedString(MAX_PATH_LENGTH),

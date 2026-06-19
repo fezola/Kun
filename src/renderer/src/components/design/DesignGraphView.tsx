@@ -7,6 +7,7 @@ import {
   Background,
   Controls,
   Handle,
+  MiniMap,
   Position,
   ReactFlow,
   addEdge,
@@ -32,6 +33,7 @@ import {
   type DesignGraphNodeKind
 } from '../../design/design-graph'
 import { runDesignNode } from '../../design/design-graph-run'
+import { useDesignWorkspaceStore } from '../../design/design-workspace-store'
 
 type Props = { artifact: DesignArtifact; workspaceRoot: string }
 
@@ -136,6 +138,7 @@ function dirOf(path: string): string {
  */
 export function DesignGraphView({ artifact, workspaceRoot }: Props): ReactElement {
   const { t } = useTranslation('common')
+  const setFileError = useDesignWorkspaceStore((s) => s.setFileError)
   const [nodes, setNodes] = useState<Node[]>([])
   const [edges, setEdges] = useState<Edge[]>([])
   const [running, setRunning] = useState(false)
@@ -245,6 +248,7 @@ export function DesignGraphView({ artifact, workspaceRoot }: Props): ReactElemen
   const runGraph = useCallback(async () => {
     if (running) return
     setRunError('')
+    setFileError(null)
     const order = topoSortDesignGraph(
       nodesRef.current.map((n) => ({ id: n.id })),
       edgesRef.current.map((e) => ({ source: e.source, target: e.target }))
@@ -255,6 +259,7 @@ export function DesignGraphView({ artifact, workspaceRoot }: Props): ReactElemen
     }
     const graphDir = dirOf(artifact.relativePath)
     setRunning(true)
+    let failures = 0
     try {
       for (const nodeId of order) {
         const node = nodesRef.current.find((n) => n.id === nodeId)
@@ -277,13 +282,15 @@ export function DesignGraphView({ artifact, workspaceRoot }: Props): ReactElemen
           outputRelativePath,
           workspaceRoot
         })
+        if (!ok) failures += 1
         patchNode(nodeId, { status: ok ? 'done' : 'error', outputPath: ok ? outputRelativePath : undefined })
         persist()
       }
     } finally {
       setRunning(false)
     }
-  }, [running, artifact.relativePath, workspaceRoot, persist, patchNode, t])
+    if (failures > 0) setFileError(t('designGraphRunFailed', { count: failures }))
+  }, [running, artifact.relativePath, workspaceRoot, persist, patchNode, t, setFileError])
 
   return (
     <GraphContext.Provider value={{ updateBrief, previewOutput: setPreviewPath, deleteNode }}>
@@ -320,8 +327,14 @@ export function DesignGraphView({ artifact, workspaceRoot }: Props): ReactElemen
           proOptions={{ hideAttribution: true }}
           style={{ width: '100%', height: '100%' }}
         >
-          <Background />
+          <Background gap={16} size={1} />
           <Controls />
+          <MiniMap
+            pannable
+            zoomable
+            nodeColor={(n) => (nodeData(n.data).kind === 'prompt' ? '#8b95a3' : '#3b82d8')}
+            className="!h-[88px] !w-[128px] !rounded-md"
+          />
         </ReactFlow>
         </div>
         {previewPath ? (
