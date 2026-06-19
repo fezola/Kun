@@ -27,8 +27,10 @@ import {
   filterComposerModelIds,
   normalizeComposerReasoningEffort
 } from './FloatingComposerModelPicker'
+import { FloatingComposerExecutionPicker } from './FloatingComposerExecutionPicker'
 import { getGoalPanelDraftObjective } from './floating-composer-commands'
 import { useChatStore } from '../../store/chat-store'
+import i18n from '../../i18n'
 import {
   buildComposerFileContextPrompt,
   filterWorkspaceFileMentionSuggestions,
@@ -666,6 +668,34 @@ describe('FloatingComposer image transfer helpers', () => {
 })
 
 describe('FloatingComposer capability controls', () => {
+  it('renders localized execution values in Chinese without visible category prefixes', async () => {
+    const previousLanguage = i18n.language
+    await i18n.changeLanguage('zh')
+
+    try {
+      const html = renderToStaticMarkup(
+        createElement(FloatingComposerExecutionPicker, {
+          value: {
+            approvalPolicy: 'auto',
+            sandboxMode: 'danger-full-access'
+          },
+          onChange: () => undefined
+        })
+      )
+
+      expect(html).toContain('自动执行')
+      expect(html).toContain('访问所有文件')
+      expect(html).not.toContain('>审批<')
+      expect(html).not.toContain('>权限<')
+      expect(html).toContain('aria-label="审批"')
+      expect(html).toContain('aria-label="权限"')
+      expect(html).not.toContain('Full access')
+      expect(html).not.toContain('Auto')
+    } finally {
+      await i18n.changeLanguage(previousLanguage)
+    }
+  })
+
   it('enables goal setup before a thread exists when a workspace is available', () => {
     useChatStore.setState({
       activeThreadId: null,
@@ -1152,7 +1182,7 @@ describe('FloatingComposer capability controls', () => {
     expect(html).not.toContain('aria-label="Send" disabled=""')
   })
 
-  it('hides execution access controls in the composer footer', () => {
+  it('shows execution access controls beside the composer menu', () => {
     useChatStore.setState({
       activeThreadId: 'thr_1',
       activeThreadGoal: null,
@@ -1186,8 +1216,13 @@ describe('FloatingComposer capability controls', () => {
       })
     )
 
-    expect(html).not.toContain('Full access')
-    expect(html).not.toContain('aria-label="Execution"')
+    expect(html).toContain('Approval')
+    expect(html).toContain('Auto')
+    expect(html).toContain('Full access')
+    expect(html).not.toContain('>Approval<')
+    expect(html).not.toContain('>Access<')
+    expect(html).toContain('aria-label="Approval"')
+    expect(html).toContain('aria-label="Access"')
   })
 
   it('renders a changed-file review card above the input', () => {

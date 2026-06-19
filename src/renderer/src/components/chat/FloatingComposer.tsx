@@ -96,6 +96,7 @@ import {
   type QueuedComposerMessage
 } from './FloatingComposerQueuedMessages'
 import {
+  FloatingComposerExecutionPicker,
   type ComposerExecutionSettings
 } from './FloatingComposerExecutionPicker'
 import { ImagePreviewLightbox } from './ImagePreviewLightbox'
@@ -591,6 +592,9 @@ export function FloatingComposer({
   const canOpenComposerMenu = showComposerMenuButton
     && (canTogglePlanMode || canCreateNewThread || canOpenGoalPanel || canRunReview || canToggleWorktreeMode)
   const showToolbarStartControls = showComposerMenuButton
+  const showExecutionSettingsPicker = showIntentToolbar
+    && Boolean(executionSettings)
+    && Boolean(onExecutionSettingsChange)
   const showChangeSummary = !compact && route === 'chat' && changedFiles.length > 0
   const effectiveChangedFileStats = changedFileStats ?? changedFiles.reduce(
     (stats, file) => ({
@@ -2107,6 +2111,14 @@ export function FloatingComposer({
                       </span>
                     ) : null}
                   </>
+                ) : null}
+                {showExecutionSettingsPicker && executionSettings && onExecutionSettingsChange ? (
+                  <FloatingComposerExecutionPicker
+                    value={executionSettings}
+                    applying={executionSettingsApplying}
+                    disabled={!canCompose || busy}
+                    onChange={onExecutionSettingsChange}
+                  />
                 ) : null}
               </div>
             ) : null}

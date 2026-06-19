@@ -104,6 +104,7 @@ import {
 } from '../lib/composer-file-references'
 import { filesUnderDirectory, loadWorkspaceFileIndex } from '../lib/workspace-file-index'
 import { resolveWriteRuntimeBannerMessage } from '../lib/write-runtime-banner'
+import { shouldSuppressRuntimeErrorBanner } from '../lib/runtime-banner-visibility'
 
 const ChangeInspector = lazy(() =>
   import('./ChangeInspector').then((module) => ({ default: module.ChangeInspector }))
@@ -332,6 +333,7 @@ export function Workbench(): ReactElement {
     liveAssistant,
     error,
     runtimeErrorDetail,
+    runtimeStatus,
     busy,
     route,
     pluginHostRoute,
@@ -389,6 +391,7 @@ export function Workbench(): ReactElement {
       liveAssistant: s.liveAssistant,
       error: s.error,
       runtimeErrorDetail: s.runtimeErrorDetail,
+      runtimeStatus: s.runtimeStatus,
       busy: s.busy,
       route: s.route,
       pluginHostRoute: s.pluginHostRoute,
@@ -2170,9 +2173,12 @@ export function Workbench(): ReactElement {
     />
   )
 
+  const runtimeErrorSuppressed = shouldSuppressRuntimeErrorBanner(runtimeStatus)
+  const visibleRuntimeError = runtimeErrorSuppressed ? null : error
+  const visibleRuntimeErrorDetail = runtimeErrorSuppressed ? null : runtimeErrorDetail
   const writeRuntimeBannerMessage = resolveWriteRuntimeBannerMessage({
     runtimeConnection,
-    error,
+    error: visibleRuntimeError,
     runtimeActionNeedsConnection: t('runtimeActionNeedsConnection')
   })
   const rightPanelDockedVisible = rightPanelVisible && !planPanelInOverlay
@@ -2465,7 +2471,7 @@ export function Workbench(): ReactElement {
           </Suspense>
         ) : route === 'write' ? (
           <>
-            {writeRuntimeBannerMessage ? renderRuntimeBanner(writeRuntimeBannerMessage, runtimeErrorDetail) : null}
+            {writeRuntimeBannerMessage ? renderRuntimeBanner(writeRuntimeBannerMessage, visibleRuntimeErrorDetail) : null}
             <div className="flex min-h-0 flex-1">
               <WriteWorkspaceView
                 leftSidebarCollapsed={leftSidebarCollapsed}
@@ -2480,7 +2486,9 @@ export function Workbench(): ReactElement {
           </>
         ) : (
           <>
-        {error && !(runtimeConnection !== 'ready' && !activeThreadId) ? renderRuntimeBanner(error, runtimeErrorDetail) : null}
+        {visibleRuntimeError && !(runtimeConnection !== 'ready' && !activeThreadId)
+          ? renderRuntimeBanner(visibleRuntimeError, visibleRuntimeErrorDetail)
+          : null}
 
         <div className="flex min-h-0 flex-1">
           <div className="flex min-h-0 min-w-0 flex-1">

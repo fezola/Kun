@@ -374,6 +374,10 @@ export function createNavigationActions(
         if (!runtimeStatusUnsubscribe && typeof window.kunGui.onRuntimeStatus === 'function') {
           runtimeStatusUnsubscribe = window.kunGui.onRuntimeStatus((status) => {
             set({ runtimeStatus: status })
+            if (status.state === 'restarting' || status.state === 'crashed') {
+              set({ error: null, runtimeErrorDetail: null })
+              return
+            }
             if (status.state === 'failed' || status.state === 'stopped') {
               // Terminal states reuse the main error banner, which carries
               // the full diagnostics UI (details, log path, settings).
