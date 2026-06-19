@@ -58,7 +58,7 @@ import { useDesignWorkspaceStore } from '../design/design-workspace-store'
 import { buildDesignFromCodePrompt, buildDesignTurnPrompt } from '../design/design-turn-prompt'
 import { buildImplementDesignPrompt } from '../design/design-implement-prompt'
 import { createDesignArtifactId, type DesignArtifact } from '../design/design-types'
-import { formatDesignSystemMarkdown } from '../design/design-context'
+import { formatDesignSystemMarkdown, hashDesignSystem } from '../design/design-context'
 import { emptyDesignGraph, serializeDesignGraph } from '../design/design-graph'
 import { SddAssistantPanel } from './sdd/SddAssistantPanel'
 import { SddDraftEditorView } from './sdd/SddDraftEditorView'
@@ -2224,15 +2224,20 @@ export function Workbench(): ReactElement {
     }
     void (async () => {
       let designSystemRelativePath: string | undefined
+      let designSystemHash: string | undefined
       if (designState.publishDesignSystem) {
         try {
           const path = '.kun-design/DESIGN_SYSTEM.md'
+          const content = formatDesignSystemMarkdown(designState.designContext)
           const res = await window.kunGui.writeWorkspaceFile({
             path,
             workspaceRoot: designWorkspaceRoot,
-            content: formatDesignSystemMarkdown(designState.designContext)
+            content
           })
-          if (res.ok) designSystemRelativePath = path
+          if (res.ok) {
+            designSystemRelativePath = path
+            designSystemHash = hashDesignSystem(content)
+          }
         } catch {
           // non-fatal: implement without the published design-system file
         }
@@ -2252,7 +2257,7 @@ export function Workbench(): ReactElement {
         displayText: t('designImplementDisplay', { title: artifact.title })
       })
       if (ok) {
-        designState.markImplemented(artifact.id, useChatStore.getState().activeThreadId ?? '')
+        designState.markImplemented(artifact.id, useChatStore.getState().activeThreadId ?? '', designSystemHash)
       }
     })()
   }

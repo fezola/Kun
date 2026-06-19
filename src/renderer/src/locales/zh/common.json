@@ -93,6 +93,7 @@
   "designImplementDisplay": "实现设计：{{title}}",
   "designImplemented": "已用代码实现",
   "designDrift": "设计已更新，代码实现可能过期",
+  "designCodeDrift": "共享设计系统在实现后已变更",
   "designFromCode": "在设计中重做",
   "designFromCodeTitle": "重设计 · {{file}}",
   "designFromCodeDisplay": "从代码生成设计：{{file}}",

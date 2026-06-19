@@ -93,6 +93,7 @@
   "designImplementDisplay": "Implement design: {{title}}",
   "designImplemented": "Implemented in code",
   "designDrift": "Design changed — the implementation may be stale",
+  "designCodeDrift": "The shared design system changed since this was implemented",
   "designFromCode": "Redesign in canvas",
   "designFromCodeTitle": "Redesign · {{file}}",
   "designFromCodeDisplay": "Design from code: {{file}}",
