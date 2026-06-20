@@ -1,6 +1,6 @@
 import '@xyflow/react/dist/style.css'
 import type { ReactElement } from 'react'
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { ExternalLink, Image as ImageIcon, Loader2, MessageSquare, Play, Plus, Sparkles, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import {
@@ -93,16 +93,64 @@ function NodeImage({ path, workspaceRoot }: { path: string; workspaceRoot: strin
   return <img src={url} alt="" className="nodrag mt-1 max-h-28 w-full rounded object-contain" />
 }
 
-function GraphNode({ id, data }: NodeProps): ReactElement {
+type NodeKindStyle = {
+  border: string
+  ring: string
+  headerBg: string
+  headerText: string
+  dot: string
+  Icon: typeof MessageSquare
+  labelKey: string
+  placeholderKey: string
+}
+
+const KIND_STYLE: Record<DesignGraphNodeData['kind'], NodeKindStyle> = {
+  prompt: {
+    border: 'border-[#8b95a3]/45',
+    ring: 'ring-[#8b95a3]',
+    headerBg: 'bg-[#8b95a3]/12',
+    headerText: 'text-[#5b6573] dark:text-white/65',
+    dot: '#8b95a3',
+    Icon: MessageSquare,
+    labelKey: 'designNodePrompt',
+    placeholderKey: 'designNodePromptPlaceholder'
+  },
+  design: {
+    border: 'border-[#3b82d8]/50',
+    ring: 'ring-[#3b82d8]',
+    headerBg: 'bg-[#3b82d8]/12',
+    headerText: 'text-[#2f6fc0] dark:text-[#7fb0ea]',
+    dot: '#3b82d8',
+    Icon: Sparkles,
+    labelKey: 'designNodeDesign',
+    placeholderKey: 'designNodeDesignPlaceholder'
+  },
+  image: {
+    border: 'border-[#7c5cff]/50',
+    ring: 'ring-[#7c5cff]',
+    headerBg: 'bg-[#7c5cff]/12',
+    headerText: 'text-[#6a4bdb] dark:text-[#b3a0ff]',
+    dot: '#7c5cff',
+    Icon: ImageIcon,
+    labelKey: 'designNodeImage',
+    placeholderKey: 'designNodeImagePlaceholder'
+  }
+}
+
+/** Larger, white-ringed handles so connections are easy to grab. */
+const handleClass =
+  '!h-3.5 !w-3.5 !border-2 !border-white !bg-[#3b82d8] !shadow-[0_1px_3px_rgba(20,47,95,0.3)] !transition-transform hover:!scale-125 dark:!border-[#1f242c]'
+
+function GraphNode({ id, data, selected }: NodeProps): ReactElement {
   const { t } = useTranslation('common')
   const { updateBrief, previewOutput, deleteNode, workspaceRoot } = useContext(GraphContext)
   const d = nodeData(data)
-  const isPrompt = d.kind === 'prompt'
-  const isImage = d.kind === 'image'
+  const style = KIND_STYLE[d.kind]
+  const Icon = style.Icon
   return (
     <div
-      className={`group relative min-w-[170px] max-w-[230px] rounded-lg border bg-white px-2 py-1.5 shadow-sm dark:bg-[#1f242c] ${
-        isPrompt ? 'border-[#8b95a3]/45' : 'border-[#3b82d8]/55'
+      className={`group relative w-[224px] overflow-hidden rounded-xl border bg-white shadow-[0_1px_2px_rgba(20,47,95,0.08),0_6px_16px_rgba(20,47,95,0.08)] dark:bg-[#1f242c] ${style.border} ${
+        selected ? `ring-2 ${style.ring}` : ''
       }`}
     >
       <button
@@ -113,49 +161,39 @@ function GraphNode({ id, data }: NodeProps): ReactElement {
         }}
         title={t('designDeleteNode')}
         aria-label={t('designDeleteNode')}
-        className="nodrag absolute -right-1.5 -top-1.5 z-10 inline-flex h-4 w-4 items-center justify-center rounded-full bg-[#c0392b] text-white opacity-0 shadow transition-opacity group-hover:opacity-100"
+        className="nodrag absolute right-1.5 top-1.5 z-10 inline-flex h-5 w-5 items-center justify-center rounded-md text-[#8b95a3] opacity-0 transition-opacity hover:bg-black/[0.05] hover:text-[#c0392b] group-hover:opacity-100 dark:hover:bg-white/10"
       >
-        <X className="h-2.5 w-2.5" strokeWidth={2.5} />
+        <X className="h-3 w-3" strokeWidth={2.5} />
       </button>
-      <Handle type="target" position={Position.Left} className="!h-2 !w-2 !border-0 !bg-[#3b82d8]" />
-      <div className="mb-1 flex items-center justify-between gap-1">
-        <span className="inline-flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-[#8b95a3]">
-          {isPrompt ? (
-            <MessageSquare className="h-3 w-3" strokeWidth={2} />
-          ) : isImage ? (
-            <ImageIcon className="h-3 w-3" strokeWidth={2} />
-          ) : (
-            <Sparkles className="h-3 w-3" strokeWidth={2} />
-          )}
-          {isPrompt ? t('designNodePrompt') : isImage ? t('designNodeImage') : t('designNodeDesign')}
+      <Handle type="target" position={Position.Left} className={handleClass} />
+      <div className={`flex items-center gap-1.5 px-3 py-2 ${style.headerBg}`}>
+        <Icon className={`h-3.5 w-3.5 shrink-0 ${style.headerText}`} strokeWidth={2} />
+        <span className={`flex-1 truncate text-[11px] font-semibold uppercase tracking-wide ${style.headerText}`}>
+          {t(style.labelKey)}
         </span>
         <StatusBadge status={d.status} />
       </div>
-      <textarea
-        value={d.brief}
-        onChange={(e) => updateBrief(id, e.target.value)}
-        rows={2}
-        placeholder={
-          isPrompt
-            ? t('designNodePromptPlaceholder')
-            : isImage
-              ? t('designNodeImagePlaceholder')
-              : t('designNodeDesignPlaceholder')
-        }
-        className="nodrag w-full resize-none bg-transparent text-[12px] text-[#1f2733] outline-none dark:text-white/90"
-      />
-      {isImage && d.outputPath ? (
-        <NodeImage path={d.outputPath} workspaceRoot={workspaceRoot} />
-      ) : !isPrompt && d.outputPath ? (
-        <button
-          type="button"
-          onClick={() => previewOutput(d.outputPath as string)}
-          className="nodrag mt-1 text-[11px] text-[#3b82d8] hover:underline"
-        >
-          {t('designNodeOpenOutput')}
-        </button>
-      ) : null}
-      <Handle type="source" position={Position.Right} className="!h-2 !w-2 !border-0 !bg-[#3b82d8]" />
+      <div className="px-3 pb-2.5 pt-2">
+        <textarea
+          value={d.brief}
+          onChange={(e) => updateBrief(id, e.target.value)}
+          rows={2}
+          placeholder={t(style.placeholderKey)}
+          className="nodrag w-full resize-none bg-transparent text-[12.5px] leading-snug text-[#1f2733] outline-none placeholder:text-[#9aa4b2] dark:text-white/90 dark:placeholder:text-white/30"
+        />
+        {d.kind === 'image' && d.outputPath ? (
+          <NodeImage path={d.outputPath} workspaceRoot={workspaceRoot} />
+        ) : d.kind === 'design' && d.outputPath ? (
+          <button
+            type="button"
+            onClick={() => previewOutput(d.outputPath as string)}
+            className="nodrag mt-1.5 inline-flex items-center gap-1 text-[11px] font-medium text-[#3b82d8] hover:underline"
+          >
+            {t('designNodeOpenOutput')}
+          </button>
+        ) : null}
+      </div>
+      <Handle type="source" position={Position.Right} className={handleClass} />
     </div>
   )
 }
@@ -333,10 +371,16 @@ export function DesignGraphView({ artifact, workspaceRoot }: Props): ReactElemen
     if (failures > 0) setFileError(t('designGraphRunFailed', { count: failures }))
   }, [running, artifact.relativePath, workspaceRoot, persist, patchNode, t, setFileError])
 
+  // Animate edges while the graph is running, so flow is visible.
+  const styledEdges = useMemo(
+    () => (running ? edges.map((e) => ({ ...e, animated: true })) : edges),
+    [edges, running]
+  )
+
   return (
     <GraphContext.Provider value={{ updateBrief, previewOutput: setPreviewPath, deleteNode, workspaceRoot }}>
-      <div className="flex min-h-0 flex-1">
-        <div className="relative min-h-0 flex-1">
+      <div className="ds-no-drag flex min-h-0 flex-1">
+        <div className="ds-no-drag relative min-h-0 flex-1">
         <div className="ds-no-drag absolute left-3 top-3 z-10 flex items-center gap-1.5">
           <button type="button" onClick={() => addNode('prompt')} className={btnGhost}>
             <Plus className="h-3.5 w-3.5" strokeWidth={2} />
@@ -363,21 +407,30 @@ export function DesignGraphView({ artifact, workspaceRoot }: Props): ReactElemen
         ) : null}
         <ReactFlow
           nodes={nodes}
-          edges={edges}
+          edges={styledEdges}
           nodeTypes={nodeTypes}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
+          isValidConnection={(conn) => conn.source !== conn.target}
+          defaultEdgeOptions={{ type: 'smoothstep', style: { stroke: '#3b82d8', strokeWidth: 1.6 } }}
+          connectionLineStyle={{ stroke: '#3b82d8', strokeWidth: 2 }}
+          connectionRadius={30}
+          snapToGrid
+          snapGrid={[16, 16]}
           fitView
+          fitViewOptions={{ padding: 0.3, maxZoom: 1 }}
           proOptions={{ hideAttribution: true }}
           style={{ width: '100%', height: '100%' }}
         >
-          <Background gap={16} size={1} />
-          <Controls />
+          <Background gap={18} size={1} />
+          <Controls showInteractive={false} />
           <MiniMap
             pannable
             zoomable
-            nodeColor={(n) => (nodeData(n.data).kind === 'prompt' ? '#8b95a3' : '#3b82d8')}
+            nodeColor={(n) => KIND_STYLE[nodeData(n.data).kind]?.dot ?? '#3b82d8'}
+            nodeStrokeWidth={2}
+            maskColor="rgba(20,47,95,0.06)"
             className="!h-[88px] !w-[128px] !rounded-md"
           />
         </ReactFlow>
