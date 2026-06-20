@@ -1502,6 +1502,80 @@ export type WriteSettingsPatchV1 = Partial<Omit<WriteSettingsV1, 'inlineCompleti
   agentPresets?: Array<Partial<WriteAgentPresetV1>>
 }
 
+export type DesignSystemPreset =
+  | 'none'
+  | 'shadcn'
+  | 'radix'
+  | 'material'
+  | 'ios'
+  | 'fluent'
+  | 'ant'
+  | 'chakra'
+  | 'carbon'
+  | 'polaris'
+  | 'bootstrap'
+  | 'geist'
+  | 'brutalism'
+  | 'editorial'
+export type DesignSurfaceSetting = '' | 'brand' | 'product'
+export type DesignRadiusSetting = '' | 'sharp' | 'soft' | 'rounded' | 'pill'
+export type DesignDensitySetting = '' | 'compact' | 'cozy' | 'spacious'
+export type DesignFontStyleSetting = '' | 'system' | 'geometric' | 'humanist' | 'serif' | 'mono'
+export type DesignViewportSetting = 'mobile' | 'tablet' | 'desktop'
+export type DesignCanvasViewSetting = 'preview' | 'code'
+export type DesignCanvasBackgroundSetting = 'light' | 'dark'
+
+export type DesignSettingsV1 = {
+  /** Workspace root for design artifacts; empty = fall back to the active code/write workspace. */
+  defaultWorkspaceRoot: string
+
+  // --- Design system (shared source of truth for design + code) ---
+  /** Anchor brand color (CSS color) injected into the design agent's context. */
+  brandColor: string
+  /** Free-form tone chips (e.g. 编辑风, 专业, 科技感). */
+  tone: string[]
+  /** Named design-system preset that seeds tokens/voice; 'none' = no preset. */
+  designSystemPreset: DesignSystemPreset
+  /** Default surface type for new designs; '' = unset. */
+  designType: DesignSurfaceSetting
+  /** Free-form additional design rules injected alongside the preset and written to DESIGN_SYSTEM.md. */
+  designGuidelines: string
+  /** Corner-radius token; '' = unset. */
+  radius: DesignRadiusSetting
+  /** Spacing-density token; '' = unset. */
+  density: DesignDensitySetting
+  /** Type-style token; '' = unset. */
+  fontStyle: DesignFontStyleSetting
+
+  // --- Design agent ---
+  /** Default model for design turns; '' = inherit runtime default. */
+  model: string
+  providerId: string
+  /** Reasoning effort for design turns; '' = default. */
+  reasoningEffort: string
+  /** Custom override of the single-file HTML generation contract; '' = built-in default. */
+  generationPrompt: string
+
+  // --- Design → code integration ---
+  /** Target stack hint for "implement this design", e.g. "React + Tailwind + shadcn". */
+  implementStackHint: string
+  /** Tell the coding agent to honor the published design system. */
+  injectIntoCode: boolean
+  /** Publish DESIGN_SYSTEM.md to the workspace when implementing. */
+  publishDesignSystem: boolean
+
+  // --- Canvas defaults ---
+  defaultViewport: DesignViewportSetting
+  defaultCanvasView: DesignCanvasViewSetting
+  canvasBackground: DesignCanvasBackgroundSetting
+  /** Auto-refresh the canvas as the agent writes. */
+  liveRefresh: boolean
+  /** Show a device frame for mobile/tablet viewports. */
+  deviceFrame: boolean
+}
+
+export type DesignSettingsPatchV1 = Partial<DesignSettingsV1>
+
 export type ClawGeneratedFileV1 = {
   path: string
   relativePath?: string
@@ -1569,6 +1643,7 @@ export type AppSettingsV1 = {
   claw: ClawSettingsV1
   schedule: ScheduleSettingsV1
   workflow: WorkflowSettingsV1
+  design: DesignSettingsV1
   guiUpdate: GuiUpdateConfigV1
   codePromptPrefix: string
   /** User-disabled skill IDs. Disabled skills are hidden from command surfaces. */
@@ -1576,7 +1651,7 @@ export type AppSettingsV1 = {
 }
 
 export type AppSettingsPatch = Partial<
-  Omit<AppSettingsV1, 'provider' | 'agents' | 'log' | 'notifications' | 'appBehavior' | 'keyboardShortcuts' | 'write' | 'claw' | 'schedule' | 'workflow' | 'guiUpdate'>
+  Omit<AppSettingsV1, 'provider' | 'agents' | 'log' | 'notifications' | 'appBehavior' | 'keyboardShortcuts' | 'write' | 'claw' | 'schedule' | 'design' | 'workflow' | 'guiUpdate'>
 > & {
   provider?: ModelProviderSettingsPatchV1
   agents?: KunSettingsEnvelopePatchV1
@@ -1588,5 +1663,6 @@ export type AppSettingsPatch = Partial<
   claw?: ClawSettingsPatchV1
   schedule?: ScheduleSettingsPatchV1
   workflow?: WorkflowSettingsPatchV1
+  design?: DesignSettingsPatchV1
   guiUpdate?: Partial<GuiUpdateConfigV1>
 }

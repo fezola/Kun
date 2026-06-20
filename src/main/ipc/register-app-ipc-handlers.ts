@@ -83,6 +83,7 @@ import {
   workspaceFileWritePayloadSchema,
   speechTranscribePayloadSchema,
   writeExportPayloadSchema,
+  designExportPayloadSchema,
   writeRichClipboardPayloadSchema,
   writeInfographicPayloadSchema,
   writeInlineCompletionPayloadSchema,
@@ -132,6 +133,7 @@ import {
   removeUiPlugin
 } from '../services/ui-plugin-service'
 import { ensureBundledUiPlugins } from '../ui-plugin-bundled'
+import { ensureBundledSkills } from '../skill-bundled'
 import {
   createWorkspaceDirectory,
   createWorkspaceFile,
@@ -165,7 +167,11 @@ import {
   getComputerUsePermissions,
   requestComputerUsePermission
 } from '../services/computer-use-permissions'
-import { copyWriteDocumentAsRichText, exportWriteDocument } from '../services/write-export-service'
+import {
+  copyWriteDocumentAsRichText,
+  exportDesignPrototype,
+  exportWriteDocument
+} from '../services/write-export-service'
 import { listGuiSkillRoots, listGuiSkills } from '../services/skill-service'
 
 type GuiUpdaterModule = typeof import('../gui-updater')
@@ -359,6 +365,8 @@ function runDesktopCommand(
 }
 
 export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): void {
+  // Seed the built-in "design system & craft" skill into ~/.kun/skills/ once.
+  void ensureBundledSkills(join(homedir(), '.kun'))
   const {
     store,
     getMainWindow,
@@ -1167,6 +1175,12 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   ipcMain.handle('write:export', async (_, payload: unknown) =>
     exportWriteDocument(
       parseIpcPayload('write:export', writeExportPayloadSchema, payload),
+      { parentWindow: getMainWindow() }
+    )
+  )
+  ipcMain.handle('design:export-prototype', async (_, payload: unknown) =>
+    exportDesignPrototype(
+      parseIpcPayload('design:export-prototype', designExportPayloadSchema, payload),
       { parentWindow: getMainWindow() }
     )
   )

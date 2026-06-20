@@ -1202,6 +1202,34 @@ export const workflowCodeCheckPayloadSchema = z
     code: z.string().max(MAX_BODY_BYTES)
   })
   .strict()
+const designSettingsPatchSchema = z.object({
+  defaultWorkspaceRoot: defaultPathSchema,
+  brandColor: z.string().trim().max(32).optional(),
+  tone: z.array(trimmedString(32)).max(12).optional(),
+  designSystemPreset: z
+    .enum([
+      'none', 'shadcn', 'radix', 'material', 'ios', 'fluent', 'ant',
+      'chakra', 'carbon', 'polaris', 'bootstrap', 'geist', 'brutalism', 'editorial'
+    ])
+    .optional(),
+  designType: z.enum(['', 'brand', 'product']).optional(),
+  designGuidelines: z.string().max(4000).optional(),
+  radius: z.enum(['', 'sharp', 'soft', 'rounded', 'pill']).optional(),
+  density: z.enum(['', 'compact', 'cozy', 'spacious']).optional(),
+  fontStyle: z.enum(['', 'system', 'geometric', 'humanist', 'serif', 'mono']).optional(),
+  model: z.string().trim().max(128).optional(),
+  providerId: z.string().trim().max(128).optional(),
+  reasoningEffort: z.string().trim().max(32).optional(),
+  generationPrompt: z.string().max(6000).optional(),
+  implementStackHint: z.string().trim().max(200).optional(),
+  injectIntoCode: z.boolean().optional(),
+  publishDesignSystem: z.boolean().optional(),
+  defaultViewport: z.enum(['mobile', 'tablet', 'desktop']).optional(),
+  defaultCanvasView: z.enum(['preview', 'code']).optional(),
+  canvasBackground: z.enum(['light', 'dark']).optional(),
+  liveRefresh: z.boolean().optional(),
+  deviceFrame: z.boolean().optional()
+}).strict()
 
 function stripLegacySettingsPatchKeys(payload: unknown): unknown {
   if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return payload
@@ -1243,6 +1271,7 @@ const settingsPatchObjectSchema = z.object({
   claw: clawSettingsPatchSchema.optional(),
   schedule: scheduleSettingsPatchSchema.optional(),
   workflow: workflowSettingsPatchSchema.optional(),
+  design: designSettingsPatchSchema.optional(),
   guiUpdate: z.object({
     channel: z.enum(GUI_UPDATE_CHANNELS).optional()
   }).strict().optional(),
@@ -1447,6 +1476,15 @@ export const writeExportPayloadSchema = z
     workspaceRoot: optionalTrimmedString(MAX_PATH_LENGTH),
     format: z.enum(WRITE_EXPORT_FORMATS),
     content: z.string().max(MAX_BODY_BYTES)
+  })
+  .strict()
+
+export const designExportPayloadSchema = z
+  .object({
+    path: trimmedString(MAX_PATH_LENGTH),
+    workspaceRoot: optionalTrimmedString(MAX_PATH_LENGTH),
+    format: z.enum(['html', 'pdf']),
+    filename: optionalTrimmedString(MAX_PATH_LENGTH)
   })
   .strict()
 

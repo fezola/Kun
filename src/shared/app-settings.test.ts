@@ -19,6 +19,7 @@ import {
   defaultScheduleSettings,
   defaultWorkflowSettings,
   defaultWriteSelectionAssistSettings,
+  defaultDesignSettings,
   defaultWriteSettings,
   getModelProviderPreset,
   defaultKeyboardShortcuts,
@@ -61,6 +62,7 @@ function settings(): AppSettingsV1 {
     claw: defaultClawSettings(),
     schedule: defaultScheduleSettings(),
     workflow: defaultWorkflowSettings(),
+    design: defaultDesignSettings(),
     guiUpdate: { channel: 'stable' },
     codePromptPrefix: '',
     disabledSkillIds: []

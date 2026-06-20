@@ -56,6 +56,14 @@ import { SessionHeader } from './SessionHeader'
 import { WriteWorkspaceView } from './write/WriteWorkspaceView'
 import { WriteAssistantPanel } from './write/WriteAssistantPanel'
 import { WriteSidebar } from './write/WriteSidebar'
+import { DesignWorkspaceView } from './design/DesignWorkspaceView'
+import { DesignSidebar } from './design/DesignSidebar'
+import { useDesignWorkspaceStore } from '../design/design-workspace-store'
+import { buildDesignFromCodePrompt, buildDesignTurnPrompt } from '../design/design-turn-prompt'
+import { buildImplementDesignPrompt } from '../design/design-implement-prompt'
+import { createDesignArtifactId, type DesignArtifact } from '../design/design-types'
+import { formatDesignSystemMarkdown, hashDesignSystem } from '../design/design-context'
+import { emptyDesignGraph, serializeDesignGraph } from '../design/design-graph'
 import { SddAssistantPanel } from './sdd/SddAssistantPanel'
 import { SddDraftEditorView } from './sdd/SddDraftEditorView'
 import { SidebarTitlebarToggleButton } from './sidebar/SidebarPrimitives'
@@ -352,7 +360,9 @@ export function Workbench(): ReactElement {
     setRoute,
     openCode,
     openWrite,
+    openDesign,
     ensureWriteThreadForWorkspace,
+    ensureDesignThreadForWorkspace,
     createWriteThread,
     openSettings,
     openPlugins,
@@ -411,7 +421,9 @@ export function Workbench(): ReactElement {
       setRoute: s.setRoute,
       openCode: s.openCode,
       openWrite: s.openWrite,
+      openDesign: s.openDesign,
       ensureWriteThreadForWorkspace: s.ensureWriteThreadForWorkspace,
+      ensureDesignThreadForWorkspace: s.ensureDesignThreadForWorkspace,
       createWriteThread: s.createWriteThread,
       openSettings: s.openSettings,
       openPlugins: s.openPlugins,
@@ -565,6 +577,9 @@ export function Workbench(): ReactElement {
     [activeSkillWorkspace, timelineBlocks]
   )
   const latestDevPreviewUrl = detectedDevPreviewUrls[0] ?? null
+  useEffect(() => {
+    useDesignWorkspaceStore.getState().setDevPreviewUrl(latestDevPreviewUrl ?? '')
+  }, [latestDevPreviewUrl])
   const latestAutoOpenDevPreviewUrl = autoOpenDevPreviewUrls[0] ?? null
   const currentSideConversations = useMemo(
     () =>
@@ -2120,6 +2135,218 @@ export function Workbench(): ReactElement {
     void openWrite()
   }
 
+  const openDesignMode = (): void => {
+    setConnectPhoneSidebarOpen(false)
+    openDesign()
+  }
+
+  const createDesignGraph = (): void => {
+    const designWorkspaceRoot = useDesignWorkspaceStore.getState().workspaceRoot || workspaceRoot
+    if (!designWorkspaceRoot) {
+      setError(t('workspaceRequiredToCreateThread'))
+      return
+    }
+    const artifactId = createDesignArtifactId()
+    const createdAt = new Date().toISOString()
+    const relativePath = `.kun-design/${artifactId}/graph.json`
+    void (async () => {
+      try {
+        await window.kunGui.writeWorkspaceFile({
+          path: relativePath,
+          workspaceRoot: designWorkspaceRoot,
+          content: serializeDesignGraph(emptyDesignGraph())
+        })
+      } catch {
+        // non-fatal: the editor creates it on first save
+      }
+      const store = useDesignWorkspaceStore.getState()
+      store.setWorkspaceRoot(designWorkspaceRoot)
+      store.upsertArtifact({
+        id: artifactId,
+        kind: 'graph',
+        title: t('designGraphTitle'),
+        relativePath,
+        createdAt,
+        updatedAt: createdAt,
+        versions: [{ id: `${artifactId}-v1`, relativePath, createdAt, summary: '' }]
+      })
+    })()
+  }
+
+  const sendDesignTurn = (brief: string): void => {
+    const text = brief.trim()
+    if (!text) return
+    const designWorkspaceRoot = useDesignWorkspaceStore.getState().workspaceRoot || workspaceRoot
+    if (!designWorkspaceRoot) {
+      setError(t('workspaceRequiredToCreateThread'))
+      return
+    }
+    setInput('')
+    void (async () => {
+      const threadId = await ensureDesignThreadForWorkspace(designWorkspaceRoot)
+      if (!threadId) {
+        setInput(text)
+        return
+      }
+      const store = useDesignWorkspaceStore.getState()
+      store.setWorkspaceRoot(designWorkspaceRoot)
+      const createdAt = new Date().toISOString()
+      // A selected artifact means "iterate it" (new version reading the prior);
+      // no selection (e.g. after "New design") means a fresh artifact.
+      const active = store.artifacts.find((item) => item.id === store.activeArtifactId) ?? null
+      let relativePath: string
+      let basePath: string | undefined
+      if (active) {
+        const versionN = active.versions.length + 1
+        relativePath = `.kun-design/${active.id}/v${versionN}.html`
+        basePath = active.relativePath
+        store.addArtifactVersion(active.id, {
+          id: `${active.id}-v${versionN}`,
+          relativePath,
+          createdAt,
+          summary: text
+        })
+      } else {
+        const artifactId = createDesignArtifactId()
+        relativePath = `.kun-design/${artifactId}/v1.html`
+        const title = text.length > 48 ? `${text.slice(0, 48)}…` : text
+        store.upsertArtifact({
+          id: artifactId,
+          kind: 'html',
+          title,
+          relativePath,
+          createdAt,
+          updatedAt: createdAt,
+          versions: [{ id: `${artifactId}-v1`, relativePath, createdAt, summary: text }]
+        })
+      }
+      const prompt = buildDesignTurnPrompt({
+        target: 'html',
+        mode: 'text',
+        text,
+        artifactRelativePath: relativePath,
+        basePath,
+        workspaceRoot: designWorkspaceRoot,
+        customPrompt: store.generationPrompt || undefined,
+        designContext: store.designContext
+      })
+      const model = store.assistantModel.trim()
+      const providerId =
+        store.assistantProviderId.trim() || providerIdForComposerModel(composerModelGroups, model)
+      const reasoningEffort = store.reasoningEffort.trim()
+      void sendMessage(prompt, 'agent', {
+        displayText: text,
+        ...(model ? { model } : {}),
+        ...(providerId ? { providerId } : {}),
+        ...(reasoningEffort ? { reasoningEffort } : {})
+      })
+    })()
+  }
+
+  // Design → code spine: hand an approved design to the coding agent. Publishes
+  // the shared design system to the workspace, then dispatches an implement turn
+  // into a fresh code thread and records provenance for drift tracking.
+  const implementDesignInCode = (artifact: DesignArtifact): void => {
+    const designState = useDesignWorkspaceStore.getState()
+    const designWorkspaceRoot = designState.workspaceRoot || workspaceRoot
+    if (!designWorkspaceRoot) {
+      setError(t('workspaceRequiredToCreateThread'))
+      return
+    }
+    void (async () => {
+      let designSystemRelativePath: string | undefined
+      let designSystemHash: string | undefined
+      if (designState.publishDesignSystem) {
+        try {
+          const path = '.kun-design/DESIGN_SYSTEM.md'
+          const content = formatDesignSystemMarkdown(designState.designContext)
+          const res = await window.kunGui.writeWorkspaceFile({
+            path,
+            workspaceRoot: designWorkspaceRoot,
+            content
+          })
+          if (res.ok) {
+            designSystemRelativePath = path
+            designSystemHash = hashDesignSystem(content)
+          }
+        } catch {
+          // non-fatal: implement without the published design-system file
+        }
+      }
+      const prompt = buildImplementDesignPrompt({
+        artifactTitle: artifact.title,
+        artifactRelativePath: artifact.relativePath,
+        designSystemRelativePath,
+        stackHint: designState.implementStackHint || undefined,
+        referenceDesignSystem: designState.injectIntoCode,
+        workspaceRoot: designWorkspaceRoot,
+        designContext: designState.designContext
+      })
+      await createThread({ workspaceRoot: designWorkspaceRoot })
+      setRoute('chat')
+      const ok = await sendMessage(prompt, 'agent', {
+        displayText: t('designImplementDisplay', { title: artifact.title })
+      })
+      if (ok) {
+        designState.markImplemented(artifact.id, useChatStore.getState().activeThreadId ?? '', designSystemHash)
+      }
+    })()
+  }
+
+  // Code → design: reverse-design an existing UI file into an iterable mockup.
+  const sendDesignFromCode = (sourceRelativePath: string, sourceWorkspaceRoot?: string): void => {
+    const source = sourceRelativePath.trim()
+    if (!source) return
+    const designState = useDesignWorkspaceStore.getState()
+    const designWorkspaceRoot = sourceWorkspaceRoot?.trim() || designState.workspaceRoot || workspaceRoot
+    if (!designWorkspaceRoot) {
+      setError(t('workspaceRequiredToCreateThread'))
+      return
+    }
+    const fileName = source.replaceAll('\\', '/').split('/').pop() || source
+    void (async () => {
+      const threadId = await ensureDesignThreadForWorkspace(designWorkspaceRoot)
+      if (!threadId) return
+      const artifactId = createDesignArtifactId()
+      const createdAt = new Date().toISOString()
+      const relativePath = `.kun-design/${artifactId}/v1.html`
+      const title = t('designFromCodeTitle', { file: fileName })
+      const store = useDesignWorkspaceStore.getState()
+      store.setWorkspaceRoot(designWorkspaceRoot)
+      store.upsertArtifact({
+        id: artifactId,
+        kind: 'html',
+        title,
+        relativePath,
+        createdAt,
+        updatedAt: createdAt,
+        versions: [{ id: `${artifactId}-v1`, relativePath, createdAt, summary: title }]
+      })
+      const prompt = buildDesignFromCodePrompt({
+        sourceRelativePath: source,
+        artifactRelativePath: relativePath,
+        workspaceRoot: designWorkspaceRoot,
+        designContext: store.designContext
+      })
+      const model = store.assistantModel.trim()
+      const providerId =
+        store.assistantProviderId.trim() || providerIdForComposerModel(composerModelGroups, model)
+      void sendMessage(prompt, 'agent', {
+        displayText: t('designFromCodeDisplay', { file: fileName }),
+        ...(model ? { model } : {}),
+        ...(providerId ? { providerId } : {})
+      })
+    })()
+  }
+
+  // Requirement → design: seed the design composer from the active SDD requirement.
+  const exploreSddRequirementInDesign = (): void => {
+    const requirement = sddDraftContent.trim()
+    dismissActiveSddDraft({ closeAssistant: true })
+    setInput(requirement)
+    openDesign()
+  }
+
   const openPluginsView = (): void => {
     setConnectPhoneSidebarOpen(false)
     openPlugins(sidebarView === 'claw' ? 'claw' : 'chat')
@@ -2356,6 +2583,7 @@ export function Workbench(): ReactElement {
                 onSelectTarget={openWorkspaceFilePreviewTarget}
                 onCloseTarget={closeWorkspaceFilePreviewTarget}
                 onClose={closeRightPanel}
+                onRedesign={sendDesignFromCode}
               />
             )}
           </Suspense>
@@ -2428,12 +2656,21 @@ export function Workbench(): ReactElement {
       {!leftSidebarCollapsed ? (
         <>
           <div className="min-h-0 shrink-0" style={{ width: leftSidebarWidth }}>
-            {route === 'write' ? (
+            {route === 'design' ? (
+              <DesignSidebar
+                onCodeOpen={openCodeMode}
+                onWriteOpen={openWriteMode}
+                onDesignOpen={openDesignMode}
+                onImplement={implementDesignInCode}
+                onNewGraph={createDesignGraph}
+              />
+            ) : route === 'write' ? (
               <WriteSidebar
                 activeView="write"
                 connectPhoneSidebarOpen={connectPhoneSidebarOpen}
                 onCodeOpen={openCodeMode}
                 onWriteOpen={openWriteMode}
+                onDesignOpen={openDesignMode}
                 onOpenSettings={(section) => openSettings(section)}
                 onToggleConnectPhone={toggleConnectPhone}
               />
@@ -2464,6 +2701,7 @@ export function Workbench(): ReactElement {
               onToggleConnectPhone={toggleConnectPhone}
               onCodeOpen={openCodeMode}
               onWriteOpen={openWriteMode}
+              onDesignOpen={openDesignMode}
               onScheduleOpen={openScheduleView}
               onWorkflowOpen={openWorkflowView}
             />
@@ -2512,6 +2750,15 @@ export function Workbench(): ReactElement {
               onOpenThread={openThread}
             />
           </Suspense>
+        ) : route === 'design' ? (
+          <DesignWorkspaceView
+            leftSidebarCollapsed={leftSidebarCollapsed}
+            onToggleLeftSidebar={toggleLeftSidebar}
+            input={input}
+            setInput={setInput}
+            onSubmitPrompt={sendDesignTurn}
+            onOpenAgentSettings={() => openSettings('design')}
+          />
         ) : route === 'write' ? (
           <>
             {writeRuntimeBannerMessage ? renderRuntimeBanner(writeRuntimeBannerMessage, visibleRuntimeErrorDetail) : null}
@@ -2543,6 +2790,7 @@ export function Workbench(): ReactElement {
               onToggleAssistant={() => void toggleSddAssistantPanel()}
               onAssistantQuote={quoteToSddAssistant}
               onPrototypeTurn={sendSddPrototypeTurn}
+              onExploreInDesign={exploreSddRequirementInDesign}
               onNext={() => void handleSddNextStep()}
               onClose={() => dismissActiveSddDraft({ closeAssistant: true })}
               nextDisabled={busy || runtimeConnection !== 'ready' || sddDraftOperationStatus === 'upgrading'}

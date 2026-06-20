@@ -6,6 +6,7 @@ import {
 } from './managed-runtime-idle'
 import {
   defaultClawSettings,
+  defaultDesignSettings,
   defaultKeyboardShortcuts,
   defaultKunRuntimeSettings,
   defaultModelProviderSettings,
@@ -31,6 +32,7 @@ const settings: AppSettingsV1 = {
   claw: defaultClawSettings(),
   schedule: defaultScheduleSettings(),
   workflow: defaultWorkflowSettings(),
+  design: defaultDesignSettings(),
   guiUpdate: { channel: 'stable' },
   codePromptPrefix: '',
   disabledSkillIds: []

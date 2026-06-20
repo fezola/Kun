@@ -25,6 +25,7 @@ import {
   mergeWorkflowSettings,
   mergeAppBehaviorSettings,
   mergeModelProviderSettings,
+  mergeDesignSettings,
   mergeScheduleSettings,
   mergeWriteSettings,
   normalizeAppSettings,
@@ -1489,6 +1490,7 @@ app.whenReady().then(async () => {
       claw: mergeClawSettings(prev.claw, partial.claw),
       schedule: mergeScheduleSettings(prev.schedule, partial.schedule),
       workflow: mergeWorkflowSettings(prev.workflow, partial.workflow),
+      design: mergeDesignSettings(prev.design, partial.design),
       guiUpdate: { ...prev.guiUpdate, ...(partial.guiUpdate ?? {}) }
     })
     if (prev.log.enabled !== next.log.enabled || prev.log.retentionDays !== next.log.retentionDays) {

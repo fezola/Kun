@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   defaultClawSettings,
+  defaultDesignSettings,
   defaultKeyboardShortcuts,
   defaultKunRuntimeSettings,
   defaultModelProviderSettings,
@@ -138,6 +139,7 @@ function settings(): AppSettingsV1 {
       tasks: [scheduledTask('~/schedule/task-1')]
     },
     workflow: defaultWorkflowSettings(),
+    design: defaultDesignSettings(),
     guiUpdate: { channel: 'stable' },
     codePromptPrefix: '',
     disabledSkillIds: []
