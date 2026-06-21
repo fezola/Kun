@@ -10,10 +10,14 @@ import { createEllipseTool } from '../../../design/canvas/tools/ellipse-tool'
 import { createTextTool } from '../../../design/canvas/tools/text-tool'
 import { createFrameTool } from '../../../design/canvas/tools/frame-tool'
 import { createHandTool } from '../../../design/canvas/tools/hand-tool'
+import { createScreenTool } from '../../../design/canvas/tools/screen-tool'
+import { createArrowTool, createLineTool } from '../../../design/canvas/tools/linear-tool'
+import { createDrawTool } from '../../../design/canvas/tools/draw-tool'
 import type { CanvasToolHandler } from '../../../design/canvas/tools/tool-types'
 import type { CanvasTool } from '../../../design/canvas/canvas-types'
 import { createEmptyDocument } from '../../../design/canvas/canvas-types'
 import { loadCanvasDocument, persistCanvasDocument } from '../../../design/canvas/canvas-persistence'
+import { CanvasWorkspaceContext } from '../../../design/canvas/canvas-workspace-context'
 import { handleCanvasKeyDown, handleCanvasKeyUp } from '../../../design/canvas/canvas-shortcuts'
 import { hitTest } from '../../../design/canvas/canvas-hit-test'
 import { ShapeDispatcher } from './shapes/ShapeDispatcher'
@@ -21,6 +25,7 @@ import { CanvasGrid } from './CanvasGrid'
 import { CanvasToolbar } from './CanvasToolbar'
 import { SelectionOverlay } from './SelectionOverlay'
 import { AlignmentToolbar } from './AlignmentToolbar'
+import { HtmlFrameOverlay } from './HtmlFrameOverlay'
 import { SidebarTitlebarToggleButton } from '../../sidebar/SidebarPrimitives'
 
 const toolFactories: Record<CanvasTool, () => CanvasToolHandler> = {
@@ -29,13 +34,19 @@ const toolFactories: Record<CanvasTool, () => CanvasToolHandler> = {
   ellipse: createEllipseTool,
   text: createTextTool,
   frame: createFrameTool,
+  screen: createScreenTool,
   image: createSelectTool,
+  arrow: createArrowTool,
+  line: createLineTool,
+  draw: createDrawTool,
   hand: createHandTool
 }
 
 type Props = {
   workspaceRoot: string
   artifactId: string
+  /** Workspace subdirectory the canvas doc persists under. Defaults to `.kun-design`. */
+  baseDir?: string
   leftSidebarCollapsed?: boolean
   onToggleLeftSidebar?: () => void
 }
@@ -43,6 +54,7 @@ type Props = {
 export function CanvasViewport({
   workspaceRoot,
   artifactId,
+  baseDir,
   leftSidebarCollapsed,
   onToggleLeftSidebar
 }: Props) {
@@ -66,6 +78,7 @@ export function CanvasViewport({
 
   const zoom = containerWidth / vbox.width
   const tool = useMemo(() => toolFactories[activeTool](), [activeTool])
+  const workspaceValue = useMemo(() => ({ workspaceRoot }), [workspaceRoot])
 
   // Container resize observer
   useEffect(() => {
@@ -99,7 +112,7 @@ export function CanvasViewport({
     useCanvasUndoStore.getState().clear()
 
     // 2) Load from disk, fall back to empty document
-    void loadCanvasDocument(workspaceRoot, artifactId).then((loaded) => {
+    void loadCanvasDocument(workspaceRoot, artifactId, baseDir).then((loaded) => {
       if (cancelled) return
       const doc = loaded ?? createEmptyDocument()
       useCanvasShapeStore.getState().loadDocument(doc)
@@ -110,14 +123,14 @@ export function CanvasViewport({
     const unsubscribe = useCanvasShapeStore.subscribe((state, prev) => {
       if (cancelled) return
       if (state.document === prev.document) return
-      persistCanvasDocument(workspaceRoot, artifactId, state.document)
+      persistCanvasDocument(workspaceRoot, artifactId, state.document, baseDir)
     })
 
     return () => {
       cancelled = true
       unsubscribe()
     }
-  }, [workspaceRoot, artifactId])
+  }, [workspaceRoot, artifactId, baseDir])
 
   const screenToCanvas = useCallback(
     (clientX: number, clientY: number) => {
@@ -145,7 +158,8 @@ export function CanvasViewport({
         shiftKey: e.shiftKey,
         altKey: e.altKey,
         metaKey: e.metaKey,
-        ctrlKey: e.ctrlKey
+        ctrlKey: e.ctrlKey,
+        timeStamp: e.timeStamp
       }
     },
     [screenToCanvas]
@@ -236,78 +250,78 @@ export function CanvasViewport({
   const root = document?.objects?.[document?.rootId]
 
   return (
-    <div className="ds-no-drag flex flex-col h-full w-full">
-      <div
-        className={`flex shrink-0 items-center ${
-          leftSidebarCollapsed ? 'ds-window-controls-safe-inset' : ''
-        }`}
-      >
-        {onToggleLeftSidebar ? (
-          <div className="pl-2">
-            <SidebarTitlebarToggleButton
-              onClick={onToggleLeftSidebar}
-              title={leftSidebarCollapsed ? t('sidebarExpand') : t('sidebarCollapse')}
-              ariaLabel={leftSidebarCollapsed ? t('sidebarExpand') : t('sidebarCollapse')}
-            />
+    <CanvasWorkspaceContext.Provider value={workspaceValue}>
+      <div className="ds-no-drag relative h-full w-full overflow-hidden bg-ds-main">
+        <div className="pointer-events-none absolute left-3 right-3 top-3 z-40 flex min-w-0 items-start">
+          <div
+            className={`pointer-events-auto flex min-w-0 items-center gap-2 ${
+              leftSidebarCollapsed ? 'ds-window-controls-safe-inset' : ''
+            }`}
+          >
+            {onToggleLeftSidebar ? (
+              <SidebarTitlebarToggleButton
+                onClick={onToggleLeftSidebar}
+                title={leftSidebarCollapsed ? t('sidebarExpand') : t('sidebarCollapse')}
+                ariaLabel={leftSidebarCollapsed ? t('sidebarExpand') : t('sidebarCollapse')}
+              />
+            ) : null}
+            <CanvasToolbar />
           </div>
-        ) : null}
-        <div className="min-w-0 flex-1">
-          <CanvasToolbar />
+        </div>
+        <div
+          ref={containerRef}
+          className="absolute inset-0 overflow-hidden bg-[color-mix(in_srgb,var(--ds-bg-main)_90%,white)] dark:bg-[color-mix(in_srgb,var(--ds-bg-main)_88%,black)]"
+        >
+          <AlignmentToolbar />
+          {!docLoaded || !root ? (
+            <div className="absolute inset-0 flex items-center justify-center text-sm text-ds-faint">
+              {t('designCanvasLoading')}
+            </div>
+          ) : (
+            <svg
+              ref={svgRef}
+              className="absolute inset-0 h-full w-full"
+              viewBox={viewBoxStr}
+              xmlns="http://www.w3.org/2000/svg"
+              style={{ cursor }}
+              onPointerDown={onPointerDown}
+              onPointerMove={onPointerMove}
+              onPointerUp={onPointerUp}
+              onDoubleClick={onDoubleClick}
+              onWheel={onWheel}
+            >
+              {gridVisible && <CanvasGrid zoom={zoom} />}
+
+              <g id="shape-layer">
+                {root.children.map((childId) => {
+                  const child = document.objects[childId]
+                  if (!child || !child.visible) return null
+                  return (
+                    <ShapeDispatcher
+                      key={childId}
+                      shapeId={childId}
+                      objects={document.objects}
+                    />
+                  )
+                })}
+              </g>
+
+              <g id="overlay-layer">
+                <SelectionOverlay
+                  selectedIds={selectedIds}
+                  hoverTargetId={hoverTargetId}
+                  marqueeRect={marqueeRect}
+                  snapGuides={snapGuides}
+                  objects={document.objects}
+                  zoom={zoom}
+                  viewBox={vbox}
+                />
+              </g>
+            </svg>
+          )}
+          <HtmlFrameOverlay workspaceRoot={workspaceRoot} />
         </div>
       </div>
-      <div
-        ref={containerRef}
-        className="flex-1 overflow-hidden relative"
-        style={{ background: '#f8f8f8' }}
-      >
-        <AlignmentToolbar />
-        {!docLoaded || !root ? (
-          <div className="absolute inset-0 flex items-center justify-center text-sm text-gray-400">
-            {t('designCanvasLoading')}
-          </div>
-        ) : (
-          <svg
-            ref={svgRef}
-            className="absolute inset-0 w-full h-full"
-            viewBox={viewBoxStr}
-            xmlns="http://www.w3.org/2000/svg"
-            style={{ cursor }}
-            onPointerDown={onPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={onPointerUp}
-            onDoubleClick={onDoubleClick}
-            onWheel={onWheel}
-          >
-            {gridVisible && <CanvasGrid zoom={zoom} />}
-
-            <g id="shape-layer">
-              {root.children.map((childId) => {
-                const child = document.objects[childId]
-                if (!child || !child.visible) return null
-                return (
-                  <ShapeDispatcher
-                    key={childId}
-                    shapeId={childId}
-                    objects={document.objects}
-                  />
-                )
-              })}
-            </g>
-
-            <g id="overlay-layer">
-              <SelectionOverlay
-                selectedIds={selectedIds}
-                hoverTargetId={hoverTargetId}
-                marqueeRect={marqueeRect}
-                snapGuides={snapGuides}
-                objects={document.objects}
-                zoom={zoom}
-                viewBox={vbox}
-              />
-            </g>
-          </svg>
-        )}
-      </div>
-    </div>
+    </CanvasWorkspaceContext.Provider>
   )
 }

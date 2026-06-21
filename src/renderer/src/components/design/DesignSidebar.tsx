@@ -1,10 +1,12 @@
-import { useRef, useState, type ReactElement } from 'react'
+import { useMemo, useRef, useState, type ReactElement } from 'react'
 import { Check, Code2, FileCode2, FilePlus2, Layers, RotateCcw, Trash2, TriangleAlert } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { WorkspaceModeTabs } from '../chat/WorkspaceModeTabs'
 import { useDesignWorkspaceStore } from '../../design/design-workspace-store'
 import type { DesignArtifact } from '../../design/design-types'
 import { canImplementDesignArtifact, groupDesignArtifacts } from '../../design/design-artifact-actions'
+import { useCanvasShapeStore } from '../../design/canvas/canvas-shape-store'
+import { isHtmlFrame } from '../../design/canvas/canvas-types'
 import {
   SidebarCommandRow,
   SidebarFrame,
@@ -22,8 +24,6 @@ type Props = {
   onImplement: (artifact: DesignArtifact) => void
   /** Create a new SVG design canvas artifact. */
   onNewCanvas: () => void
-  /** Collapse the left sidebar (rendered as the titlebar toggle inside SidebarFrame). */
-  onToggleLeftSidebar?: () => void
 }
 
 /** Design-mode left sidebar: mode tabs + artifact list with implement/provenance. */
@@ -32,8 +32,7 @@ export function DesignSidebar({
   onWriteOpen,
   onDesignOpen,
   onImplement,
-  onNewCanvas,
-  onToggleLeftSidebar
+  onNewCanvas
 }: Props): ReactElement {
   const { t } = useTranslation('common')
   const artifacts = useDesignWorkspaceStore((s) => s.artifacts)
@@ -43,11 +42,21 @@ export function DesignSidebar({
   const renameArtifact = useDesignWorkspaceStore((s) => s.renameArtifact)
   const designSystemHash = useDesignWorkspaceStore((s) => s.designSystemHash)
   const closeImplementPanel = useDesignWorkspaceStore((s) => s.closeImplementPanel)
+  const setDesignIntentMode = useDesignWorkspaceStore((s) => s.setDesignIntentMode)
   const activeArtifact = artifacts.find((a) => a.id === activeArtifactId) ?? null
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   const committingRef = useRef(false)
-  const grouped = groupDesignArtifacts(artifacts)
+  const canvasObjects = useCanvasShapeStore((s) => s.document.objects)
+  const screenLinkedIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const id of Object.keys(canvasObjects)) {
+      const shape = canvasObjects[id]
+      if (shape && isHtmlFrame(shape) && shape.htmlArtifactId) ids.add(shape.htmlArtifactId)
+    }
+    return ids
+  }, [canvasObjects])
+  const grouped = groupDesignArtifacts(artifacts, screenLinkedIds)
 
   const beginRename = (artifactId: string, title: string): void => {
     committingRef.current = false
@@ -62,10 +71,11 @@ export function DesignSidebar({
   }
   const startNewDesign = (): void => {
     closeImplementPanel()
+    setDesignIntentMode('generate')
     setActiveArtifact(null)
     requestAnimationFrame(() => {
       document
-        .querySelector<HTMLTextAreaElement>('[data-design-composer-textarea]')
+        .querySelector<HTMLTextAreaElement>('[data-design-rail-composer] textarea')
         ?.focus()
     })
   }
@@ -184,7 +194,7 @@ export function DesignSidebar({
   )
 
   return (
-    <SidebarFrame title={t('appName')} onCollapse={onToggleLeftSidebar}>
+    <SidebarFrame title={t('appName')}>
       <div className="ds-no-drag flex flex-col px-1">
         <WorkspaceModeTabs
           activeView="design"

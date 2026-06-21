@@ -1,249 +1,372 @@
-import { memo, useCallback, useEffect, useRef } from 'react'
-import { Send, Loader2, MessageSquare, Trash2, PanelRightOpen, PanelRightClose } from 'lucide-react'
+import { memo, useEffect, useRef, useState, type ReactElement } from 'react'
+import { ChevronDown, MessageSquare, PanelLeftClose, PanelLeftOpen, Plus, Sparkles, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import {
-  useDesignAssistantStore,
-  type DesignMessageBlock
-} from '../../design/design-assistant-store'
+import { formatRelativeTime } from '../../lib/format-relative-time'
+import type { AttachmentReference, NormalizedThread, RuntimeConnectionStatus, ChatBlock } from '../../agent/types'
+import type { QueuedUserMessage } from '../../store/chat-store-types'
+import type { ModelProviderModelGroup } from '@shared/kun-gui-api'
 import { useDesignWorkspaceStore } from '../../design/design-workspace-store'
-import { buildDesignTurnPrompt } from '../../design/design-turn-prompt'
-import { useCanvasShapeStore } from '../../design/canvas/canvas-shape-store'
-import { snapshotCanvas } from '../../design/canvas/canvas-snapshot'
-import { useChatStore } from '../../store/chat-store'
-import { FloatingComposerModelPicker } from '../chat/FloatingComposerModelPicker'
+import { MessageTimeline } from '../chat/MessageTimeline'
+import { FloatingComposer } from '../chat/FloatingComposer'
+import type { DesignComposerContext } from '../chat/FloatingComposer'
+import type { ComposerReasoningEffort } from '../chat/FloatingComposerModelPicker'
 
 type Props = {
-  onOpenSettings?: (section?: string) => void
+  input: string
+  setInput: (value: string) => void
+  mode: 'plan' | 'agent'
+  setMode: (value: 'plan' | 'agent') => void
+  busy: boolean
+  runtimeConnection: RuntimeConnectionStatus
+  activeThreadId: string | null
+  blocks: ChatBlock[]
+  liveReasoning: string
+  liveAssistant: string
+  composerModel: string
+  composerProviderId?: string
+  composerPickList: string[]
+  composerModelGroups?: ModelProviderModelGroup[]
+  composerReasoningEffort: ComposerReasoningEffort
+  setComposerModel: (modelId: string, providerId?: string) => void
+  setComposerReasoningEffort: (effort: ComposerReasoningEffort) => void
+  queuedMessages: QueuedUserMessage[]
+  removeQueuedMessage: (id: string) => void
+  attachments?: AttachmentReference[]
+  attachmentUploadEnabled?: boolean
+  attachmentUploadBusy?: boolean
+  attachmentUploadError?: string | null
+  contextChips?: DesignComposerContext[]
+  onPickAttachments?: (files: File[]) => void
+  onPasteClipboardImage?: (options?: { silentNoImage?: boolean }) => void | Promise<void>
+  onRemoveAttachment?: (id: string) => void
+  onRemoveContextChip?: (id: string) => void
+  onSend: () => void
+  onInterrupt: (options?: { discard?: boolean }) => void
+  onRetryConnection: () => void
+  onOpenSettings: (section?: string) => void
+  onConfigureProviders?: () => void
+  onNewConversation: () => void
+  designThreads: NormalizedThread[]
+  onSwitchThread: (threadId: string) => void
 }
 
-function DesignAIRailInner({ onOpenSettings }: Props) {
-  const { t } = useTranslation('common')
-  const blocks = useDesignAssistantStore((s) => s.designBlocks)
-  const input = useDesignAssistantStore((s) => s.designInput)
-  const busy = useDesignAssistantStore((s) => s.designBusy)
-  const target = useDesignAssistantStore((s) => s.designTarget)
-  const setInput = useDesignAssistantStore((s) => s.setDesignInput)
-  const sendMessage = useDesignAssistantStore((s) => s.sendDesignMessage)
-  const clearConversation = useDesignAssistantStore((s) => s.clearDesignConversation)
+function isNarrowViewport(): boolean {
+  return typeof window !== 'undefined' && window.matchMedia('(max-width: 1023px)').matches
+}
 
-  const workspaceRoot = useDesignWorkspaceStore((s) => s.workspaceRoot)
-  const assistantModel = useDesignWorkspaceStore((s) => s.assistantModel)
-  const assistantProviderId = useDesignWorkspaceStore((s) => s.assistantProviderId)
-  const setAssistantModel = useDesignWorkspaceStore((s) => s.setAssistantModel)
-  const collapsed = useDesignWorkspaceStore((s) => s.aiRailCollapsed)
-  const setCollapsed = useDesignWorkspaceStore((s) => s.setAiRailCollapsed)
-
-  const composerPickList = useChatStore((s) => s.composerPickList)
-  const composerModelGroups = useChatStore((s) => s.composerModelGroups)
-  const runtimeReady = useChatStore((s) => s.runtimeConnection === 'ready')
-
-  const timelineRef = useRef<HTMLDivElement>(null)
+function DesignAIRailInner({
+  input,
+  setInput,
+  mode,
+  setMode,
+  busy,
+  runtimeConnection,
+  activeThreadId,
+  blocks,
+  liveReasoning,
+  liveAssistant,
+  composerModel,
+  composerProviderId,
+  composerPickList,
+  composerModelGroups = [],
+  composerReasoningEffort,
+  setComposerModel,
+  setComposerReasoningEffort,
+  queuedMessages,
+  removeQueuedMessage,
+  attachments = [],
+  attachmentUploadEnabled = false,
+  attachmentUploadBusy = false,
+  attachmentUploadError = null,
+  contextChips = [],
+  onPickAttachments,
+  onPasteClipboardImage,
+  onRemoveAttachment,
+  onRemoveContextChip,
+  onSend,
+  onInterrupt,
+  onRetryConnection,
+  onOpenSettings,
+  onConfigureProviders,
+  onNewConversation,
+  designThreads,
+  onSwitchThread
+}: Props): ReactElement {
+  const { t, i18n } = useTranslation('common')
+  const assistantOpen = useDesignWorkspaceStore((s) => s.canvasAssistantOpen)
+  const setAssistantOpen = useDesignWorkspaceStore((s) => s.setCanvasAssistantOpen)
+  const artifacts = useDesignWorkspaceStore((s) => s.artifacts)
+  const activeArtifactId = useDesignWorkspaceStore((s) => s.activeArtifactId)
+  const designIntentMode = useDesignWorkspaceStore((s) => s.designIntentMode)
+  const setActiveArtifact = useDesignWorkspaceStore((s) => s.setActiveArtifact)
+  const setDesignIntentMode = useDesignWorkspaceStore((s) => s.setDesignIntentMode)
+  const [narrowPanelOpen, setNarrowPanelOpen] = useState(false)
+  const [threadListOpen, setThreadListOpen] = useState(false)
+  const threadListRef = useRef<HTMLDivElement | null>(null)
+  const threadPillRef = useRef<HTMLButtonElement | null>(null)
 
   useEffect(() => {
-    const el = timelineRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [blocks.length])
-
-  const handleSend = useCallback(() => {
-    const text = input.trim()
-    if (!text || busy || !workspaceRoot) return
-
-    const store = useDesignWorkspaceStore.getState()
-    const active = store.artifacts.find((a) => a.id === store.activeArtifactId) ?? null
-    const isCanvas = active?.kind === 'canvas'
-
-    // Single entry point for all design work:
-    // - canvas artifact → send the shape snapshot, AI replies with ShapeOps
-    // - anything else   → ensure/iterate an HTML artifact, AI writes the file
-    let artifactRelativePath = active?.relativePath ?? ''
-    let basePath: string | undefined
-    let canvasSnapshot
-    if (isCanvas) {
-      canvasSnapshot = snapshotCanvas(useCanvasShapeStore.getState().document)
-    } else {
-      const prep = store.prepareHtmlTurn(text)
-      artifactRelativePath = prep.relativePath
-      basePath = prep.basePath
+    if (!threadListOpen) return
+    const onPointerDown = (e: PointerEvent): void => {
+      const target = e.target
+      if (!(target instanceof Node)) return
+      if (threadListRef.current?.contains(target)) return
+      if (threadPillRef.current?.contains(target)) return
+      setThreadListOpen(false)
     }
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setThreadListOpen(false)
+    }
+    window.addEventListener('pointerdown', onPointerDown)
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown)
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [threadListOpen])
 
-    const prompt = buildDesignTurnPrompt({
-      target: isCanvas ? 'canvas' : 'html',
-      mode: 'text',
-      text,
-      artifactRelativePath,
-      basePath,
-      workspaceRoot,
-      customPrompt: store.generationPrompt || undefined,
-      designContext: store.designContext,
-      ...(canvasSnapshot ? { canvasSnapshot } : {})
-    })
+  useEffect(() => {
+    if (!input.trim()) return
+    if (isNarrowViewport()) {
+      setNarrowPanelOpen(true)
+    } else {
+      setAssistantOpen(true)
+    }
+  }, [input, setAssistantOpen])
 
-    void sendMessage(text, prompt, workspaceRoot, {
-      model: store.assistantModel.trim() || undefined,
-      reasoningEffort: store.reasoningEffort.trim() || undefined
-    })
-  }, [input, busy, workspaceRoot, sendMessage])
+  const activeThread = designThreads.find((th) => th.id === activeThreadId) ?? null
+  const headerTitle = activeThread?.title || t('designRailTitle')
 
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault()
-        handleSend()
-      }
-    },
-    [handleSend]
-  )
+  const hasTimeline =
+    blocks.length > 0 || liveReasoning.trim().length > 0 || liveAssistant.trim().length > 0
+  const canCreateConversation = runtimeConnection === 'ready' && !busy
+  const activeArtifact = artifacts.find((artifact) => artifact.id === activeArtifactId) ?? null
+  const contextLabel = activeArtifact
+    ? `${designIntentMode === 'preview' ? t('designProjectPreview') : t('designProjectModify')} · ${activeArtifact.title}`
+    : t('designProjectGenerateContext')
 
-  const targetLabel =
-    target.type === 'new'
-      ? t('designRailTargetNew')
-      : target.type === 'html'
-        ? `${t('designRailTargetIterate')}${target.title}`
-        : t('designRailTargetCanvas')
+  const openAssistant = (): void => {
+    if (isNarrowViewport()) {
+      setNarrowPanelOpen(true)
+      return
+    }
+    setAssistantOpen(true)
+  }
 
-  const canSend = input.trim().length > 0 && !busy && runtimeReady && Boolean(workspaceRoot)
+  const closeAssistant = (): void => {
+    if (isNarrowViewport()) {
+      setNarrowPanelOpen(false)
+      return
+    }
+    setAssistantOpen(false)
+  }
 
-  // Collapsed: render only a thin strip with an expand button + the chat icon.
-  if (collapsed) {
-    return (
-      <div className="ds-no-drag flex h-full w-9 shrink-0 flex-col items-center gap-2 border-l border-[var(--ds-sidebar-row-ring)] bg-white py-2 dark:bg-[#1f242c]">
+  const panelVisibility = `${narrowPanelOpen ? 'flex' : 'hidden'} ${
+    assistantOpen ? 'lg:flex' : 'lg:hidden'
+  }`
+  const launcherVisibility = `${narrowPanelOpen ? 'hidden' : 'flex'} ${
+    assistantOpen ? 'lg:hidden' : 'lg:flex'
+  }`
+
+  return (
+    <div className="ds-no-drag pointer-events-none absolute inset-0 z-50 overflow-hidden">
+      <div
+        className={`${launcherVisibility} pointer-events-auto absolute left-3 top-[72px] z-50 items-center gap-2 rounded-full border border-ds-border-muted bg-white/82 px-2.5 py-2 text-ds-muted shadow-[0_14px_42px_rgba(20,47,95,0.12)] backdrop-blur-xl transition hover:bg-white hover:text-ds-ink dark:bg-ds-card/86`}
+      >
         <button
           type="button"
-          onClick={() => setCollapsed(false)}
-          className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[#8b95a3] transition-colors hover:bg-black/[0.04] hover:text-[#1f2733] dark:text-white/45 dark:hover:bg-white/10 dark:hover:text-white/85"
+          onClick={openAssistant}
+          className="flex h-9 w-9 items-center justify-center rounded-full bg-ds-card text-accent shadow-sm transition hover:bg-accent-soft"
           title={t('designRailExpand')}
           aria-label={t('designRailExpand')}
         >
-          <PanelRightOpen className="h-4 w-4" strokeWidth={1.9} />
+          <PanelLeftOpen className="h-4 w-4" strokeWidth={1.9} />
         </button>
-        <MessageSquare className="h-4 w-4 text-[#3b82d8]" strokeWidth={1.9} aria-hidden="true" />
-        {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin text-[#8b95a3]" /> : null}
-      </div>
-    )
-  }
-
-  return (
-    <div className="ds-no-drag flex h-full w-[380px] shrink-0 flex-col border-l border-[var(--ds-sidebar-row-ring)] bg-white dark:bg-[#1f242c]">
-      {/* Header */}
-      <div className="flex shrink-0 items-center justify-between gap-2 px-3 py-2 shadow-[inset_0_-1px_0_var(--ds-sidebar-row-ring)]">
-        <div className="flex min-w-0 items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setCollapsed(true)}
-            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#8b95a3] transition-colors hover:bg-black/[0.04] hover:text-[#1f2733] dark:text-white/45 dark:hover:bg-white/10 dark:hover:text-white/85"
-            title={t('designRailCollapse')}
-            aria-label={t('designRailCollapse')}
-          >
-            <PanelRightClose className="h-4 w-4" strokeWidth={1.9} />
-          </button>
-          <MessageSquare className="h-4 w-4 shrink-0 text-[#3b82d8]" strokeWidth={1.9} />
-          <div className="min-w-0">
-            <div className="text-[13px] font-medium text-[#1f2733] dark:text-white/90">
-              {t('designRailTitle')}
-            </div>
-            <div className="truncate text-[11px] text-[#8b95a3] dark:text-white/45">
-              {targetLabel}
-            </div>
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={clearConversation}
-          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[#8b95a3] transition-colors hover:bg-black/[0.04] hover:text-[#1f2733] dark:text-white/45 dark:hover:bg-white/10 dark:hover:text-white/85"
-          title={t('designRailClear')}
-          aria-label={t('designRailClear')}
-        >
-          <Trash2 className="h-3.5 w-3.5" strokeWidth={1.9} />
-        </button>
+        <span className="hidden pr-1 text-[12.5px] font-semibold text-ds-muted sm:block">
+          {t('designRailTitle')}
+        </span>
       </div>
 
-      {/* Timeline */}
-      <div ref={timelineRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3">
-        {blocks.length === 0 ? (
-          <div className="flex h-full items-center justify-center text-center">
-            <div className="max-w-[240px]">
-              <MessageSquare
-                className="mx-auto h-8 w-8 text-[#c8d0d8] dark:text-white/20"
-                strokeWidth={1.2}
-              />
-              <p className="mt-2 text-[13px] leading-5 text-[#8b95a3] dark:text-white/40">
-                {t('designRailEmpty')}
-              </p>
-            </div>
-          </div>
-        ) : (
-          blocks.map((block) => <MessageBubble key={block.id} block={block} />)
-        )}
-        {busy && (
-          <div className="flex items-center gap-2 text-[12px] text-[#8b95a3] dark:text-white/45">
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            {t('designRailThinking')}
-          </div>
-        )}
-      </div>
-
-      {/* Composer */}
-      <div className="shrink-0 px-3 pb-3 pt-2">
-        <div className="rounded-2xl border border-[var(--ds-sidebar-row-ring)] bg-white p-2 shadow-[0_4px_18px_rgba(20,47,95,0.08)] dark:bg-[#1f242c] dark:shadow-[0_4px_18px_rgba(0,0,0,0.3)]">
-          <textarea
-            data-design-rail-textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={t('designRailPlaceholder')}
-            rows={2}
-            disabled={busy}
-            className="min-h-[44px] w-full resize-none rounded-md bg-transparent px-1 py-1 text-[13.5px] leading-snug text-[#1f2733] outline-none placeholder:text-[#9aa4b2] disabled:opacity-60 dark:text-white/90 dark:placeholder:text-white/30"
-          />
-          <div className="mt-1 flex items-center justify-between gap-2">
-            <div className="min-w-0">
-              <FloatingComposerModelPicker
-                compact
-                mode="select"
-                composerModel={assistantModel}
-                composerProviderId={assistantProviderId}
-                composerPickList={composerPickList}
-                composerModelGroups={composerModelGroups}
-                canChangeModel={composerPickList.length > 0}
-                stretch={false}
-                onComposerModelChange={(modelId, providerId) =>
-                  setAssistantModel(modelId, providerId)
-                }
-                onConfigureProviders={() => onOpenSettings?.('providers')}
-              />
-            </div>
+      <aside
+        className={`${panelVisibility} pointer-events-auto absolute bottom-[128px] left-3 top-[72px] z-50 w-[min(390px,calc(100%-1.5rem))] flex-col overflow-hidden rounded-[28px] border border-ds-border bg-white/78 text-ds-ink shadow-[0_26px_72px_rgba(20,47,95,0.16)] backdrop-blur-2xl dark:bg-ds-canvas/90 max-lg:bottom-[116px] max-lg:max-h-[calc(100%-188px)] lg:w-[clamp(360px,24vw,400px)]`}
+      >
+        <div className="shrink-0 border-b border-ds-border-muted/80 bg-white/68 px-3 py-3 dark:bg-ds-card/72">
+          <div className="flex min-w-0 items-center gap-2">
             <button
               type="button"
-              onClick={handleSend}
-              disabled={!canSend}
-              aria-label={t('designRailSend') ?? 'Send'}
-              title={t('designRailSend') ?? 'Send'}
-              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#3b82d8] text-white transition-colors hover:bg-[#3577c4] disabled:cursor-not-allowed disabled:opacity-50"
+              onClick={closeAssistant}
+              className="ds-sidebar-toggle-button shrink-0"
+              title={t('designRailCollapse')}
+              aria-label={t('designRailCollapse')}
             >
-              <Send className="h-4 w-4" strokeWidth={1.9} />
+              <PanelLeftClose className="h-4 w-4" strokeWidth={1.85} />
+            </button>
+            <button
+              ref={threadPillRef}
+              type="button"
+              onClick={() => setThreadListOpen((v) => !v)}
+              className="flex min-w-0 flex-1 items-center gap-2 rounded-full bg-ds-subtle px-3 py-2 transition hover:bg-ds-hover dark:bg-white/[0.08] dark:hover:bg-white/[0.12]"
+              title={t('designRailSwitchThread')}
+              aria-label={t('designRailSwitchThread')}
+            >
+              <Sparkles className="h-4 w-4 shrink-0 text-accent" strokeWidth={1.8} />
+              <span className="min-w-0 truncate text-[13px] font-semibold text-ds-ink">
+                {headerTitle}
+              </span>
+              <ChevronDown
+                className="ml-auto h-3 w-3 shrink-0 text-ds-faint transition-transform"
+                style={threadListOpen ? { transform: 'rotate(180deg)' } : undefined}
+                strokeWidth={2}
+              />
+            </button>
+            <button
+              type="button"
+              onClick={onNewConversation}
+              disabled={!canCreateConversation}
+              className="ds-sidebar-toggle-button shrink-0 disabled:cursor-not-allowed disabled:opacity-45"
+              title={t('designRailNewConversation')}
+              aria-label={t('designRailNewConversation')}
+            >
+              <Plus className="h-4 w-4" strokeWidth={2.1} />
             </button>
           </div>
         </div>
+
+        {threadListOpen ? (
+          <div
+            ref={threadListRef}
+            className="absolute left-2 right-2 top-[58px] z-[60] max-h-[280px] overflow-y-auto rounded-2xl border border-ds-border bg-white p-1.5 shadow-[0_14px_34px_rgba(20,47,95,0.16)] dark:bg-ds-card"
+          >
+            {designThreads.length === 0 ? (
+              <p className="px-2.5 py-3 text-center text-[12.5px] text-ds-faint">
+                {t('designRailEmpty')}
+              </p>
+            ) : (
+              designThreads.map((thread) => (
+                <button
+                  key={thread.id}
+                  type="button"
+                  onClick={() => {
+                    onSwitchThread(thread.id)
+                    setThreadListOpen(false)
+                  }}
+                  className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition ${
+                    thread.id === activeThreadId
+                      ? 'bg-accent/10 text-accent'
+                      : 'text-ds-ink hover:bg-ds-hover'
+                  }`}
+                >
+                  <span className="min-w-0 flex-1 truncate text-[13px]">{thread.title}</span>
+                  <span className="shrink-0 text-[11px] text-ds-faint tabular-nums">
+                    {formatRelativeTime(thread.updatedAt, i18n.language)}
+                  </span>
+                </button>
+              ))
+            )}
+            <div className="mt-0.5 border-t border-ds-border-muted/60 pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  onNewConversation()
+                  setThreadListOpen(false)
+                }}
+                disabled={!canCreateConversation}
+                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] text-ds-muted transition hover:bg-ds-hover disabled:opacity-45"
+              >
+                <Plus className="h-3.5 w-3.5" strokeWidth={2} />
+                <span>{t('designRailNewConversation')}</span>
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-white/36 dark:bg-transparent">
+          {hasTimeline ? (
+            <MessageTimeline
+              blocks={blocks}
+              liveReasoning={liveReasoning}
+              live={liveAssistant}
+              activeThreadId={activeThreadId}
+              runtimeConnection={runtimeConnection}
+              onRetryConnection={onRetryConnection}
+              onOpenSettings={() => onOpenSettings('agents')}
+              onSelectSuggestion={(text) => setInput(text)}
+              compactCards
+            />
+          ) : (
+            <div className="flex h-full items-center justify-center px-7 text-center">
+              <div className="max-w-[260px]">
+                <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-[18px] border border-ds-border-muted bg-white/70 text-accent shadow-sm dark:bg-white/8">
+                  <MessageSquare className="h-5 w-5" strokeWidth={1.55} />
+                </div>
+                <p className="mt-3 text-[13px] leading-6 text-ds-muted">
+                  {t('designRailEmpty')}
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+      </aside>
+
+      <div
+        data-design-rail-composer
+        className="pointer-events-auto absolute bottom-4 left-1/2 z-[60] w-[min(760px,calc(100%-2rem))] -translate-x-1/2 max-sm:bottom-3 max-sm:w-[calc(100%-1rem)]"
+      >
+        <div className="mb-2 flex justify-center">
+          <div className="flex max-w-full items-center gap-2 rounded-full border border-ds-border bg-white/84 px-3 py-2 text-[12.5px] font-semibold text-ds-muted shadow-[0_12px_34px_rgba(20,47,95,0.10)] backdrop-blur-xl dark:bg-ds-card/88">
+            <Sparkles className="h-3.5 w-3.5 shrink-0 text-accent" strokeWidth={1.8} />
+            <span className="min-w-0 truncate">{contextLabel}</span>
+            {activeArtifact ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveArtifact(null)
+                  setDesignIntentMode('generate')
+                }}
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink"
+                title={t('designProjectClearContext')}
+                aria-label={t('designProjectClearContext')}
+              >
+                <X className="h-3.5 w-3.5" strokeWidth={1.9} />
+              </button>
+            ) : null}
+          </div>
+        </div>
+        <FloatingComposer
+          variant="compact"
+          input={input}
+          setInput={setInput}
+          mode={mode}
+          setMode={setMode}
+          busy={busy}
+          runtimeReady={runtimeConnection === 'ready'}
+          hasActiveThread={Boolean(activeThreadId)}
+          composerModel={composerModel}
+          composerProviderId={composerProviderId}
+          composerPickList={composerPickList}
+          composerModelGroups={composerModelGroups}
+          composerReasoningEffort={composerReasoningEffort}
+          onComposerModelChange={setComposerModel}
+          onComposerReasoningEffortChange={setComposerReasoningEffort}
+          modelPickerMode="combobox"
+          queuedMessages={queuedMessages}
+          onRemoveQueuedMessage={removeQueuedMessage}
+          attachments={attachments}
+          attachmentUploadEnabled={attachmentUploadEnabled}
+          attachmentUploadBusy={attachmentUploadBusy}
+          attachmentUploadError={attachmentUploadError}
+          contextChips={contextChips}
+          onPickAttachments={onPickAttachments}
+          onPasteClipboardImage={onPasteClipboardImage}
+          onRemoveAttachment={onRemoveAttachment}
+          onRemoveContextChip={onRemoveContextChip}
+          onSend={onSend}
+          onInterrupt={onInterrupt}
+          onConfigureProviders={onConfigureProviders}
+        />
       </div>
     </div>
   )
 }
-
-const MessageBubble = memo(function MessageBubble({ block }: { block: DesignMessageBlock }) {
-  const isUser = block.kind === 'user'
-  return (
-    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
-      <div
-        className={`max-w-[85%] rounded-2xl px-3 py-2 text-[13px] leading-relaxed shadow-sm ${
-          isUser
-            ? 'bg-[#3b82d8] text-white'
-            : 'bg-black/[0.04] text-[#1f2733] dark:bg-white/[0.06] dark:text-white/85'
-        }`}
-      >
-        <div className="whitespace-pre-wrap break-words">{block.text}</div>
-      </div>
-    </div>
-  )
-})
 
 export const DesignAIRail = memo(DesignAIRailInner)

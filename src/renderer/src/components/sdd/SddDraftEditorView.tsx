@@ -1062,14 +1062,10 @@ export function SddDraftEditorView({
 
   return (
     <section className="sdd-draft-shell ds-no-drag flex min-h-0 min-w-0 flex-1 flex-col px-3 sm:px-4 md:px-6 lg:px-8">
-      <div className="ds-stage-inset -mx-3 shrink-0 sm:-mx-4 md:-mx-6 lg:-mx-8">
+      <div className={`ds-stage-inset shrink-0 -mr-3 sm:-mr-4 md:-mr-6 lg:-mr-8 ${leftSidebarCollapsed ? 'ds-window-controls-safe-inset' : '-ml-3 sm:-ml-4 md:-ml-6 lg:-ml-8'}`}>
         <header className="sdd-draft-topbar ds-topbar-surface relative z-10 mt-3 flex min-h-[56px] w-full items-stretch overflow-visible rounded-[18px]">
           <div className="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-3 py-2 sm:px-4 md:pl-5 md:pr-2">
-            <div
-              className={`flex min-w-0 items-center gap-2.5 ${
-                leftSidebarCollapsed ? 'ds-window-controls-safe-inset' : ''
-              }`}
-            >
+            <div className="flex min-w-0 items-center gap-2.5">
               {leftSidebarCollapsed ? (
                 <SidebarTitlebarToggleButton
                   onClick={onToggleLeftSidebar}

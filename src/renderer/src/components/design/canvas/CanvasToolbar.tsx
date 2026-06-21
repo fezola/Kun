@@ -5,7 +5,11 @@ import {
   Circle,
   Type,
   Frame,
+  Monitor,
   ImagePlus,
+  ArrowUpRight,
+  Slash,
+  Pencil,
   Hand,
   ZoomIn,
   ZoomOut,
@@ -22,10 +26,14 @@ import type { CanvasTool } from '../../../design/canvas/canvas-types'
 
 const tools: { id: CanvasTool; icon: typeof MousePointer2; labelKey: string }[] = [
   { id: 'select', icon: MousePointer2, labelKey: 'canvasToolSelect' },
+  { id: 'screen', icon: Monitor, labelKey: 'canvasToolScreen' },
   { id: 'frame', icon: Frame, labelKey: 'canvasToolFrame' },
   { id: 'rect', icon: Square, labelKey: 'canvasToolRect' },
   { id: 'ellipse', icon: Circle, labelKey: 'canvasToolEllipse' },
   { id: 'text', icon: Type, labelKey: 'canvasToolText' },
+  { id: 'arrow', icon: ArrowUpRight, labelKey: 'canvasToolArrow' },
+  { id: 'line', icon: Slash, labelKey: 'canvasToolLine' },
+  { id: 'draw', icon: Pencil, labelKey: 'canvasToolDraw' },
   { id: 'image', icon: ImagePlus, labelKey: 'canvasToolImage' },
   { id: 'hand', icon: Hand, labelKey: 'canvasToolHand' }
 ]
@@ -46,21 +54,25 @@ function CanvasToolbarInner() {
 
   const zoomPercent = `${Math.round(zoom * 100)}%`
 
-  const btnBase =
-    'flex items-center justify-center h-7 w-7 rounded-md transition-colors'
-  const btnActive = 'bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-400'
+  const iconBtnBase =
+    'inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors'
+  const zoomBtnBase =
+    'inline-flex h-9 min-w-[58px] shrink-0 items-center justify-center rounded-full px-2 transition-colors'
+  const btnActive =
+    'bg-accent-soft text-accent shadow-[inset_0_0_0_1px_var(--ds-sidebar-row-ring)]'
   const btnInactive =
-    'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-white/10'
-  const divider = 'w-px h-5 bg-gray-200 dark:bg-white/10 mx-1'
+    'text-ds-faint hover:bg-ds-hover hover:text-ds-ink dark:hover:bg-white/10'
+  const divider = 'mx-1 h-6 w-px shrink-0 bg-ds-border-muted/80'
 
   return (
-    <div className="flex items-center gap-0.5 px-2 py-1 border-b border-gray-200 dark:border-white/10 bg-white/80 dark:bg-gray-900/80 backdrop-blur-sm">
+    <div className="flex max-w-[calc(100vw-7rem)] min-w-0 items-center gap-1 overflow-x-auto rounded-full border border-ds-border bg-white/74 px-1.5 py-1.5 shadow-[0_16px_42px_rgba(20,47,95,0.11)] backdrop-blur-2xl dark:bg-ds-card/72 dark:shadow-none">
       {tools.map((tool) => (
         <button
           key={tool.id}
-          className={`${btnBase} ${activeTool === tool.id ? btnActive : btnInactive}`}
+          className={`${iconBtnBase} ${activeTool === tool.id ? btnActive : btnInactive}`}
           onClick={() => setActiveTool(tool.id)}
           title={t(tool.labelKey)}
+          aria-label={t(tool.labelKey)}
         >
           <tool.icon className="h-4 w-4" />
         </button>
@@ -68,40 +80,44 @@ function CanvasToolbarInner() {
 
       <div className={divider} />
 
-      <button className={`${btnBase} ${btnInactive}`} onClick={undo} title={t('canvasUndo')}>
+      <button className={`${iconBtnBase} ${btnInactive}`} onClick={undo} title={t('canvasUndo')} aria-label={t('canvasUndo')}>
         <Undo2 className="h-4 w-4" />
       </button>
-      <button className={`${btnBase} ${btnInactive}`} onClick={redo} title={t('canvasRedo')}>
+      <button className={`${iconBtnBase} ${btnInactive}`} onClick={redo} title={t('canvasRedo')} aria-label={t('canvasRedo')}>
         <Redo2 className="h-4 w-4" />
       </button>
 
       <div className={divider} />
 
       <button
-        className={`${btnBase} ${btnInactive}`}
+        className={`${zoomBtnBase} ${btnInactive}`}
         onClick={() => zoomTo(1 / zoom, { x: 0, y: 0 })}
         title={t('canvasZoomReset')}
+        aria-label={t('canvasZoomReset')}
       >
-        <span className="text-xs font-medium w-10 text-center">{zoomPercent}</span>
+        <span className="text-center text-[12px] font-semibold tabular-nums">{zoomPercent}</span>
       </button>
       <button
-        className={`${btnBase} ${btnInactive}`}
+        className={`${iconBtnBase} ${btnInactive}`}
         onClick={() => zoomTo(1.25, { x: 0, y: 0 })}
         title={t('canvasZoomIn')}
+        aria-label={t('canvasZoomIn')}
       >
         <ZoomIn className="h-4 w-4" />
       </button>
       <button
-        className={`${btnBase} ${btnInactive}`}
+        className={`${iconBtnBase} ${btnInactive}`}
         onClick={() => zoomTo(0.8, { x: 0, y: 0 })}
         title={t('canvasZoomOut')}
+        aria-label={t('canvasZoomOut')}
       >
         <ZoomOut className="h-4 w-4" />
       </button>
       <button
-        className={`${btnBase} ${btnInactive}`}
+        className={`${iconBtnBase} ${btnInactive}`}
         onClick={() => zoomToFit({ x: -200, y: -200, width: 400, height: 400 })}
         title={t('canvasZoomFit')}
+        aria-label={t('canvasZoomFit')}
       >
         <Maximize className="h-4 w-4" />
       </button>
@@ -109,16 +125,18 @@ function CanvasToolbarInner() {
       <div className={divider} />
 
       <button
-        className={`${btnBase} ${gridVisible ? btnActive : btnInactive}`}
+        className={`${iconBtnBase} ${gridVisible ? btnActive : btnInactive}`}
         onClick={toggleGrid}
         title={t('canvasGridToggle')}
+        aria-label={t('canvasGridToggle')}
       >
         <Grid3x3 className="h-4 w-4" />
       </button>
       <button
-        className={`${btnBase} ${snapEnabled ? btnActive : btnInactive}`}
+        className={`${iconBtnBase} ${snapEnabled ? btnActive : btnInactive}`}
         onClick={toggleSnap}
         title={t('canvasSnap')}
+        aria-label={t('canvasSnap')}
       >
         <Magnet className="h-4 w-4" />
       </button>

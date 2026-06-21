@@ -213,7 +213,7 @@ describe('kun defaults', () => {
         summaryInputMaxBytes: 98304
       },
       runtimeTuning: {
-        streamIdleTimeoutMs: 45000,
+        streamIdleTimeoutMs: 450000,
         toolStorm: {
           enabled: true,
           windowSize: 8,
@@ -522,7 +522,7 @@ describe('mergeKunRuntimeSettings', () => {
 
   it('normalizes the stream idle timeout (0 disables, out-of-range clamps)', () => {
     const current = defaultKunRuntimeSettings()
-    expect(current.runtimeTuning.streamIdleTimeoutMs).toBe(45000)
+    expect(current.runtimeTuning.streamIdleTimeoutMs).toBe(450000)
 
     const set = mergeKunRuntimeSettings(current, {
       runtimeTuning: { streamIdleTimeoutMs: 300000 }
@@ -541,7 +541,7 @@ describe('mergeKunRuntimeSettings', () => {
     expect(
       mergeKunRuntimeSettings(current, { runtimeTuning: { streamIdleTimeoutMs: -5 } })
         .runtimeTuning.streamIdleTimeoutMs
-    ).toBe(45000)
+    ).toBe(450000)
     expect(
       mergeKunRuntimeSettings(current, { runtimeTuning: { streamIdleTimeoutMs: 999_999_999 } })
         .runtimeTuning.streamIdleTimeoutMs

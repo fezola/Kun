@@ -139,6 +139,7 @@ export function parseServeOptions(
         ? { sqlitePath: storageSqlitePathFromRawOrEnv(raw, env) ?? configServe.storage?.sqlitePath }
         : {})
     },
+    headers: configServe.headers,
     providers: configServe.providers,
     models: loadedConfig?.config.models,
     contextCompaction: loadedConfig?.config.contextCompaction,

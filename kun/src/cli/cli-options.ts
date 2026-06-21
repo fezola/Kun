@@ -55,6 +55,7 @@ export const ServeOptionsSchema = z.object({
   tokenEconomy: TokenEconomyConfigSchema.optional(),
   insecure: z.boolean().default(false),
   storage: StorageConfigSchema.default(DEFAULT_STORAGE_CONFIG),
+  headers: z.record(z.string(), z.string()).optional(),
   providers: z.record(z.string().min(1), ServeProviderConfigSchema).optional(),
   models: ModelConfigSchema.optional(),
   contextCompaction: ContextCompactionConfigSchema.optional(),

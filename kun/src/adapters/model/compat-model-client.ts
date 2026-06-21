@@ -531,12 +531,24 @@ export class CompatModelClient implements ModelClient {
     messages: ChatMessage[],
     stream: boolean
   ): Record<string, unknown> {
+    const isCodex = this.isCodexEndpoint()
+    // Codex requires system content in the top-level `instructions` field and
+    // will reject system-role items inside `input`. Split the message list so
+    // system messages go to instructions and the rest go to input.
+    const systemMessages = isCodex ? messages.filter((m) => m.role === 'system') : []
+    const nonSystemMessages = isCodex ? messages.filter((m) => m.role !== 'system') : messages
+    const inputMessages = splitToolImageMessagesForOpenAi(nonSystemMessages)
+    const instructions = systemMessages
+      .map((m) => chatContentToPlainText(m.content).trim())
+      .filter(Boolean)
+      .join('\n\n')
     const body: Record<string, unknown> = {
       model,
       stream,
-      input: messagesToResponsesInput(splitToolImageMessagesForOpenAi(messages))
+      input: messagesToResponsesInput(inputMessages),
+      ...(isCodex ? { instructions: instructions || ' ', store: false } : {})
     }
-    if (request.maxTokens !== undefined) {
+    if (request.maxTokens !== undefined && !this.isCodexEndpoint()) {
       body.max_output_tokens = request.maxTokens
     }
     if (request.temperature !== undefined) {
@@ -562,7 +574,16 @@ export class CompatModelClient implements ModelClient {
         parameters: tool.inputSchema
       }))
     }
+    if (this.isCodexEndpoint()) {
+      const toolsArray = (body.tools ?? []) as Record<string, unknown>[]
+      toolsArray.push({ type: 'image_generation' })
+      body.tools = toolsArray
+    }
     return body
+  }
+
+  private isCodexEndpoint(): boolean {
+    return this.config.baseUrl.includes('chatgpt.com/backend-api/codex')
   }
 
   private buildAnthropicMessagesRequestBody(
@@ -1101,7 +1122,14 @@ export class CompatModelClient implements ModelClient {
     const item = recordValue(payload, 'item') ?? recordValue(payload, 'output_item')
     if (item) {
       const itemType = recordString(item, 'type')
-      if (itemType === 'function_call' || itemType === 'custom_tool_call') {
+      if (itemType === 'image_generation_call') {
+        if (type === 'response.output_item.done') {
+          const result = recordString(item, 'result')
+          if (result) {
+            chunks.push({ kind: 'image_generation_complete', imageBase64: result, mimeType: 'image/png' })
+          }
+        }
+      } else if (itemType === 'function_call' || itemType === 'custom_tool_call') {
         const callId = recordString(item, 'call_id') || recordString(item, 'id') || indexFallbackCallId(outputIndex, pendingArguments)
         const existing = pendingArguments.get(callId) ?? { index: outputIndex, name: undefined, arguments: '' }
         if (outputIndex !== undefined) {
@@ -1170,6 +1198,8 @@ export class CompatModelClient implements ModelClient {
       } else {
         pendingArguments.set(callId, existing)
       }
+    } else if (type === 'response.image_generation_call.partial_image') {
+      // Partial image data — accumulation is optional; we emit on output_item.done
     } else if (type === 'response.completed') {
       const response = recordValue(payload, 'response') as ResponsesApiResponse | null
       const materialized = this.materializeResponsesOutput(response ?? (payload as ResponsesApiResponse), {

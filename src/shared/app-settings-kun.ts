@@ -289,7 +289,7 @@ export function defaultKunContextCompactionSettings(): KunContextCompactionSetti
 
 export function defaultKunRuntimeTuningSettings(): KunRuntimeTuningSettingsV1 {
   return {
-    streamIdleTimeoutMs: 45_000,
+    streamIdleTimeoutMs: 450_000,
     toolStorm: {
       enabled: true,
       windowSize: 8,

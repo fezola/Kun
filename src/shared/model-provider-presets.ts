@@ -22,6 +22,7 @@ export type ModelProviderPresetId =
   | 'kimi-code'
   | 'volcengine-coding-plan'
   | 'opencode-go'
+  | 'codex'
   | 'moonshot-cn'
   | 'moonshot-global'
   | 'xiaomi'
@@ -597,6 +598,27 @@ export const MODEL_PROVIDER_PRESETS: ModelProviderPreset[] = [
     },
     docsUrl: 'https://cloud.tencent.com/document/product/1729/111006',
     apiKeyUrl: 'https://console.cloud.tencent.com/hunyuan/start'
+  },
+  {
+    id: 'codex',
+    name: 'Codex (ChatGPT)',
+    category: 'subscription',
+    baseUrl: 'https://chatgpt.com/backend-api/codex/responses',
+    endpointFormat: 'custom_endpoint',
+    models: [
+      'gpt-5.5',
+      'gpt-5.4',
+      'gpt-5.4-mini',
+      'gpt-5.3-codex-spark'
+    ],
+    modelProfiles: {
+      'gpt-5.5': visionChatProfile(128_000),
+      'gpt-5.4': visionChatProfile(128_000),
+      'gpt-5.4-mini': visionChatProfile(128_000),
+      'gpt-5.3-codex-spark': textChatProfile(128_000)
+    },
+    docsUrl: 'https://openai.com/index/codex/',
+    apiKeyUrl: 'https://chatgpt.com'
   }
 ]
 

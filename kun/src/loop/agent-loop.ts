@@ -1,4 +1,6 @@
-import { isAbsolute, relative, resolve } from 'node:path'
+import { isAbsolute, join, relative, resolve } from 'node:path'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { randomBytes } from 'node:crypto'
 import type { ModelClient, ModelRequest, ModelToolSpec } from '../ports/model-client.js'
 import type {
   ToolHost,
@@ -1376,6 +1378,33 @@ export class AgentLoop {
             callId: chunk.callId,
             toolName: chunk.toolName,
             readyCount: completedToolCalls.length
+          })
+          break
+        }
+        case 'image_generation_complete': {
+          const imgDir = '.deepseekgui-images'
+          const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 14)
+          const fileName = `img-${stamp}-${randomBytes(2).toString('hex')}.png`
+          const relativePath = `${imgDir}/${fileName}`
+          const workspace = thread?.workspace ?? ''
+          const absolutePath = join(workspace, imgDir, fileName)
+          await mkdir(join(workspace, imgDir), { recursive: true })
+          await writeFile(absolutePath, Buffer.from(chunk.imageBase64, 'base64'))
+          const imageMarkdown = `\n![generated image](${relativePath})\n`
+          textItemId ||= this.opts.ids.next('item_text')
+          textAccumulator.value += imageMarkdown
+          await this.opts.events.record({
+            kind: 'assistant_text_delta',
+            threadId,
+            turnId,
+            itemId: textItemId,
+            item: makeAssistantTextItem({
+              id: textItemId,
+              turnId,
+              threadId,
+              text: imageMarkdown,
+              status: 'running'
+            })
           })
           break
         }

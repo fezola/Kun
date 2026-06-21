@@ -7,7 +7,11 @@
  * missing (artifacts created before this existed, or hand-authored dirs).
  */
 import type { WorkspaceEntry } from '@shared/workspace-file'
-import type { DesignArtifact } from './design-types'
+import {
+  defaultDesignArtifactNode,
+  type DesignArtifact,
+  type DesignArtifactNode
+} from './design-types'
 
 const DESIGN_DIR = '.kun-design'
 
@@ -24,6 +28,28 @@ export function serializeArtifactMeta(artifact: DesignArtifact): string {
 }
 
 const isStr = (v: unknown): v is string => typeof v === 'string'
+const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
+
+function parseNode(value: unknown): DesignArtifactNode | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const node = value as Record<string, unknown>
+  if (!isNum(node.x) || !isNum(node.y) || !isNum(node.width) || !isNum(node.height)) {
+    return undefined
+  }
+  const viewMode =
+    node.viewMode === 'code' || node.viewMode === 'live' || node.viewMode === 'preview'
+      ? node.viewMode
+      : undefined
+  return {
+    x: node.x,
+    y: node.y,
+    width: Math.max(240, node.width),
+    height: Math.max(180, node.height),
+    ...(node.sizeMode === 'auto' || node.sizeMode === 'manual' ? { sizeMode: node.sizeMode } : {}),
+    ...(typeof node.favorite === 'boolean' ? { favorite: node.favorite } : {}),
+    ...(viewMode ? { viewMode } : {})
+  }
+}
 
 /** Parse a persisted meta.json into a DesignArtifact, defaulting from the dir id. */
 export function parseArtifactMeta(raw: string, dirId: string): DesignArtifact | null {
@@ -48,6 +74,7 @@ export function parseArtifactMeta(raw: string, dirId: string): DesignArtifact | 
           summary: isStr(v.summary) ? v.summary : ''
         }))
     : []
+  const parsedNode = parseNode(o.node)
   return {
     id,
     kind: o.kind === 'canvas' ? 'canvas' : 'html',
@@ -56,6 +83,7 @@ export function parseArtifactMeta(raw: string, dirId: string): DesignArtifact | 
     createdAt,
     updatedAt,
     versions: versions.length > 0 ? versions : [{ id, relativePath, createdAt, summary: '' }],
+    ...(parsedNode ? { node: parsedNode } : {}),
     implementedAt: isStr(o.implementedAt) ? o.implementedAt : undefined,
     implementedThreadId: isStr(o.implementedThreadId) ? o.implementedThreadId : undefined,
     implementedDesignSystemHash: isStr(o.implementedDesignSystemHash) ? o.implementedDesignSystemHash : undefined
@@ -93,7 +121,8 @@ export function reconstructArtifact(dirId: string, entries: WorkspaceEntry[]): D
     relativePath,
     createdAt: now,
     updatedAt: now,
-    versions
+    versions,
+    node: defaultDesignArtifactNode(0)
   }
 }
 

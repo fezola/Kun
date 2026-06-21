@@ -59,4 +59,33 @@ describe('snapshotCanvas', () => {
     const snap = snapshotCanvas(doc)
     expect(snap.shapes[0].textContent).toBe('hello world')
   })
+
+  it('flags selected shapes so "this panel" resolves to an id', () => {
+    const doc = createEmptyDocument()
+    const root = doc.objects[doc.rootId]
+    const a = createDefaultShape('frame', 0, 0)
+    const b = createDefaultShape('frame', 0, 0)
+    doc.objects[a.id] = { ...a, parentId: doc.rootId }
+    doc.objects[b.id] = { ...b, parentId: doc.rootId }
+    doc.objects[doc.rootId] = { ...root, children: [a.id, b.id] }
+
+    const snap = snapshotCanvas(doc, new Set([b.id]))
+    expect(snap.shapes[0]).not.toHaveProperty('selected')
+    expect(snap.shapes[1].selected).toBe(true)
+  })
+
+  it('flags AI image holders (only when set)', () => {
+    const doc = createEmptyDocument()
+    const root = doc.objects[doc.rootId]
+    const plain = createDefaultShape('image', 0, 0)
+    const holder = createDefaultShape('image', 0, 0)
+    holder.aiImageHolder = true
+    doc.objects[plain.id] = { ...plain, parentId: doc.rootId }
+    doc.objects[holder.id] = { ...holder, parentId: doc.rootId }
+    doc.objects[doc.rootId] = { ...root, children: [plain.id, holder.id] }
+
+    const snap = snapshotCanvas(doc)
+    expect(snap.shapes[0]).not.toHaveProperty('aiImageHolder')
+    expect(snap.shapes[1].aiImageHolder).toBe(true)
+  })
 })

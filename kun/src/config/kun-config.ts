@@ -213,7 +213,8 @@ export const ServeProviderConfigSchema = z
       .preprocess(normalizeModelEndpointFormat, z.enum(MODEL_ENDPOINT_FORMATS))
       .default(DEFAULT_MODEL_ENDPOINT_FORMAT)
       .optional(),
-    modelProxyUrl: z.string().optional()
+    modelProxyUrl: z.string().optional(),
+    headers: z.record(z.string(), z.string()).optional()
   })
   .strict()
 export type ServeProviderConfig = z.infer<typeof ServeProviderConfigSchema>
@@ -238,6 +239,13 @@ export const KunServeConfigSchema = z
     tokenEconomy: TokenEconomyConfigSchema.optional(),
     insecure: z.boolean().optional(),
     storage: StorageConfigSchema.optional(),
+    /**
+     * Extra HTTP headers merged into every default-client model request
+     * (last, so they win). Used for providers that authenticate with more
+     * than a Bearer key — e.g. Codex needs `ChatGPT-Account-Id` and a
+     * Codex-CLI `User-Agent` alongside the OAuth access token.
+     */
+    headers: z.record(z.string(), z.string()).optional(),
     /**
      * Extra providers the runtime can route to per request. Keys are
      * provider ids (matched against `ModelRequest.providerId`); values

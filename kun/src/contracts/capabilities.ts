@@ -257,7 +257,7 @@ export const MemoryCapabilityConfig = CapabilityToggleConfig.extend({
 }).strict()
 export type MemoryCapabilityConfig = z.infer<typeof MemoryCapabilityConfig>
 
-export const ImageGenerationProtocol = z.enum(['openai-images', 'minimax-image'])
+export const ImageGenerationProtocol = z.enum(['openai-images', 'minimax-image', 'codex-responses-image'])
 export type ImageGenerationProtocol = z.infer<typeof ImageGenerationProtocol>
 
 export const ImageGenCapabilityConfig = CapabilityToggleConfig.extend({

@@ -26,6 +26,9 @@ const RIGHT_PANEL_MAX = 760
 const SIDEBAR_HARD_MIN = 180
 const MAIN_MIN_WIDTH = 560
 const PANEL_RESIZE_HANDLE_WIDTH = 5
+// The code/chat workspace pins a fixed-width vertical action rail at the far
+// right edge; reserve its width so the resizable panels don't overrun it.
+export const RAIL_WIDTH = 48
 // Bottom terminal drawer sizing. The drawer lives below the chat stage and
 // resizes vertically, so it has its own clamps instead of the column widths.
 const TERMINAL_HEIGHT_DEFAULT = 360
@@ -250,7 +253,9 @@ export function useWorkbenchLayout({
 
   useLayoutEffect(() => {
     const sync = (): void => {
-      const containerWidth = shellRef.current?.clientWidth ?? window.innerWidth
+      const containerWidth =
+        (shellRef.current?.clientWidth ?? window.innerWidth) -
+        (route === 'write' || route === 'design' ? 0 : RAIL_WIDTH)
       const next = fitWorkbenchWidths(
         containerWidth,
         leftSidebarWidth,
@@ -266,10 +271,15 @@ export function useWorkbenchLayout({
     sync()
     window.addEventListener('resize', sync)
     return () => window.removeEventListener('resize', sync)
-  }, [leftSidebarCollapsed, leftSidebarWidth, rightPanelVisible, rightSidebarWidth])
+  }, [leftSidebarCollapsed, leftSidebarWidth, rightPanelVisible, rightSidebarWidth, route])
 
   const toggleRightPanelMode = (nextMode: Exclude<RightPanelMode, null>): void => {
+    const willOpen = rightPanelMode !== nextMode
     setRightPanelMode((current) => (current === nextMode ? null : nextMode))
+    // The canvas wants room — bump the panel to the wider preview width on open.
+    if (willOpen && nextMode === 'canvas') {
+      setRightSidebarWidth((width) => Math.max(width, CODE_PANEL_PREFERRED))
+    }
   }
 
   const toggleLeftSidebar = (): void => {
@@ -295,7 +305,9 @@ export function useWorkbenchLayout({
     document.body.style.userSelect = 'none'
 
     const onMove = (moveEvent: PointerEvent): void => {
-      const containerWidth = shellRef.current?.clientWidth ?? window.innerWidth
+      const containerWidth =
+        (shellRef.current?.clientWidth ?? window.innerWidth) -
+        (route === 'write' || route === 'design' ? 0 : RAIL_WIDTH)
       const delta = moveEvent.clientX - startX
       const next = fitWorkbenchWidths(
         containerWidth,
@@ -333,7 +345,9 @@ export function useWorkbenchLayout({
     document.body.style.userSelect = 'none'
 
     const onMove = (moveEvent: PointerEvent): void => {
-      const containerWidth = shellRef.current?.clientWidth ?? window.innerWidth
+      const containerWidth =
+        (shellRef.current?.clientWidth ?? window.innerWidth) -
+        (route === 'write' || route === 'design' ? 0 : RAIL_WIDTH)
       const delta = moveEvent.clientX - startX
       const next = fitWorkbenchWidths(
         containerWidth,

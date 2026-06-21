@@ -7,6 +7,8 @@ export type CanvasPointerEvent = {
   altKey: boolean
   metaKey: boolean
   ctrlKey: boolean
+  /** Pointer event timestamp in ms (used for double-click detection in multi-point tools). */
+  timeStamp: number
 }
 
 export interface CanvasToolHandler {

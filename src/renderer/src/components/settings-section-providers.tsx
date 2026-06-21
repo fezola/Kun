@@ -79,7 +79,8 @@ const MODEL_ENDPOINT_FORMAT_LABEL_KEYS: Record<ModelEndpointFormat, string> = {
 
 const IMAGE_GENERATION_PROTOCOL_LABEL_KEYS: Record<ImageGenerationProtocol, string> = {
   'openai-images': 'imageGenProtocolOpenAi',
-  'minimax-image': 'imageGenProtocolMiniMax'
+  'minimax-image': 'imageGenProtocolMiniMax',
+  'codex-responses-image': 'imageGenProtocolCodex'
 }
 
 const SPEECH_TO_TEXT_PROTOCOL_LABEL_KEYS: Record<SpeechToTextProtocol, string> = {
@@ -304,7 +305,222 @@ type ProbeState = {
 
 function providerPresetRequiresApiKey(provider: ModelProviderProfileV1): boolean {
   if (provider.id === 'litellm') return false
+  if (isCodexProvider(provider.id)) return false
   return Boolean(getModelProviderPreset(provider.id) || tokenPlanPresetForProfileId(provider.id))
+}
+
+function isCodexProvider(id: string): boolean {
+  return id === 'codex'
+}
+
+function parseCodexEmail(apiKey: string): string | undefined {
+  if (!apiKey.startsWith('{')) return undefined
+  try {
+    const parsed = JSON.parse(apiKey) as Record<string, unknown>
+    if (parsed.kind === 'codex-oauth' && typeof parsed.email === 'string') return parsed.email
+    if (parsed.kind === 'codex-oauth') return parsed.accountId as string
+  } catch { /* ignore */ }
+  return undefined
+}
+
+function CodexLoginSection({
+  provider,
+  onCredentialChange,
+  t
+}: {
+  provider: ModelProviderProfileV1
+  onCredentialChange: (apiKey: string) => void
+  t: (key: string, params?: Record<string, unknown>) => string
+}): ReactElement {
+  const [phase, setPhase] = useState<'idle' | 'browser' | 'polling' | 'error'>('idle')
+  const [userCode, setUserCode] = useState('')
+  const [verifyUrl, setVerifyUrl] = useState('')
+  const [error, setError] = useState('')
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const codexEmail = parseCodexEmail(provider.apiKey)
+  const connected = Boolean(codexEmail)
+
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current)
+    }
+  }, [])
+
+  const startBrowserLogin = async (): Promise<void> => {
+    if (typeof window.kunGui?.startCodexBrowserAuth !== 'function') {
+      setPhase('error')
+      setError('Codex 浏览器登录不可用，请重启应用')
+      return
+    }
+    setPhase('browser')
+    setError('')
+    try {
+      const result = await window.kunGui.startCodexBrowserAuth()
+      if (result.ok) {
+        onCredentialChange(JSON.stringify(result.credentials))
+        setPhase('idle')
+      } else {
+        setPhase('error')
+        setError(result.message)
+      }
+    } catch (err) {
+      setPhase('error')
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  const startDeviceCodeLogin = async (): Promise<void> => {
+    if (typeof window.kunGui?.startCodexAuth !== 'function') {
+      setPhase('error')
+      setError('Codex 登录不可用，请重启应用')
+      return
+    }
+    setError('')
+    try {
+      const result = await window.kunGui.startCodexAuth()
+      if (!result.ok) {
+        setPhase('error')
+        setError(result.message)
+        return
+      }
+      setUserCode(result.userCode)
+      setVerifyUrl(result.url)
+      setPhase('polling')
+      const deviceCode = result.deviceCode
+      const uc = result.userCode
+      const interval = Math.max(result.interval, 2) * 1000
+      if (pollRef.current) clearInterval(pollRef.current)
+      pollRef.current = setInterval(async () => {
+        if (typeof window.kunGui?.pollCodexAuth !== 'function') return
+        try {
+          const poll = await window.kunGui.pollCodexAuth(deviceCode, uc)
+          if (poll.done) {
+            if (pollRef.current) clearInterval(pollRef.current)
+            pollRef.current = null
+            onCredentialChange(JSON.stringify(poll.credentials))
+            setPhase('idle')
+          } else if (poll.error) {
+            if (pollRef.current) clearInterval(pollRef.current)
+            pollRef.current = null
+            setPhase('error')
+            setError(poll.error)
+          }
+        } catch (pollError) {
+          if (pollRef.current) clearInterval(pollRef.current)
+          pollRef.current = null
+          setPhase('error')
+          setError(pollError instanceof Error ? pollError.message : String(pollError))
+        }
+      }, interval)
+    } catch (err) {
+      setPhase('error')
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  const cancelLogin = (): void => {
+    if (pollRef.current) clearInterval(pollRef.current)
+    pollRef.current = null
+    setPhase('idle')
+    setError('')
+  }
+
+  const disconnect = (): void => {
+    if (pollRef.current) clearInterval(pollRef.current)
+    pollRef.current = null
+    onCredentialChange('')
+    setPhase('idle')
+    setUserCode('')
+  }
+
+  if (connected) {
+    return (
+      <div className="flex items-center gap-2">
+        <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
+        <span className="text-[13px] text-ds-ink">{codexEmail}</span>
+        <button
+          type="button"
+          className="ml-auto rounded-lg px-3 py-1.5 text-[12px] font-medium text-ds-muted hover:bg-ds-hover"
+          onClick={disconnect}
+        >
+          {t('codexDisconnect')}
+        </button>
+      </div>
+    )
+  }
+
+  if (phase === 'browser') {
+    return (
+      <div className="grid gap-2">
+        <p className="text-[13px] text-ds-muted">{t('codexBrowserOpened')}</p>
+        <div className="flex items-center gap-1.5 text-[12px] text-ds-muted">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          {t('codexWaitingAuth')}
+        </div>
+        <button
+          type="button"
+          className="w-fit text-[12px] font-medium text-ds-muted hover:text-ds-ink"
+          onClick={cancelLogin}
+        >
+          {t('codexCancel')}
+        </button>
+      </div>
+    )
+  }
+
+  if (phase === 'polling') {
+    return (
+      <div className="grid gap-2">
+        <p className="text-[13px] text-ds-muted">{t('codexEnterCode')}</p>
+        <div className="flex items-center gap-2">
+          <code className="rounded-lg bg-ds-hover px-3 py-1.5 text-[16px] font-mono font-bold tracking-widest text-ds-ink">
+            {userCode}
+          </code>
+          <a
+            href={verifyUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="rounded-lg bg-accent/10 px-3 py-1.5 text-[12px] font-medium text-accent hover:bg-accent/20"
+          >
+            {t('codexOpenBrowser')}
+          </a>
+        </div>
+        <div className="flex items-center gap-1.5 text-[12px] text-ds-muted">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          {t('codexWaitingAuth')}
+        </div>
+        <button
+          type="button"
+          className="w-fit text-[12px] font-medium text-ds-muted hover:text-ds-ink"
+          onClick={cancelLogin}
+        >
+          {t('codexCancel')}
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="grid gap-2">
+      <button
+        type="button"
+        className="w-full rounded-xl bg-accent px-4 py-2.5 text-[14px] font-semibold text-white shadow-sm hover:bg-accent/90"
+        onClick={startBrowserLogin}
+      >
+        {t('codexLoginButton')}
+      </button>
+      <button
+        type="button"
+        className="w-full rounded-xl border border-ds-border bg-ds-card px-4 py-2 text-[12px] font-medium text-ds-muted hover:bg-ds-hover"
+        onClick={startDeviceCodeLogin}
+      >
+        {t('codexLoginDeviceCodeFallback')}
+      </button>
+      {phase === 'error' && error ? (
+        <span className="text-[12px] text-red-500">{error}</span>
+      ) : null}
+    </div>
+  )
 }
 
 const fieldLabelClass = 'grid gap-1.5 text-[12px] font-semibold text-ds-muted'
@@ -1265,34 +1481,44 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                   </div>
                 </DetailSection>
                 <DetailSection title={t('modelProviderSectionConnection')}>
-                  <label className={fieldLabelClass}>
-                    {t('modelProviderApiKey')}
-                    <SecretInput
-                      value={activeProvider.apiKey}
-                      onChange={(value) => updateModelProvider(activeProvider.id, { apiKey: value })}
-                      visible={showApiKey}
-                      onToggleVisibility={() => setShowApiKey((value: boolean) => !value)}
-                      placeholder={t('modelProviderApiKeyPlaceholder')}
-                      autoComplete="off"
-                      showLabel={t('showSecret')}
-                      hideLabel={t('hideSecret')}
+                  {isCodexProvider(activeProvider.id) ? (
+                    <CodexLoginSection
+                      provider={activeProvider}
+                      onCredentialChange={(apiKey) => updateModelProvider(activeProvider.id, { apiKey })}
+                      t={t}
                     />
-                  </label>
-                  <label className={fieldLabelClass}>
-                    {t('modelProviderBaseUrl')}
-                    <input
-                      className={textInputClass}
-                      value={activeProvider.baseUrl}
-                      placeholder={t('baseUrlPlaceholder')}
-                      spellCheck={false}
-                      onChange={(e) => updateModelProvider(activeProvider.id, { baseUrl: e.target.value })}
-                    />
-                    {activeBaseUrlInvalid ? (
-                      <span className="text-[12px] font-normal text-amber-600 dark:text-amber-300">
-                        {t('modelProviderInvalidUrl')}
-                      </span>
-                    ) : null}
-                  </label>
+                  ) : (
+                    <>
+                      <label className={fieldLabelClass}>
+                        {t('modelProviderApiKey')}
+                        <SecretInput
+                          value={activeProvider.apiKey}
+                          onChange={(value) => updateModelProvider(activeProvider.id, { apiKey: value })}
+                          visible={showApiKey}
+                          onToggleVisibility={() => setShowApiKey((value: boolean) => !value)}
+                          placeholder={t('modelProviderApiKeyPlaceholder')}
+                          autoComplete="off"
+                          showLabel={t('showSecret')}
+                          hideLabel={t('hideSecret')}
+                        />
+                      </label>
+                      <label className={fieldLabelClass}>
+                        {t('modelProviderBaseUrl')}
+                        <input
+                          className={textInputClass}
+                          value={activeProvider.baseUrl}
+                          placeholder={t('baseUrlPlaceholder')}
+                          spellCheck={false}
+                          onChange={(e) => updateModelProvider(activeProvider.id, { baseUrl: e.target.value })}
+                        />
+                        {activeBaseUrlInvalid ? (
+                          <span className="text-[12px] font-normal text-amber-600 dark:text-amber-300">
+                            {t('modelProviderInvalidUrl')}
+                          </span>
+                        ) : null}
+                      </label>
+                    </>
+                  )}
                   {activeTokenPlanRegions.length > 0 ? (
                     <div className="flex flex-wrap items-center gap-1.5">
                       <span className="text-[12px] font-semibold text-ds-muted">
@@ -1336,6 +1562,7 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                     <select
                       className={selectControlClass}
                       value={activeProvider.endpointFormat}
+                      disabled={isCodexProvider(activeProvider.id)}
                       onChange={(e) => updateModelProvider(activeProvider.id, {
                         endpointFormat: e.target.value as ModelEndpointFormat
                       })}
@@ -1347,7 +1574,11 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                       ))}
                     </select>
                   </label>
-                  {activeProvider.endpointFormat === 'custom_endpoint' ? (
+                  {isCodexProvider(activeProvider.id) ? (
+                    <p className="text-[12px] leading-5 text-ds-muted">
+                      {t('codexEndpointLocked')}
+                    </p>
+                  ) : activeProvider.endpointFormat === 'custom_endpoint' ? (
                     <p className="text-[12px] leading-5 text-ds-muted">
                       {t('modelEndpointCustomEndpointDesc')}
                     </p>

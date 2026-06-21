@@ -5,11 +5,14 @@ export type GroupedDesignArtifacts = {
   canvas: DesignArtifact[]
 }
 
-export function groupDesignArtifacts(artifacts: readonly DesignArtifact[]): GroupedDesignArtifacts {
+export function groupDesignArtifacts(
+  artifacts: readonly DesignArtifact[],
+  screenLinkedIds?: ReadonlySet<string>
+): GroupedDesignArtifacts {
   return artifacts.reduce<GroupedDesignArtifacts>(
     (groups, artifact) => {
       if (artifact.kind === 'canvas') groups.canvas.push(artifact)
-      else groups.html.push(artifact)
+      else if (!screenLinkedIds?.has(artifact.id)) groups.html.push(artifact)
       return groups
     },
     { html: [], canvas: [] }

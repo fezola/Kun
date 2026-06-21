@@ -6,6 +6,7 @@ import { TextShape } from './TextShape'
 import { ImageShape } from './ImageShape'
 import { FrameShape } from './FrameShape'
 import { GroupShape } from './GroupShape'
+import { LinearShape } from './LinearShape'
 
 function ShapeDispatcherInner({
   shapeId,
@@ -38,6 +39,11 @@ function ShapeDispatcherInner({
       break
     case 'group':
       content = <GroupShape shape={shape} objects={objects} />
+      break
+    case 'arrow':
+    case 'line':
+    case 'draw':
+      content = <LinearShape shape={shape} />
       break
     default:
       return null

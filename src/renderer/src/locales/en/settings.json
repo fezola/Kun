@@ -525,6 +525,7 @@
   "imageGenProtocolDesc": "Request shape used by the custom image API.",
   "imageGenProtocolOpenAi": "OpenAI Images",
   "imageGenProtocolMiniMax": "MiniMax image_generation",
+  "imageGenProtocolCodex": "Codex (ChatGPT)",
   "imageGenBaseUrl": "API base URL",
   "imageGenBaseUrlDesc": "OpenAI-compatible endpoint root; the tool calls {baseUrl}/images/generations.",
   "imageGenBaseUrlPlaceholder": "https://api.siliconflow.cn/v1",
@@ -1044,5 +1045,14 @@
   "memoryLastInjectedDesc": "Memory record IDs that were injected into the most recent turn.",
   "memoryDisabledHint": "Memory is currently disabled. Enable it in the runtime configuration (kun config) to create and use memory records.",
   "memoryEnable": "Enable memory",
-  "memoryEnableDesc": "When enabled, the assistant persists facts and preferences across sessions and injects them into context automatically. Changes apply on the next turn."
+  "memoryEnableDesc": "When enabled, the assistant persists facts and preferences across sessions and injects them into context automatically. Changes apply on the next turn.",
+  "codexEndpointLocked": "Codex uses a fixed endpoint and cannot be changed.",
+  "codexLoginButton": "Log in to ChatGPT",
+  "codexLoginDeviceCodeFallback": "Use device code instead",
+  "codexBrowserOpened": "Browser opened. Complete the sign-in to return automatically.",
+  "codexDisconnect": "Disconnect",
+  "codexCancel": "Cancel",
+  "codexEnterCode": "Open the link below and enter the code to authorize:",
+  "codexOpenBrowser": "Open in browser",
+  "codexWaitingAuth": "Waiting for authorization..."
 }

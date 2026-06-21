@@ -13,6 +13,7 @@ import type { SnapGuide } from '../../../design/canvas/canvas-snap'
 import { useCanvasShapeStore } from '../../../design/canvas/canvas-shape-store'
 import { useCanvasUndoStore } from '../../../design/canvas/canvas-undo-store'
 import { useDesignAssistantStore } from '../../../design/design-assistant-store'
+import { LinearPointEditor } from './LinearPointEditor'
 
 const HANDLE_SIZE = 8
 const ROTATE_HANDLE_SIZE = 20
@@ -79,6 +80,22 @@ function SelectionOverlayInner({
 
   const hoverShape = hoverTargetId && !selectedIds.has(hoverTargetId) ? objects[hoverTargetId] : null
   const bounds = selectedIds.size > 0 ? getSelectionBounds(objects, selectedIds) : null
+
+  // Single selected arrow/line → point editing mode (excalidraw-style). We hide
+  // the bbox + 8 resize handles + rotate handles entirely; LinearPointEditor
+  // draws vertex/midpoint dots instead. Marquee, snap guides, and AI glow still
+  // render below.
+  const linearEditTarget = (() => {
+    if (selectedIds.size !== 1) return null
+    const onlyId = selectedIds.values().next().value as string | undefined
+    if (!onlyId) return null
+    const s = objects[onlyId]
+    if (!s) return null
+    if (s.type !== 'arrow' && s.type !== 'line') return null
+    if (!s.points || s.points.length < 2) return null
+    return s
+  })()
+  const showBoxHandles = bounds && !linearEditTarget
 
   const handlePointerDown = useCallback(
     (handle: ResizeHandle, e: React.PointerEvent) => {
@@ -282,7 +299,7 @@ function SelectionOverlayInner({
         />
       )}
 
-      {bounds && (
+      {showBoxHandles && bounds && (
         <rect
           x={bounds.x}
           y={bounds.y}
@@ -295,37 +312,41 @@ function SelectionOverlayInner({
         />
       )}
 
-      {rotateHandles.map(({ corner, cx, cy }) => (
-        <rect
-          key={`rot-${corner}`}
-          x={cx - rs / 2}
-          y={cy - rs / 2}
-          width={rs}
-          height={rs}
-          fill="transparent"
-          style={{ cursor: 'grab' }}
-          data-rotate={corner}
-          pointerEvents="all"
-          onPointerDown={handleRotatePointerDown}
-        />
-      ))}
+      {showBoxHandles &&
+        rotateHandles.map(({ corner, cx, cy }) => (
+          <rect
+            key={`rot-${corner}`}
+            x={cx - rs / 2}
+            y={cy - rs / 2}
+            width={rs}
+            height={rs}
+            fill="transparent"
+            style={{ cursor: 'grab' }}
+            data-rotate={corner}
+            pointerEvents="all"
+            onPointerDown={handleRotatePointerDown}
+          />
+        ))}
 
-      {resizeHandles.map(({ pos, cx, cy }) => (
-        <rect
-          key={pos}
-          x={cx - hs / 2}
-          y={cy - hs / 2}
-          width={hs}
-          height={hs}
-          fill="#ffffff"
-          stroke={SELECTION_COLOR}
-          strokeWidth={sw}
-          style={{ cursor: handleCursor(pos) }}
-          data-handle={pos}
-          pointerEvents="all"
-          onPointerDown={(e) => handlePointerDown(pos, e)}
-        />
-      ))}
+      {showBoxHandles &&
+        resizeHandles.map(({ pos, cx, cy }) => (
+          <rect
+            key={pos}
+            x={cx - hs / 2}
+            y={cy - hs / 2}
+            width={hs}
+            height={hs}
+            fill="#ffffff"
+            stroke={SELECTION_COLOR}
+            strokeWidth={sw}
+            style={{ cursor: handleCursor(pos) }}
+            data-handle={pos}
+            pointerEvents="all"
+            onPointerDown={(e) => handlePointerDown(pos, e)}
+          />
+        ))}
+
+      {linearEditTarget && <LinearPointEditor shape={linearEditTarget} zoom={zoom} />}
 
       {marqueeRect && (
         <rect

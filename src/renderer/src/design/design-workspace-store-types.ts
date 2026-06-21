@@ -1,4 +1,11 @@
-import type { DesignArtifact, DesignArtifactVersion, DesignCanvasView, DesignViewport } from './design-types'
+import type {
+  DesignArtifact,
+  DesignArtifactNode,
+  DesignArtifactVersion,
+  DesignCanvasView,
+  DesignIntentMode,
+  DesignViewport
+} from './design-types'
 import type { DesignContext } from './design-context'
 
 export type DesignWorkspaceState = {
@@ -31,8 +38,14 @@ export type DesignWorkspaceState = {
   implementOpen: boolean
   /** Title of the artifact being implemented (panel header). */
   implementTitle: string
-  /** When true, the right-side Design AI Rail collapses to a thin strip. Persisted. */
+  /** Backward-compatible persisted assistant collapsed flag. Prefer canvasAssistantOpen. */
   aiRailCollapsed: boolean
+  /** User preference for the floating canvas assistant on desktop. Persisted. */
+  canvasAssistantOpen: boolean
+  /** User preference for keeping the floating inspector visible without a selection. Persisted. */
+  canvasInspectorPinned: boolean
+  /** Stitch-style design intent for the floating composer and command pill. */
+  designIntentMode: DesignIntentMode
 
   setWorkspaceRoot: (workspaceRoot: string) => void
   setCanvasView: (view: DesignCanvasView) => void
@@ -49,6 +62,10 @@ export type DesignWorkspaceState = {
   removeArtifact: (artifactId: string) => void
   /** Rename an artifact's title (persisted to its meta.json sidecar). */
   renameArtifact: (artifactId: string, title: string) => void
+  updateArtifactNode: (artifactId: string, patch: Partial<DesignArtifactNode>) => void
+  duplicateArtifact: (artifactId: string) => Promise<void>
+  selectArtifactVersion: (artifactId: string, versionId: string) => void
+  setDesignIntentMode: (mode: DesignIntentMode) => void
   /** Set or clear the design-mode error banner. */
   setFileError: (error: string | null) => void
   /** Open the in-page "implement in code" assistant for an artifact. */
@@ -59,8 +76,13 @@ export type DesignWorkspaceState = {
    * If an HTML artifact is active, appends a new version (basePath = current);
    * otherwise creates a fresh HTML artifact and makes it active.
    */
-  prepareHtmlTurn: (brief: string) => { relativePath: string; basePath?: string }
+  prepareHtmlTurn: (
+    brief: string,
+    options?: { forceNew?: boolean; artifactId?: string; activate?: boolean }
+  ) => { relativePath: string; basePath?: string }
   setAiRailCollapsed: (collapsed: boolean) => void
+  setCanvasAssistantOpen: (open: boolean) => void
+  setCanvasInspectorPinned: (pinned: boolean) => void
   setAssistantModel: (model: string, providerId?: string) => void
   updateDesignContext: (patch: Partial<DesignContext>) => void
   /** Hydrate workspace root + design context defaults from persisted settings. */

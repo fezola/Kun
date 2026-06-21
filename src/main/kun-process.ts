@@ -3,6 +3,7 @@ import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
+import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
@@ -22,6 +23,7 @@ import {
   buildKunServeArgs,
   resolveKunExecutable
 } from './resolve-kun-binary'
+import { isCodexOAuthCredentials, parseCodexCredentials } from './codex-auth'
 import {
   KunConfigSchema,
   KunServeConfigSchema,
@@ -321,10 +323,14 @@ async function startKunChildOnce(
   // when the user actually opted into host control.
   const runAsElectron = process.platform === 'darwin' && runtime.computerUse?.enabled === true
   const command = runAsElectron ? resolution.command : resolveNodeScriptCommand(resolution.command)
+  // When the active provider is Codex, runtime.apiKey holds JSON-encoded OAuth
+  // credentials; unwrap to the bare access token so the default client sends a
+  // valid Bearer (the Codex headers are written to serve.headers in config).
+  const defaultClientApiKey = resolveCodexDefaultClient(runtime.apiKey).apiKey
   const childEnv: NodeJS.ProcessEnv = {
     ...process.env,
     KUN_RUNTIME_TOKEN: runtime.runtimeToken,
-    DEEPSEEK_API_KEY: runtime.apiKey || process.env.DEEPSEEK_API_KEY || ''
+    DEEPSEEK_API_KEY: defaultClientApiKey || process.env.DEEPSEEK_API_KEY || ''
   }
   if (!runAsElectron) childEnv.ELECTRON_RUN_AS_NODE = '1'
   else delete childEnv.ELECTRON_RUN_AS_NODE
@@ -382,6 +388,7 @@ export async function syncGuiManagedKunConfig(
   dataDir: string,
   runtime: Pick<
     KunRuntimeSettingsV1,
+    | 'apiKey'
     | 'mcpSearch'
     | 'tokenEconomy'
     | 'storage'
@@ -443,11 +450,17 @@ export async function syncGuiManagedKunConfig(
   const providers = options?.scheduleMcp?.settings
     ? providersConfigForRuntime(options.scheduleMcp.settings)
     : undefined
+  // When the active provider is Codex, emit its required headers as the default
+  // client's serve.headers (the bare access token goes to DEEPSEEK_API_KEY).
+  // Always set the key explicitly (undefined clears it) so switching away from
+  // Codex doesn't leave stale headers carried over by the `...serve` spread.
+  const defaultClientHeaders = resolveCodexDefaultClient(runtime.apiKey).headers
   const next = {
     serve: {
       ...serve,
       storage,
       tokenEconomy: tokenEconomyConfigForRuntime(runtime.tokenEconomy, existingTokenEconomy),
+      headers: defaultClientHeaders,
       ...(providers && Object.keys(providers).length ? { providers } : {})
     },
     models: modelConfigForRuntime(existingModels, runtime.modelProfiles),
@@ -742,6 +755,51 @@ function modelConfigProfilesFromProviderProfiles(
  * default client handles it identically, so duplicate entries are
  * idempotent.
  */
+// One stable Codex session id per app run. MUST NOT be regenerated per config
+// sync: a changing value would make syncGuiManagedKunConfig's deterministic
+// equality check fail every time, rewriting config.json on every sync (and
+// risking a restart loop). Generated once at module load.
+const CODEX_SESSION_ID = randomUUID()
+
+/**
+ * HTTP headers the Codex backend requires alongside the OAuth Bearer token.
+ * Shared by both the per-provider client (providersConfigForRuntime) and the
+ * default client (resolveCodexDefaultClient) so the two never drift.
+ */
+function codexRequestHeaders(creds: CodexOAuthCredentials): Record<string, string> {
+  return {
+    // ChatGPT account ID is required by the Codex backend.
+    'ChatGPT-Account-Id': creds.accountId,
+    // The Codex backend tags requests by originator (Codex CLI sends
+    // 'codex_cli_rs'). Pairing this with the Codex-CLI User-Agent clears the
+    // Cloudflare bot challenge that otherwise returns the "Enable JavaScript
+    // and cookies" HTML page.
+    originator: 'codex_cli_rs',
+    // OpenAI Responses API is still flagged experimental for the Codex CLI
+    // endpoint; without this header the backend can reject tool calls.
+    'OpenAI-Beta': 'responses=experimental',
+    // A Codex-CLI-style User-Agent passes Cloudflare; a plain Node/Electron
+    // one trips the bot-detection challenge.
+    'User-Agent': 'codex_cli_rs/0.0.0 (deepseekgui)',
+    // Stable per app run (see CODEX_SESSION_ID) so config syncs stay
+    // deterministic.
+    session_id: CODEX_SESSION_ID
+  }
+}
+
+/**
+ * Resolve the default-client API key + headers for the active runtime
+ * provider. Codex stores OAuth credentials JSON-encoded in the apiKey field:
+ * unwrap it to the bare access token (used as the Bearer) and emit the Codex
+ * headers. Non-Codex keys pass through untouched.
+ */
+function resolveCodexDefaultClient(rawApiKey: string): { apiKey: string; headers?: Record<string, string> } {
+  const key = rawApiKey.trim()
+  const creds = isCodexOAuthCredentials(key) ? parseCodexCredentials(key) : null
+  if (!creds) return { apiKey: key }
+  return { apiKey: creds.accessToken, headers: codexRequestHeaders(creds) }
+}
+
 function providersConfigForRuntime(settings: AppSettingsV1): Record<string, Record<string, unknown>> {
   const out: Record<string, Record<string, unknown>> = {}
   const runtimeProviderId = getKunRuntimeSettings(settings).providerId.trim()
@@ -750,15 +808,18 @@ function providersConfigForRuntime(settings: AppSettingsV1): Record<string, Reco
     const id = provider.id?.trim()
     const baseUrl = provider.baseUrl?.trim()
     if (!id || !baseUrl) continue
-    // The runtime's own provider is already wired via the default CLI args;
-    // skipping it keeps the map smaller and avoids paying twice for one
-    // provider that happens to be the active runtime binding.
+    // The runtime's own provider is already wired via the default client
+    // (DEEPSEEK_API_KEY + serve.headers); skipping it keeps the map smaller
+    // and avoids paying twice for one provider that happens to be active.
     if (id === runtimeProviderId) continue
+    const rawApiKey = provider.apiKey?.trim() ?? ''
+    const codexCreds = isCodexOAuthCredentials(rawApiKey) ? parseCodexCredentials(rawApiKey) : null
     out[id] = {
-      apiKey: provider.apiKey?.trim() ?? '',
+      apiKey: codexCreds ? codexCreds.accessToken : rawApiKey,
       baseUrl,
       ...(provider.endpointFormat ? { endpointFormat: provider.endpointFormat } : {}),
-      ...(proxyUrl ? { modelProxyUrl: proxyUrl } : {})
+      ...(proxyUrl ? { modelProxyUrl: proxyUrl } : {}),
+      ...(codexCreds ? { headers: codexRequestHeaders(codexCreds) } : {})
     }
   }
   return out

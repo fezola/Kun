@@ -30,6 +30,7 @@ import {
   type WriteThreadRegistry
 } from '../write/write-thread-registry'
 import { isSddAssistantThread } from '../sdd/sdd-thread-registry'
+import { isDesignThreadId } from '../design/design-thread-registry'
 import { readThreadWorktreeRegistry, saveThreadWorktreeRegistry, forgetThreadWorktree } from '../lib/thread-worktree-registry'
 import { notifySddChatTranscriptMirror } from '../sdd/sdd-chat-transcript'
 import { useWriteWorkspaceStore } from '../write/write-workspace-store'
@@ -396,7 +397,8 @@ export function isCodeThread(
     !isClawWorkspacePath(thread.workspace) &&
     !isClawThread(thread, clawChannels) &&
     !isWriteThreadId(thread.id, writeRegistry) &&
-    !isSddAssistantThread(thread)
+    !isSddAssistantThread(thread) &&
+    !isDesignThreadId(thread.id)
 }
 
 export function latestThread(threads: NormalizedThread[]): NormalizedThread | null {

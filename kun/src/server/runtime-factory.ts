@@ -88,6 +88,13 @@ export type KunServeRuntimeOptions = {
   modelProxyUrl?: string
   endpointFormat?: ModelEndpointFormat
   /**
+   * Extra HTTP headers merged into every default-client request (last, so
+   * they win). For providers that need more than a Bearer key — e.g. Codex
+   * sends `ChatGPT-Account-Id` + a Codex-CLI `User-Agent` with its OAuth
+   * access token.
+   */
+  headers?: Record<string, string>
+  /**
    * Extra providers the runtime can route to per request. Keyed by
    * provider id (matched against `ModelRequest.providerId`); each entry
    * supplies its own HTTP credentials. Threads created with a
@@ -176,6 +183,7 @@ export async function createKunServeRuntime(
     endpointFormat: options.endpointFormat ?? DEFAULT_MODEL_ENDPOINT_FORMAT,
     model: options.model,
     modelCapabilities,
+    headers: options.headers,
     debugSink: llmDebug,
     ...streamIdleOverride
   })
@@ -196,6 +204,7 @@ export async function createKunServeRuntime(
         endpointFormat: provider.endpointFormat ?? options.endpointFormat ?? DEFAULT_MODEL_ENDPOINT_FORMAT,
         model: options.model,
         modelCapabilities,
+        headers: provider.headers,
         debugSink: llmDebug,
         ...streamIdleOverride
       })

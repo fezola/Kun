@@ -1,10 +1,10 @@
-import type { CanvasDocument, CanvasShape } from './canvas-types'
+import type { CanvasDocument, CanvasShape, Point } from './canvas-types'
 import { ROOT_SHAPE_ID } from './canvas-types'
 
 const DESIGN_DIR = '.kun-design'
 
-export function canvasDocPath(artifactId: string): string {
-  return `${DESIGN_DIR}/${artifactId}/canvas.json`
+export function canvasDocPath(artifactId: string, baseDir: string = DESIGN_DIR): string {
+  return `${baseDir}/${artifactId}/canvas.json`
 }
 
 export function serializeCanvasDocument(doc: CanvasDocument): string {
@@ -23,7 +23,10 @@ function parseShape(raw: unknown, id: string): CanvasShape | null {
     type !== 'text' &&
     type !== 'image' &&
     type !== 'frame' &&
-    type !== 'group'
+    type !== 'group' &&
+    type !== 'arrow' &&
+    type !== 'line' &&
+    type !== 'draw'
   )
     return null
 
@@ -58,8 +61,51 @@ function parseShape(raw: unknown, id: string): CanvasShape | null {
     ...(typeof raw.lineHeight === 'number' && { lineHeight: raw.lineHeight }),
     ...(typeof raw.fontColor === 'string' && { fontColor: raw.fontColor }),
     ...(typeof raw.imageUrl === 'string' && { imageUrl: raw.imageUrl }),
-    ...(typeof raw.clipContent === 'boolean' && { clipContent: raw.clipContent })
+    ...(typeof raw.aiImageHolder === 'boolean' && { aiImageHolder: raw.aiImageHolder }),
+    ...(typeof raw.clipContent === 'boolean' && { clipContent: raw.clipContent }),
+    ...(typeof raw.htmlArtifactId === 'string' && { htmlArtifactId: raw.htmlArtifactId }),
+    ...((raw.devicePreset === 'mobile' ||
+      raw.devicePreset === 'tablet' ||
+      raw.devicePreset === 'desktop') && {
+      devicePreset: raw.devicePreset as CanvasShape['devicePreset']
+    }),
+    ...(typeof raw.arrowheadStart === 'string' && {
+      arrowheadStart: raw.arrowheadStart as CanvasShape['arrowheadStart']
+    }),
+    ...(typeof raw.arrowheadEnd === 'string' && {
+      arrowheadEnd: raw.arrowheadEnd as CanvasShape['arrowheadEnd']
+    }),
+    ...(Array.isArray(raw.points) && {
+      points: (raw.points as unknown[]).filter(
+        (p): p is Point => isObj(p) && typeof p.x === 'number' && typeof p.y === 'number'
+      )
+    })
   }
+}
+
+/**
+ * v1 → v2 migration: v1 stored a frame/group child's x/y RELATIVE to its parent
+ * (the old renderer nested children inside the parent's transform). v2 stores
+ * absolute coords. Rewrite each non-root shape's x/y to its absolute position
+ * (own coord + accumulated ancestor offsets) so visual positions are preserved.
+ */
+function flattenCoordinatesToAbsolute(
+  objects: Record<string, CanvasShape>,
+  rootId: string
+): void {
+  const walk = (id: string, offsetX: number, offsetY: number): void => {
+    const shape = objects[id]
+    if (!shape) return
+    const isRoot = id === rootId
+    const absX = isRoot ? shape.x : shape.x + offsetX
+    const absY = isRoot ? shape.y : shape.y + offsetY
+    if (!isRoot) {
+      shape.x = absX
+      shape.y = absY
+    }
+    for (const childId of shape.children) walk(childId, absX, absY)
+  }
+  walk(rootId, 0, 0)
 }
 
 export function parseCanvasDocument(raw: string): CanvasDocument | null {
@@ -70,7 +116,7 @@ export function parseCanvasDocument(raw: string): CanvasDocument | null {
     return null
   }
   if (!isObj(parsed)) return null
-  if (parsed.version !== 1) return null
+  if (parsed.version !== 1 && parsed.version !== 2) return null
   const rootId = typeof parsed.rootId === 'string' ? parsed.rootId : ROOT_SHAPE_ID
   if (!isObj(parsed.objects)) return null
 
@@ -81,12 +127,18 @@ export function parseCanvasDocument(raw: string): CanvasDocument | null {
   }
 
   if (!objects[rootId]) return null
-  return { version: 1, rootId, objects }
+  if (parsed.version === 1) flattenCoordinatesToAbsolute(objects, rootId)
+  return { version: 2, rootId, objects }
 }
 
 let _saveTimer: ReturnType<typeof setTimeout> | null = null
 
-export function persistCanvasDocument(workspaceRoot: string, artifactId: string, doc: CanvasDocument): void {
+export function persistCanvasDocument(
+  workspaceRoot: string,
+  artifactId: string,
+  doc: CanvasDocument,
+  baseDir?: string
+): void {
   if (!workspaceRoot || typeof window.kunGui?.writeWorkspaceFile !== 'function') return
 
   if (_saveTimer) clearTimeout(_saveTimer)
@@ -94,7 +146,7 @@ export function persistCanvasDocument(workspaceRoot: string, artifactId: string,
     _saveTimer = null
     void window.kunGui
       .writeWorkspaceFile({
-        path: canvasDocPath(artifactId),
+        path: canvasDocPath(artifactId, baseDir),
         workspaceRoot,
         content: serializeCanvasDocument(doc)
       })
@@ -104,12 +156,13 @@ export function persistCanvasDocument(workspaceRoot: string, artifactId: string,
 
 export async function loadCanvasDocument(
   workspaceRoot: string,
-  artifactId: string
+  artifactId: string,
+  baseDir?: string
 ): Promise<CanvasDocument | null> {
   if (!workspaceRoot || typeof window.kunGui?.readWorkspaceFile !== 'function') return null
   try {
     const result = await window.kunGui.readWorkspaceFile({
-      path: canvasDocPath(artifactId),
+      path: canvasDocPath(artifactId, baseDir),
       workspaceRoot
     })
     if (!result || !result.ok) return null

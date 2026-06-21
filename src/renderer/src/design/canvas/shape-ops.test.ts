@@ -73,6 +73,43 @@ describe('executeOps execution', () => {
     expect(doc.objects[b].x).toBe(55)
   })
 
+  it('move op carries a frame’s descendants along (absolute child coords)', () => {
+    const rf = executeOps([
+      { op: 'add', shape: { type: 'frame', x: 100, y: 100, width: 200, height: 200 } }
+    ])
+    const frameId = rf.affectedIds[0]
+    const rc = executeOps([
+      { op: 'add', shape: { type: 'rect', x: 120, y: 130, width: 40, height: 40 }, parentId: frameId }
+    ])
+    const childId = rc.affectedIds[0]
+
+    const r = executeOps([{ op: 'move', ids: [frameId], dx: 50, dy: 30 }])
+    expect(r.ok).toBe(true)
+    // Only the frame was named, but the child moved with it.
+    expect(r.affectedIds).toContain(childId)
+    const doc = useCanvasShapeStore.getState().document
+    expect(doc.objects[frameId].x).toBe(150)
+    expect(doc.objects[frameId].y).toBe(130)
+    expect(doc.objects[childId].x).toBe(170)
+    expect(doc.objects[childId].y).toBe(160)
+  })
+
+  it('move op moves a parent+child selection only once each (no double-shift)', () => {
+    const rf = executeOps([
+      { op: 'add', shape: { type: 'frame', x: 0, y: 0, width: 100, height: 100 } }
+    ])
+    const frameId = rf.affectedIds[0]
+    const rc = executeOps([
+      { op: 'add', shape: { type: 'rect', x: 10, y: 10, width: 20, height: 20 }, parentId: frameId }
+    ])
+    const childId = rc.affectedIds[0]
+    // Name both the frame and its child — the child must still shift by exactly dx/dy.
+    executeOps([{ op: 'move', ids: [frameId, childId], dx: 5, dy: 5 }])
+    const doc = useCanvasShapeStore.getState().document
+    expect(doc.objects[childId].x).toBe(15)
+    expect(doc.objects[childId].y).toBe(15)
+  })
+
   it('align op repositions multiple shapes', () => {
     const r1 = executeOps([
       { op: 'add', shape: { type: 'rect', x: 0, y: 0, width: 10, height: 10 } },

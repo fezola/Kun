@@ -9,7 +9,10 @@ import {
   Type,
   Image,
   Frame,
-  Group
+  Group,
+  ArrowUpRight,
+  Slash,
+  Pencil
 } from 'lucide-react'
 import { useCanvasShapeStore } from '../../../design/canvas/canvas-shape-store'
 import { useCanvasSelectionStore } from '../../../design/canvas/canvas-selection-store'
@@ -21,7 +24,10 @@ const TYPE_ICONS: Record<ShapeType, typeof Square> = {
   text: Type,
   image: Image,
   frame: Frame,
-  group: Group
+  group: Group,
+  arrow: ArrowUpRight,
+  line: Slash,
+  draw: Pencil
 }
 
 function LayerRow({

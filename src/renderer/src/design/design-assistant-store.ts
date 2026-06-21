@@ -1,10 +1,9 @@
 import { create } from 'zustand'
 import { getProvider } from '../agent/registry'
 import { rendererRuntimeClient } from '../agent/runtime-client'
-import { executeOps, type OpError } from './canvas/shape-ops'
-import { useCanvasShapeStore } from './canvas/canvas-shape-store'
-import { useCanvasViewportStore } from './canvas/canvas-viewport-store'
-import { shapeGeometry } from './canvas/canvas-types'
+import { type OpError } from './canvas/shape-ops'
+import { applyShapeOpsFromText } from './canvas/apply-shape-ops'
+import { focusViewportOnIds } from './canvas/canvas-focus'
 
 export type DesignMessageBlock =
   | { kind: 'user'; id: string; text: string; createdAt: string }
@@ -39,6 +38,8 @@ type DesignAssistantState = {
   appendBlock: (block: DesignMessageBlock) => void
   /** Parse an assistant message for ```shapeops``` JSON blocks and execute them. */
   applyAiShapeOps: (text: string) => { affectedIds: string[]; errors: OpError[] }
+  /** Glow + camera-focus the shapes an AI turn just touched. Safe to call from any apply path. */
+  markAiAffected: (ids: string[]) => void
 }
 
 const DESIGN_THREAD_KEY = 'kun.design-assistant.threadRegistry.v1'
@@ -70,58 +71,6 @@ function makeBlockId(): string {
   return `design-block-${++nextBlockId}`
 }
 
-/**
- * Extract every `shapeops` fenced code block from a markdown-ish string.
- * Tolerates leading/trailing whitespace inside the fence and json/array shapes.
- */
-function extractShapeOpsBlocks(text: string): unknown[][] {
-  const out: unknown[][] = []
-  const re = /```shapeops\s*([\s\S]*?)```/g
-  let m: RegExpExecArray | null
-  while ((m = re.exec(text)) !== null) {
-    const raw = m[1].trim()
-    if (!raw) continue
-    try {
-      const parsed = JSON.parse(raw)
-      if (Array.isArray(parsed)) out.push(parsed)
-      else out.push([parsed])
-    } catch {
-      // ignore malformed JSON — executor will report via Zod when called with garbage
-    }
-  }
-  return out
-}
-
-function focusViewportOnIds(ids: string[]): void {
-  if (ids.length === 0) return
-  const doc = useCanvasShapeStore.getState().document
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
-  let found = false
-  for (const id of ids) {
-    const s = doc.objects[id]
-    if (!s) continue
-    found = true
-    const sel = shapeGeometry(s).selrect
-    if (sel.x < minX) minX = sel.x
-    if (sel.y < minY) minY = sel.y
-    if (sel.x + sel.width > maxX) maxX = sel.x + sel.width
-    if (sel.y + sel.height > maxY) maxY = sel.y + sel.height
-  }
-  if (!found) return
-  const bounds = { x: minX, y: minY, width: Math.max(1, maxX - minX), height: Math.max(1, maxY - minY) }
-  const vp = useCanvasViewportStore.getState()
-  // If bounds are outside the current viewport, pan/zoom to fit.
-  const v = vp.vbox
-  const inside =
-    bounds.x >= v.x &&
-    bounds.y >= v.y &&
-    bounds.x + bounds.width <= v.x + v.width &&
-    bounds.y + bounds.height <= v.y + v.height
-  if (!inside) {
-    vp.zoomToFit(bounds, 80)
-  }
-}
-
 export const useDesignAssistantStore = create<DesignAssistantState>((set, get) => ({
   designThreadId: null,
   designBlocks: [],
@@ -147,23 +96,15 @@ export const useDesignAssistantStore = create<DesignAssistantState>((set, get) =
     set((s) => ({ designBlocks: [...s.designBlocks, block] })),
 
   applyAiShapeOps: (text) => {
-    const blocks = extractShapeOpsBlocks(text)
-    if (blocks.length === 0) return { affectedIds: [], errors: [] }
+    const { affectedIds, errors } = applyShapeOpsFromText(text)
+    if (affectedIds.length > 0) get().markAiAffected(affectedIds)
+    return { affectedIds, errors }
+  },
 
-    const allAffected: string[] = []
-    const allErrors: OpError[] = []
-    blocks.forEach((ops, i) => {
-      const result = executeOps(ops, `ai:${i}`)
-      allAffected.push(...result.affectedIds)
-      allErrors.push(...result.errors)
-    })
-
-    if (allAffected.length > 0) {
-      set({ lastAiAffectedIds: allAffected, lastAiActionAt: Date.now() })
-      focusViewportOnIds(allAffected)
-    }
-
-    return { affectedIds: allAffected, errors: allErrors }
+  markAiAffected: (ids) => {
+    if (ids.length === 0) return
+    set({ lastAiAffectedIds: ids, lastAiActionAt: Date.now() })
+    focusViewportOnIds(ids)
   },
 
   ensureDesignThread: async (workspaceRoot) => {

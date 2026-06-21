@@ -43,7 +43,7 @@ function makeUniqueName(
   return `${base} ${n}`
 }
 
-function collectDescendants(objects: Record<string, CanvasShape>, id: string): string[] {
+export function collectDescendants(objects: Record<string, CanvasShape>, id: string): string[] {
   const shape = objects[id]
   if (!shape) return []
   const result: string[] = []
@@ -52,6 +52,23 @@ function collectDescendants(objects: Record<string, CanvasShape>, id: string): s
     result.push(...collectDescendants(objects, childId))
   }
   return result
+}
+
+/**
+ * Expand a set of shape ids to include all their descendants (deduped).
+ * Used by move/drag so dragging a frame carries its children — since children
+ * store ABSOLUTE coords, they no longer follow the parent's transform for free.
+ */
+export function withDescendants(
+  objects: Record<string, CanvasShape>,
+  ids: Iterable<string>
+): string[] {
+  const out = new Set<string>()
+  for (const id of ids) {
+    out.add(id)
+    for (const descendant of collectDescendants(objects, id)) out.add(descendant)
+  }
+  return [...out]
 }
 
 function deepCloneShape(

@@ -24,6 +24,7 @@ import {
   MessageCircleMore,
   Mic,
   Minimize2,
+  Monitor,
   PauseCircle,
   Pencil,
   Plus,
@@ -104,9 +105,11 @@ import { useComposerDraft } from './use-composer-draft'
 import { useSpeechToTextSettings, useVoiceDictation } from './use-voice-dictation'
 import { VoiceRecordingStrip } from './VoiceRecordingStrip'
 import type { ComposerChangedFile } from '../../lib/composer-change-summary'
+import type { DesignComposerContext } from '../../design/design-composer-context'
 
 export type { ComposerFileReference } from '../../lib/composer-file-references'
 export type { ComposerExecutionSettings } from './FloatingComposerExecutionPicker'
+export type { DesignComposerContext } from '../../design/design-composer-context'
 
 const CONTEXT_CAPACITY_RING_SIZE = 18
 const CONTEXT_CAPACITY_RING_STROKE = 2.25
@@ -146,6 +149,7 @@ type Props = {
   attachmentUploadEnabled?: boolean
   attachmentUploadBusy?: boolean
   attachmentUploadError?: string | null
+  contextChips?: DesignComposerContext[]
   fileReferenceEnabled?: boolean
   fileReferences?: ComposerFileReference[]
   webAccessAvailable?: boolean
@@ -170,6 +174,7 @@ type Props = {
   onPickAttachments?: (files: File[]) => void
   onPasteClipboardImage?: (options?: { silentNoImage?: boolean }) => void | Promise<void>
   onRemoveAttachment?: (id: string) => void
+  onRemoveContextChip?: (id: string) => void
   onAddFileReference?: (reference: ComposerFileReference) => void
   onRemoveFileReference?: (relativePath: string) => void
   onSend: () => void
@@ -208,6 +213,7 @@ type SkillCommand = NonNullable<Props['skillCommands']>[number]
 const EMPTY_CONTEXT_BLOCKS: ChatBlock[] = []
 const EMPTY_MODEL_GROUPS: ModelProviderModelGroup[] = []
 const EMPTY_ATTACHMENTS: AttachmentReference[] = []
+const EMPTY_CONTEXT_CHIPS: DesignComposerContext[] = []
 const EMPTY_FILE_REFERENCES: ComposerFileReference[] = []
 const EMPTY_CHANGED_FILES: ComposerChangedFile[] = []
 const EMPTY_SKILL_COMMANDS: SkillCommand[] = []
@@ -468,6 +474,7 @@ export function FloatingComposer({
   attachmentUploadEnabled = false,
   attachmentUploadBusy = false,
   attachmentUploadError = null,
+  contextChips = EMPTY_CONTEXT_CHIPS,
   fileReferenceEnabled = false,
   fileReferences = EMPTY_FILE_REFERENCES,
   executionSettings = null,
@@ -479,6 +486,7 @@ export function FloatingComposer({
   onPickAttachments,
   onPasteClipboardImage,
   onRemoveAttachment,
+  onRemoveContextChip,
   onAddFileReference,
   onRemoveFileReference,
   onSend,
@@ -1985,6 +1993,41 @@ export function FloatingComposer({
                   ) : null}
                 </div>
               </div>
+            </div>
+          ) : null}
+          {contextChips.length > 0 ? (
+            <div className="flex flex-wrap items-center gap-2 px-1">
+              {contextChips.map((chip) => {
+                const Icon = chip.kind === 'canvas-selection' ? Target : Monitor
+                const title = chip.detail ? `${chip.label} - ${chip.detail}` : chip.label
+                const removable = chip.removable !== false && Boolean(onRemoveContextChip)
+                return (
+                  <span
+                    key={chip.id}
+                    className="ds-no-drag inline-flex h-7 max-w-full items-center gap-1.5 rounded-lg border border-accent/25 bg-accent/10 px-2 text-[12px] font-medium text-ds-muted"
+                    title={title}
+                  >
+                    <Icon className="h-3.5 w-3.5 shrink-0 text-accent" strokeWidth={1.8} />
+                    <span className="max-w-52 truncate text-ds-ink">{chip.label}</span>
+                    {chip.detail ? (
+                      <span className="hidden max-w-44 truncate text-ds-faint sm:inline">
+                        {chip.detail}
+                      </span>
+                    ) : null}
+                    {removable ? (
+                      <button
+                        type="button"
+                        onClick={() => onRemoveContextChip?.(chip.id)}
+                        className="rounded-full p-0.5 text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink"
+                        aria-label={t('composerRemoveContext', 'Remove context')}
+                        title={t('composerRemoveContext', 'Remove context')}
+                      >
+                        <X className="h-3 w-3" strokeWidth={2} />
+                      </button>
+                    ) : null}
+                  </span>
+                )
+              })}
             </div>
           ) : null}
           <textarea

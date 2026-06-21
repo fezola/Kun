@@ -9,13 +9,22 @@ import {
   reconstructArtifact
 } from './design-artifact-persistence'
 import { hashDesignSystem } from './design-context'
-import { createDesignArtifactId } from './design-types'
+import { createDesignArtifactId, defaultDesignArtifactNode } from './design-types'
 import type { DesignArtifact, DesignCanvasView, DesignViewport } from './design-types'
 import type { DesignWorkspaceState } from './design-workspace-store-types'
 
 const CANVAS_VIEW_KEY = 'kun.design.canvasView.v1'
 const VIEWPORT_KEY = 'kun.design.viewport.v1'
 const AI_RAIL_COLLAPSED_KEY = 'kun.design.aiRailCollapsed.v1'
+const CANVAS_ASSISTANT_OPEN_KEY = 'kun.design.canvasAssistantOpen.v1'
+const CANVAS_INSPECTOR_PINNED_KEY = 'kun.design.canvasInspectorPinned.v1'
+const ASSISTANT_MODEL_KEY = 'kun.design.assistantModel.v1'
+const ASSISTANT_PROVIDER_KEY = 'kun.design.assistantProvider.v1'
+
+function builtinDesignWorkspaceRoot(): string {
+  const homeDir = typeof window !== 'undefined' ? (window.kunGui?.homeDir ?? '') : ''
+  return homeDir ? `${homeDir}/.kun/design-workspace` : ''
+}
 
 /**
  * Ids removed this session, filtered out of rehydration so a not-yet-flushed
@@ -36,6 +45,25 @@ function readPersistedAiRailCollapsed(): boolean {
   return readBrowserStorageItem(AI_RAIL_COLLAPSED_KEY) === '1'
 }
 
+function readPersistedCanvasAssistantOpen(): boolean {
+  const value = readBrowserStorageItem(CANVAS_ASSISTANT_OPEN_KEY)
+  if (value === '1') return true
+  if (value === '0') return false
+  return !readPersistedAiRailCollapsed()
+}
+
+function readPersistedCanvasInspectorPinned(): boolean {
+  return readBrowserStorageItem(CANVAS_INSPECTOR_PINNED_KEY) === '1'
+}
+
+function readPersistedAssistantModel(): string {
+  return readBrowserStorageItem(ASSISTANT_MODEL_KEY)?.trim() ?? ''
+}
+
+function readPersistedAssistantProvider(): string {
+  return readBrowserStorageItem(ASSISTANT_PROVIDER_KEY)?.trim() ?? ''
+}
+
 export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) => ({
   workspaceRoot: '',
   artifacts: [],
@@ -43,8 +71,8 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
   canvasView: readPersistedCanvasView(),
   viewport: readPersistedViewport(),
   devPreviewUrl: '',
-  assistantModel: '',
-  assistantProviderId: '',
+  assistantModel: readPersistedAssistantModel(),
+  assistantProviderId: readPersistedAssistantProvider(),
   designContext: {},
   canvasBackground: 'light',
   liveRefresh: true,
@@ -60,6 +88,9 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
   implementOpen: false,
   implementTitle: '',
   aiRailCollapsed: readPersistedAiRailCollapsed(),
+  canvasAssistantOpen: readPersistedCanvasAssistantOpen(),
+  canvasInspectorPinned: readPersistedCanvasInspectorPinned(),
+  designIntentMode: 'generate',
 
   setWorkspaceRoot: (workspaceRoot) => set({ workspaceRoot }),
 
@@ -77,17 +108,21 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
 
   setCanvasBackground: (background) => set({ canvasBackground: background }),
 
-  setActiveArtifact: (artifactId) => set({ activeArtifactId: artifactId }),
+  setActiveArtifact: (artifactId) => set({ activeArtifactId: artifactId, fileError: null }),
 
   upsertArtifact: (artifact) => {
     set((state) => {
       const exists = state.artifacts.some((item) => item.id === artifact.id)
+      const nextArtifact = artifact.node
+        ? artifact
+        : { ...artifact, node: defaultDesignArtifactNode(state.artifacts.length) }
       const artifacts = exists
-        ? state.artifacts.map((item) => (item.id === artifact.id ? artifact : item))
-        : [artifact, ...state.artifacts]
-      return { artifacts, activeArtifactId: artifact.id }
+        ? state.artifacts.map((item) => (item.id === artifact.id ? nextArtifact : item))
+        : [nextArtifact, ...state.artifacts]
+      return { artifacts, activeArtifactId: nextArtifact.id }
     })
-    persistArtifactMeta(get().workspaceRoot, artifact)
+    const updated = get().artifacts.find((item) => item.id === artifact.id)
+    if (updated) persistArtifactMeta(get().workspaceRoot, updated)
   },
 
   addArtifactVersion: (artifactId, version) => {
@@ -147,18 +182,101 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
     if (updated) persistArtifactMeta(get().workspaceRoot, updated)
   },
 
+  updateArtifactNode: (artifactId, patch) => {
+    set((state) => ({
+      artifacts: state.artifacts.map((item, index) => {
+        if (item.id !== artifactId) return item
+        const current = item.node ?? defaultDesignArtifactNode(index)
+        return {
+          ...item,
+          node: {
+            ...current,
+            ...patch,
+            width: Math.max(240, patch.width ?? current.width),
+            height: Math.max(180, patch.height ?? current.height)
+          }
+        }
+      })
+    }))
+    const updated = get().artifacts.find((item) => item.id === artifactId)
+    if (updated) persistArtifactMeta(get().workspaceRoot, updated)
+  },
+
+  duplicateArtifact: async (artifactId) => {
+    const state = get()
+    const source = state.artifacts.find((item) => item.id === artifactId)
+    const workspaceRoot = state.workspaceRoot
+    if (
+      !source ||
+      source.kind !== 'html' ||
+      !workspaceRoot ||
+      typeof window.kunGui?.readWorkspaceFile !== 'function' ||
+      typeof window.kunGui?.writeWorkspaceFile !== 'function'
+    ) {
+      return
+    }
+    const read = await window.kunGui
+      .readWorkspaceFile({ path: source.relativePath, workspaceRoot })
+      .catch(() => null)
+    if (!read || !read.ok) return
+    const createdAt = new Date().toISOString()
+    const copyId = createDesignArtifactId()
+    const relativePath = `.kun-design/${copyId}/v1.html`
+    const write = await window.kunGui
+      .writeWorkspaceFile({ path: relativePath, workspaceRoot, content: read.content })
+      .catch(() => null)
+    if (!write || !write.ok) return
+    const sourceNode = source.node ?? defaultDesignArtifactNode(state.artifacts.findIndex((item) => item.id === source.id))
+    get().upsertArtifact({
+      id: copyId,
+      kind: 'html',
+      title: `${source.title} copy`,
+      relativePath,
+      createdAt,
+      updatedAt: createdAt,
+      versions: [{ id: `${copyId}-v1`, relativePath, createdAt, summary: source.versions[0]?.summary ?? '' }],
+      node: {
+        ...sourceNode,
+        x: sourceNode.x + 44,
+        y: sourceNode.y + 44
+      }
+    })
+  },
+
+  selectArtifactVersion: (artifactId, versionId) => {
+    set((state) => ({
+      artifacts: state.artifacts.map((item) => {
+        if (item.id !== artifactId) return item
+        const version = item.versions.find((candidate) => candidate.id === versionId)
+        if (!version) return item
+        return {
+          ...item,
+          relativePath: version.relativePath,
+          updatedAt: version.createdAt
+        }
+      })
+    }))
+    const updated = get().artifacts.find((item) => item.id === artifactId)
+    if (updated) persistArtifactMeta(get().workspaceRoot, updated)
+  },
+
+  setDesignIntentMode: (mode) => set({ designIntentMode: mode }),
+
   setFileError: (error) => set({ fileError: error }),
 
   openImplementPanel: (title) => set({ implementOpen: true, implementTitle: title }),
 
   closeImplementPanel: () => set({ implementOpen: false }),
 
-  prepareHtmlTurn: (brief) => {
+  prepareHtmlTurn: (brief, options = {}) => {
     const text = brief.trim()
     const state = get()
     const active = state.artifacts.find((item) => item.id === state.activeArtifactId) ?? null
+    const target = options.artifactId
+      ? state.artifacts.find((item) => item.id === options.artifactId) ?? null
+      : active
     // Only HTML artifacts can be iterated; a canvas/other active artifact starts a fresh draft.
-    const activeHtml = active?.kind === 'html' ? active : null
+    const activeHtml = !options.forceNew && target?.kind === 'html' ? target : null
     const createdAt = new Date().toISOString()
 
     if (activeHtml) {
@@ -170,6 +288,7 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
         createdAt,
         summary: text
       })
+      if (options.activate !== false) set({ activeArtifactId: activeHtml.id })
       return { relativePath, basePath: activeHtml.relativePath }
     }
 
@@ -183,18 +302,36 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
       relativePath,
       createdAt,
       updatedAt: createdAt,
-      versions: [{ id: `${artifactId}-v1`, relativePath, createdAt, summary: text }]
+      versions: [{ id: `${artifactId}-v1`, relativePath, createdAt, summary: text }],
+      node: defaultDesignArtifactNode(state.artifacts.length)
     })
     return { relativePath }
   },
 
   setAiRailCollapsed: (collapsed) => {
     writeBrowserStorageItem(AI_RAIL_COLLAPSED_KEY, collapsed ? '1' : '0')
-    set({ aiRailCollapsed: collapsed })
+    writeBrowserStorageItem(CANVAS_ASSISTANT_OPEN_KEY, collapsed ? '0' : '1')
+    set({ aiRailCollapsed: collapsed, canvasAssistantOpen: !collapsed })
   },
 
-  setAssistantModel: (model, providerId) =>
-    set({ assistantModel: model, assistantProviderId: providerId ?? '' }),
+  setCanvasAssistantOpen: (open) => {
+    writeBrowserStorageItem(CANVAS_ASSISTANT_OPEN_KEY, open ? '1' : '0')
+    writeBrowserStorageItem(AI_RAIL_COLLAPSED_KEY, open ? '0' : '1')
+    set({ canvasAssistantOpen: open, aiRailCollapsed: !open })
+  },
+
+  setCanvasInspectorPinned: (pinned) => {
+    writeBrowserStorageItem(CANVAS_INSPECTOR_PINNED_KEY, pinned ? '1' : '0')
+    set({ canvasInspectorPinned: pinned })
+  },
+
+  setAssistantModel: (model, providerId) => {
+    const normalized = model.trim()
+    const normalizedProvider = (providerId ?? '').trim()
+    writeBrowserStorageItem(ASSISTANT_MODEL_KEY, normalized)
+    writeBrowserStorageItem(ASSISTANT_PROVIDER_KEY, normalizedProvider)
+    set({ assistantModel: normalized, assistantProviderId: normalizedProvider })
+  },
 
   updateDesignContext: (patch) =>
     set((state) => ({ designContext: { ...state.designContext, ...patch } })),
@@ -207,7 +344,7 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
       const hasStoredView = readBrowserStorageItem(CANVAS_VIEW_KEY) !== null
       set((state) => ({
         settingsLoaded: true,
-        workspaceRoot: state.workspaceRoot || design.defaultWorkspaceRoot || settings.workspaceRoot || '',
+        workspaceRoot: state.workspaceRoot || design.defaultWorkspaceRoot || builtinDesignWorkspaceRoot() || '',
         assistantModel: state.assistantModel || design.model,
         assistantProviderId: state.assistantProviderId || design.providerId,
         canvasBackground: design.canvasBackground,
@@ -276,7 +413,10 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
       if (fresh.length === 0) return {}
       const artifacts = [...state.artifacts, ...fresh].sort(
         (a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id)
-      )
+      ).map((item, index) => ({
+        ...item,
+        node: item.node ?? defaultDesignArtifactNode(index)
+      }))
       return { artifacts }
     })
   },

@@ -4,8 +4,10 @@ import {
   ChevronDown,
   ChevronUp,
   Copy,
-  Download
+  Download,
+  Shapes
 } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import {
   isValidElement,
   memo,
@@ -352,11 +354,51 @@ function CodeComponent({ node, className, children, ...props }: CodeProps) {
   const match = className?.match(LANGUAGE_REGEX)
   const language = match?.[1] ?? ''
 
+  if (language === 'shapeops') {
+    return <ShapeOpsChip code={text} />
+  }
+
   if (isPlainTextLanguage(language)) {
     return <PlainTextBlock code={text} />
   }
 
   return <CodeBlock code={text} language={language} />
+}
+
+/**
+ * Renders an agent's ```shapeops``` block as a compact chip instead of raw JSON.
+ * The ops drive the code-mode canvas; click to inspect the underlying batch.
+ */
+function ShapeOpsChip({ code }: { code: string }): ReactNode {
+  const { t } = useTranslation('common')
+  const [expanded, setExpanded] = useState(false)
+  const count = useMemo(() => {
+    try {
+      const parsed = JSON.parse(code)
+      return Array.isArray(parsed) ? parsed.length : 1
+    } catch {
+      return null
+    }
+  }, [code])
+
+  return (
+    <div className="my-1.5">
+      <button
+        type="button"
+        onClick={() => setExpanded((value) => !value)}
+        className="inline-flex items-center gap-1.5 rounded-full border border-accent/30 bg-accent/10 px-2.5 py-1 text-[12px] font-medium text-accent transition hover:bg-accent/15"
+      >
+        <Shapes className="h-3.5 w-3.5" strokeWidth={1.9} />
+        {count === null ? t('canvasOpsApplied') : t('canvasOpsAppliedCount', { count })}
+        {expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+      </button>
+      {expanded ? (
+        <div className="mt-1.5">
+          <CodeBlock code={code} language="json" />
+        </div>
+      ) : null}
+    </div>
+  )
 }
 
 const MemoCode = memo(CodeComponent, (prev, next) => {

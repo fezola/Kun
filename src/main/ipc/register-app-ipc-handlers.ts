@@ -99,6 +99,7 @@ import { probeModelProvider } from '../provider-connection'
 import type { ClawRuntime } from '../claw-runtime'
 import type { ScheduleRuntime } from '../schedule-runtime'
 import { verifyTelegramBotToken } from '../telegram-runtime'
+import { startCodexDeviceAuth, pollCodexDeviceAuth, startCodexBrowserAuth } from '../codex-auth'
 import type { WorkflowRuntime } from '../workflow-runtime'
 import { checkWorkflowCode } from '../workflow-runtime'
 import {
@@ -694,6 +695,25 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       return verifyTelegramBotToken(request.botToken)
     }
   )
+
+  ipcMain.handle('codex:auth:start', async () => {
+    return startCodexDeviceAuth()
+  })
+
+  ipcMain.handle('codex:auth:poll', async (_, payload: unknown) => {
+    const request = parseIpcPayload(
+      'codex:auth:poll',
+      z.object({ deviceCode: z.string().min(1), userCode: z.string().min(1) }).strict(),
+      payload
+    )
+    return pollCodexDeviceAuth(request.deviceCode, request.userCode)
+  })
+
+  ipcMain.handle('codex:auth:browser', async () => {
+    return startCodexBrowserAuth(async (url: string) => {
+      await shell.openExternal(url)
+    })
+  })
 
   ipcMain.handle('workspace:pick-directory', async (_, defaultPath: unknown): Promise<WorkspacePickResult> => {
     const normalizedDefaultPath = parseIpcPayload(

@@ -5,7 +5,7 @@
  *
  * The id is still included so the AI can target shapes precisely in ShapeOps.
  */
-import type { CanvasDocument, CanvasShape } from './canvas-types'
+import type { CanvasDocument, CanvasShape, Point } from './canvas-types'
 
 export type CanvasSnapshotShape = {
   id: string
@@ -18,6 +18,13 @@ export type CanvasSnapshotShape = {
   rotation?: number
   parentName: string | null
   textContent?: string
+  htmlArtifactId?: string
+  /** True when this shape is in the user's current selection (what "this"/"here" refers to). */
+  selected?: boolean
+  /** True when this shape is an empty AI image slot the agent should fill on request. */
+  aiImageHolder?: boolean
+  /** Linear shapes only: vertices in ABSOLUTE canvas coords. */
+  points?: Point[]
 }
 
 export type CanvasSnapshot = {
@@ -25,7 +32,10 @@ export type CanvasSnapshot = {
   shapes: CanvasSnapshotShape[]
 }
 
-export function snapshotCanvas(doc: CanvasDocument): CanvasSnapshot {
+export function snapshotCanvas(
+  doc: CanvasDocument,
+  selectedIds?: ReadonlySet<string>
+): CanvasSnapshot {
   const { objects, rootId } = doc
   const shapes: CanvasSnapshotShape[] = []
   const seen = new Set<string>()
@@ -48,7 +58,13 @@ export function snapshotCanvas(doc: CanvasDocument): CanvasSnapshot {
         h: round(s.height),
         ...(s.rotation ? { rotation: round(s.rotation) } : {}),
         parentName,
-        ...(s.textContent ? { textContent: s.textContent.slice(0, 120) } : {})
+        ...(s.textContent ? { textContent: s.textContent.slice(0, 120) } : {}),
+        ...(s.htmlArtifactId ? { htmlArtifactId: s.htmlArtifactId } : {}),
+        ...(selectedIds?.has(s.id) ? { selected: true } : {}),
+        ...(s.aiImageHolder ? { aiImageHolder: true } : {}),
+        ...(s.points && s.points.length > 0
+          ? { points: s.points.map((p) => ({ x: round(s.x + p.x), y: round(s.y + p.y) })) }
+          : {})
       })
       if (s.children.length > 0) walk(s.id, s.name)
     }

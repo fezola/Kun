@@ -1,11 +1,43 @@
-import type { CanvasDocument, CanvasShape, Rect } from './canvas-types'
+import type { CanvasDocument, CanvasShape, Point, Rect } from './canvas-types'
 import { pointInPolygon, shapeGeometry } from './canvas-types'
+
+/** Shortest distance from point (px,py) to a line segment (a→b). */
+function distanceToSegment(px: number, py: number, a: Point, b: Point): number {
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  const lenSq = dx * dx + dy * dy
+  if (lenSq === 0) return Math.hypot(px - a.x, py - a.y)
+  let t = ((px - a.x) * dx + (py - a.y) * dy) / lenSq
+  t = Math.max(0, Math.min(1, t))
+  return Math.hypot(px - (a.x + t * dx), py - (a.y + t * dy))
+}
+
+function distanceToPolyline(px: number, py: number, points: Point[]): number {
+  let min = Infinity
+  for (let i = 0; i < points.length - 1; i++) {
+    const d = distanceToSegment(px, py, points[i], points[i + 1])
+    if (d < min) min = d
+  }
+  return min
+}
 
 function shapeHits(shape: CanvasShape, px: number, py: number): boolean {
   if (!shape.visible || shape.locked) return false
   const geom = shapeGeometry(shape)
-  // selrect early-out (axis-aligned coarse filter)
   const s = geom.selrect
+
+  // Linear shapes (arrow/line/draw): hit by proximity to the stroke, not the
+  // bbox — a thin diagonal or freehand stroke otherwise grabs its whole box.
+  const pts = shape.points
+  if (pts && pts.length >= 2) {
+    const tol = Math.max(8, (shape.strokes[0]?.width ?? 2) + 6)
+    if (px < s.x - tol || px > s.x + s.width + tol || py < s.y - tol || py > s.y + s.height + tol) {
+      return false
+    }
+    return distanceToPolyline(px - shape.x, py - shape.y, pts) <= tol
+  }
+
+  // selrect early-out (axis-aligned coarse filter)
   if (px < s.x || px > s.x + s.width || py < s.y || py > s.y + s.height) return false
   // For unrotated shapes the selrect IS the shape — the coarse check above was exact.
   if (!shape.rotation) return true

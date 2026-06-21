@@ -43,6 +43,12 @@ const api = {
     ipcRenderer.invoke('claw:im-install:poll', { provider, deviceCode }),
   connectTelegramBot: (botToken, allowedChatIds) =>
     ipcRenderer.invoke('claw:im-install:telegram-token', { botToken, allowedChatIds }),
+  startCodexAuth: () =>
+    ipcRenderer.invoke('codex:auth:start'),
+  pollCodexAuth: (deviceCode, userCode) =>
+    ipcRenderer.invoke('codex:auth:poll', { deviceCode, userCode }),
+  startCodexBrowserAuth: () =>
+    ipcRenderer.invoke('codex:auth:browser'),
   pickWorkspaceDirectory: (defaultPath) =>
     ipcRenderer.invoke('workspace:pick-directory', defaultPath),
   confirmDialog: (options) =>

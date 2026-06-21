@@ -1,5 +1,5 @@
 import { useCanvasSelectionStore } from '../canvas-selection-store'
-import { useCanvasShapeStore } from '../canvas-shape-store'
+import { useCanvasShapeStore, withDescendants } from '../canvas-shape-store'
 import { useCanvasUndoStore } from '../canvas-undo-store'
 import { useCanvasViewportStore } from '../canvas-viewport-store'
 import { hitTest, hitTestAll, getSelectionBounds } from '../canvas-hit-test'
@@ -36,7 +36,9 @@ export function createSelectTool(): CanvasToolHandler {
         dragStartY = e.canvasY
         dragShapeStartPositions = new Map()
         const ids = useCanvasSelectionStore.getState().selectedIds
-        for (const id of ids) {
+        // Move the selection AND its descendants: children store absolute coords,
+        // so a frame no longer drags its contents along via the parent transform.
+        for (const id of withDescendants(doc.objects, ids)) {
           const shape = doc.objects[id]
           if (shape) {
             dragShapeStartPositions.set(id, {
@@ -47,6 +49,8 @@ export function createSelectTool(): CanvasToolHandler {
             })
           }
         }
+        // Snap against the user-visible selection bbox only (a frame's bbox
+        // already encloses its children), not the expanded descendant set.
         dragCollectiveStart = getSelectionBounds(doc.objects, ids)
       } else {
         if (!e.shiftKey && !e.metaKey && !e.ctrlKey) {

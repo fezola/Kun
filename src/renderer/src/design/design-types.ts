@@ -6,6 +6,8 @@ export type DesignCanvasView = 'preview' | 'code' | 'live'
 
 export type DesignViewport = 'mobile' | 'tablet' | 'desktop'
 
+export type DesignIntentMode = 'generate' | 'modify' | 'preview'
+
 /** Pixel width applied to the canvas wrapper per viewport; null = full width. */
 export const DESIGN_VIEWPORT_WIDTHS: Record<DesignViewport, number | null> = {
   mobile: 390,
@@ -22,6 +24,16 @@ export type DesignArtifactVersion = {
   summary: string
 }
 
+export type DesignArtifactNode = {
+  x: number
+  y: number
+  width: number
+  height: number
+  sizeMode?: 'auto' | 'manual'
+  favorite?: boolean
+  viewMode?: DesignCanvasView
+}
+
 export type DesignArtifact = {
   id: string
   kind: DesignArtifactKind
@@ -31,12 +43,31 @@ export type DesignArtifact = {
   createdAt: string
   updatedAt: string
   versions: DesignArtifactVersion[]
+  /** Optional Stitch-style project-canvas placement metadata. */
+  node?: DesignArtifactNode
   /** ISO time the design was handed to code; absent = not implemented yet. */
   implementedAt?: string
   /** Code thread that implemented it (provenance). */
   implementedThreadId?: string
   /** Hash of the DESIGN_SYSTEM.md published at implement time (code-drift baseline). */
   implementedDesignSystemHash?: string
+}
+
+export const DESIGN_ARTIFACT_NODE_DEFAULT_WIDTH = 420
+export const DESIGN_ARTIFACT_NODE_DEFAULT_HEIGHT = 340
+
+export function defaultDesignArtifactNode(index: number): DesignArtifactNode {
+  const safeIndex = Math.max(0, index)
+  const col = safeIndex % 3
+  const row = Math.floor(safeIndex / 3)
+  return {
+    x: 160 + col * 500,
+    y: 150 + row * 430,
+    width: DESIGN_ARTIFACT_NODE_DEFAULT_WIDTH,
+    height: DESIGN_ARTIFACT_NODE_DEFAULT_HEIGHT,
+    sizeMode: 'auto',
+    viewMode: 'preview'
+  }
 }
 
 /** Short, collision-resistant id for a design artifact directory. */

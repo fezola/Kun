@@ -206,6 +206,23 @@ export type ClawImInstallPollResult =
   | { done: true; kind: 'feishu'; appId: string; appSecret: string; domain: string }
   | { done: true; kind: 'weixin'; accountId: string; sessionKey: string }
   | { done: false; error?: string }
+export type CodexAuthStartResult =
+  | { ok: true; url: string; deviceCode: string; userCode: string; interval: number }
+  | { ok: false; message: string }
+export type CodexOAuthCredentials = {
+  kind: 'codex-oauth'
+  accessToken: string
+  refreshToken: string
+  expiresAt: number
+  accountId: string
+  email?: string
+}
+export type CodexAuthPollResult =
+  | { done: true; credentials: CodexOAuthCredentials }
+  | { done: false; error?: string }
+export type CodexBrowserAuthResult =
+  | { ok: true; credentials: CodexOAuthCredentials }
+  | { ok: false; message: string }
 export type ClawImTelegramConnectErrorCode = 'invalid_format' | 'rejected' | 'network' | 'unknown'
 export type ClawImTelegramConnectResult =
   | { ok: true; botId: number; botUsername: string; botFirstName: string }
@@ -305,6 +322,9 @@ export type KunGuiApi = {
     botToken: string,
     allowedChatIds?: string
   ) => Promise<ClawImTelegramConnectResult>
+  startCodexAuth: () => Promise<CodexAuthStartResult>
+  pollCodexAuth: (deviceCode: string, userCode: string) => Promise<CodexAuthPollResult>
+  startCodexBrowserAuth: () => Promise<CodexBrowserAuthResult>
   pickWorkspaceDirectory: (defaultPath?: string) => Promise<WorkspacePickResult>
   confirmDialog: (options: ConfirmDialogOptions) => Promise<boolean>
   /** Detect importable conversations from a previous DeepSeek GUI install. */

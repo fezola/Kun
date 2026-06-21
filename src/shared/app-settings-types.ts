@@ -34,7 +34,7 @@ export type ClawModel = 'auto' | ScheduleModel
 
 export const DEFAULT_DEEPSEEK_BASE_URL = 'https://api.deepseek.com'
 export const CUSTOM_IMAGE_GENERATION_PROVIDER_ID = 'custom'
-export const IMAGE_GENERATION_PROTOCOLS = ['openai-images', 'minimax-image'] as const
+export const IMAGE_GENERATION_PROTOCOLS = ['openai-images', 'minimax-image', 'codex-responses-image'] as const
 export type ImageGenerationProtocol = (typeof IMAGE_GENERATION_PROTOCOLS)[number]
 export const DEFAULT_IMAGE_GENERATION_PROTOCOL: ImageGenerationProtocol = 'openai-images'
 export const CUSTOM_SPEECH_TO_TEXT_PROVIDER_ID = 'custom'

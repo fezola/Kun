@@ -7,9 +7,9 @@
  * self-correct in one turn instead of throwing.
  */
 import { z } from 'zod'
-import type { CanvasShape, ShapeType } from './canvas-types'
-import { createDefaultShape } from './canvas-types'
-import { useCanvasShapeStore } from './canvas-shape-store'
+import type { CanvasShape, Point, ShapeType } from './canvas-types'
+import { createDefaultShape, createHtmlFrameShape, type DevicePreset } from './canvas-types'
+import { useCanvasShapeStore, withDescendants } from './canvas-shape-store'
 import { useCanvasUndoStore } from './canvas-undo-store'
 import {
   alignShapes,
@@ -18,7 +18,21 @@ import {
   type DistributeAxis
 } from './canvas-align'
 
-const ShapeTypeSchema = z.enum(['rect', 'ellipse', 'text', 'image', 'frame', 'group'])
+import { getScreenArtifactFactory } from './screen-artifact-bridge'
+
+const ShapeTypeSchema = z.enum([
+  'rect',
+  'ellipse',
+  'text',
+  'image',
+  'frame',
+  'group',
+  'arrow',
+  'line',
+  'draw'
+])
+
+const PointSchema = z.object({ x: z.number(), y: z.number() })
 
 const FillSchema = z.object({
   type: z.literal('solid'),
@@ -30,8 +44,11 @@ const StrokeSchema = z.object({
   color: z.string(),
   width: z.number().min(0),
   opacity: z.number().min(0).max(1),
-  position: z.enum(['center', 'inside', 'outside'])
+  position: z.enum(['center', 'inside', 'outside']),
+  dash: z.enum(['solid', 'dashed', 'dotted']).optional()
 })
+
+const ArrowheadSchema = z.enum(['none', 'arrow', 'triangle', 'circle', 'bar', 'diamond'])
 
 const PartialShapeSchema = z
   .object({
@@ -50,7 +67,12 @@ const PartialShapeSchema = z
     fontSize: z.number().positive().optional(),
     fontFamily: z.string().optional(),
     fontWeight: z.number().min(100).max(900).optional(),
-    fontColor: z.string().optional()
+    fontColor: z.string().optional(),
+    imageUrl: z.string().optional(),
+    aiImageHolder: z.boolean().optional(),
+    points: z.array(PointSchema).optional(),
+    arrowheadStart: ArrowheadSchema.optional(),
+    arrowheadEnd: ArrowheadSchema.optional()
   })
   .strict()
 
@@ -71,6 +93,11 @@ const PatchSchema = z
     fontFamily: z.string().optional(),
     fontWeight: z.number().min(100).max(900).optional(),
     fontColor: z.string().optional(),
+    imageUrl: z.string().optional(),
+    aiImageHolder: z.boolean().optional(),
+    points: z.array(PointSchema).optional(),
+    arrowheadStart: ArrowheadSchema.optional(),
+    arrowheadEnd: ArrowheadSchema.optional(),
     visible: z.boolean().optional(),
     locked: z.boolean().optional()
   })
@@ -104,6 +131,15 @@ export const ShapeOpSchema = z.discriminatedUnion('op', [
     op: z.literal('distribute'),
     ids: z.array(z.string()).min(3),
     axis: z.enum(['horizontal', 'vertical'])
+  }),
+  z.object({
+    op: z.literal('add-screen'),
+    name: z.string(),
+    x: z.number().optional(),
+    y: z.number().optional(),
+    width: z.number().positive().optional(),
+    height: z.number().positive().optional(),
+    devicePreset: z.enum(['mobile', 'tablet', 'desktop']).optional()
   })
 ])
 
@@ -142,6 +178,39 @@ function suggestionForMissingId(missing: string): string {
   return `Available shapes: ${names.join(', ')}`
 }
 
+const LINEAR_TYPES = new Set<ShapeType>(['arrow', 'line', 'draw'])
+
+/**
+ * Ops supply linear `points` in ABSOLUTE canvas coords (natural for the AI).
+ * Convert them to the stored form: bounding box in x/y/width/height + points
+ * relative to that box (matching how the drawing tools persist).
+ */
+function bboxRelative(pts: Point[]): {
+  x: number
+  y: number
+  width: number
+  height: number
+  points: Point[]
+} {
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  for (const p of pts) {
+    if (p.x < minX) minX = p.x
+    if (p.y < minY) minY = p.y
+    if (p.x > maxX) maxX = p.x
+    if (p.y > maxY) maxY = p.y
+  }
+  return {
+    x: minX,
+    y: minY,
+    width: maxX - minX,
+    height: maxY - minY,
+    points: pts.map((p) => ({ x: p.x - minX, y: p.y - minY }))
+  }
+}
+
 function executeOne(op: ShapeOp, affectedIds: Set<string>, errors: OpError[]): void {
   const store = useCanvasShapeStore.getState()
   switch (op.op) {
@@ -156,12 +225,16 @@ function executeOne(op: ShapeOp, affectedIds: Set<string>, errors: OpError[]): v
       delete (overrides as Record<string, unknown>).x
       delete (overrides as Record<string, unknown>).y
       Object.assign(base, overrides)
+      if (LINEAR_TYPES.has(base.type) && base.points && base.points.length > 0) {
+        Object.assign(base, bboxRelative(base.points))
+      }
       store.addShape(base, op.parentId)
       affectedIds.add(base.id)
       break
     }
     case 'update': {
-      if (!findShape(op.id)) {
+      const existing = findShape(op.id)
+      if (!existing) {
         errors.push({
           code: 'SHAPE_NOT_FOUND',
           message: `No shape with id "${op.id}"`,
@@ -169,7 +242,13 @@ function executeOne(op: ShapeOp, affectedIds: Set<string>, errors: OpError[]): v
         })
         return
       }
-      store.updateShape(op.id, op.patch)
+      {
+        const patch: Partial<CanvasShape> = { ...op.patch }
+        if (LINEAR_TYPES.has(existing.type) && patch.points && patch.points.length > 0) {
+          Object.assign(patch, bboxRelative(patch.points))
+        }
+        store.updateShape(op.id, patch)
+      }
       affectedIds.add(op.id)
       break
     }
@@ -200,12 +279,18 @@ function executeOne(op: ShapeOp, affectedIds: Set<string>, errors: OpError[]): v
       break
     }
     case 'move': {
-      for (const id of op.ids) {
+      // Validate the explicitly-named ids, then move them AND their descendants
+      // by the same delta — children store absolute coords, so a frame's move
+      // must carry them along (deduped so an id named twice moves once).
+      const present = op.ids.filter((id) => {
+        if (findShape(id)) return true
+        errors.push({ code: 'SHAPE_NOT_FOUND', message: `No shape "${id}"` })
+        return false
+      })
+      const objects = useCanvasShapeStore.getState().document.objects
+      for (const id of withDescendants(objects, present)) {
         const s = findShape(id)
-        if (!s) {
-          errors.push({ code: 'SHAPE_NOT_FOUND', message: `No shape "${id}"` })
-          continue
-        }
+        if (!s) continue
         store.updateShape(id, { x: s.x + op.dx, y: s.y + op.dy })
         affectedIds.add(id)
       }
@@ -257,6 +342,21 @@ function executeOne(op: ShapeOp, affectedIds: Set<string>, errors: OpError[]): v
         store.updateShape(id, patch)
         affectedIds.add(id)
       }
+      break
+    }
+    case 'add-screen': {
+      const factory = getScreenArtifactFactory()
+      const artifactId = factory?.(op.name) ?? null
+      if (!artifactId) {
+        errors.push({ code: 'INVALID_OP', message: 'Cannot create screen artifact — no handler registered' })
+        return
+      }
+      const preset = (op.devicePreset ?? 'desktop') as DevicePreset
+      const shape = createHtmlFrameShape(op.name, op.x ?? 0, op.y ?? 0, artifactId, preset)
+      if (op.width) shape.width = op.width
+      if (op.height) shape.height = op.height
+      store.addShape(shape)
+      affectedIds.add(shape.id)
       break
     }
     default: {

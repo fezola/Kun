@@ -10,13 +10,15 @@ function GroupShapeInner({
   objects: Record<string, CanvasShape>
 }) {
   return (
-    <>
+    // Children store ABSOLUTE coords; cancel the group's own translate(shape.x,
+    // shape.y) so they don't render double-offset. (See FrameShape for the why.)
+    <g transform={`translate(${-shape.x}, ${-shape.y})`}>
       {shape.children.map((childId) => {
         const child = objects[childId]
         if (!child || !child.visible) return null
         return <ShapeDispatcher key={childId} shapeId={childId} objects={objects} />
       })}
-    </>
+    </g>
   )
 }
 

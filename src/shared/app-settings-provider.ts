@@ -1117,7 +1117,9 @@ function normalizeModelProviderImageCapability(
 }
 
 export function normalizeImageGenerationProtocol(value: unknown): ImageGenerationProtocol {
-  return value === 'minimax-image' ? 'minimax-image' : DEFAULT_IMAGE_GENERATION_PROTOCOL
+  if (value === 'minimax-image') return 'minimax-image'
+  if (value === 'codex-responses-image') return 'codex-responses-image'
+  return DEFAULT_IMAGE_GENERATION_PROTOCOL
 }
 
 function normalizeModelProviderSpeechCapability(

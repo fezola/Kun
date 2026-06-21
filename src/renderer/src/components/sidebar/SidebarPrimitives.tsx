@@ -275,6 +275,7 @@ type SidebarTreeRowProps = {
   title?: string
   ariaLabel?: string
   onContextMenu?: (event: ReactMouseEvent<HTMLDivElement>) => void
+  onDoubleClick?: () => void
   disabled?: boolean
   active?: boolean
   activeVariant?: 'rail' | 'outline'
@@ -293,6 +294,7 @@ export function SidebarTreeRow({
   title,
   ariaLabel,
   onContextMenu,
+  onDoubleClick,
   disabled,
   active = false,
   activeVariant = 'rail',
@@ -348,6 +350,7 @@ export function SidebarTreeRow({
       <button
         type="button"
         onClick={onClick}
+        onDoubleClick={onDoubleClick}
         disabled={disabled}
         aria-label={ariaLabel}
         className={cx(
