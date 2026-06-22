@@ -95,6 +95,21 @@ export function buildGuiPlanTurnOverrides(
   return undefined
 }
 
+/**
+ * Decide whether to auto-open the plan preview when a plan block loads.
+ * Open only for a plan we just generated in *this* thread's plan turn: the
+ * in-flight marker carries the thread id captured at send time, so honoring
+ * it only while that thread is still active stops a plan turn started in
+ * thread A from popping open thread B's old plan after a mid-turn switch.
+ * A null marker (thread reload, or no plan turn in flight) never opens.
+ */
+export function shouldAutoOpenPlanPanel(
+  inFlightThreadId: string | null,
+  activeThreadId: string | null
+): boolean {
+  return inFlightThreadId !== null && inFlightThreadId === activeThreadId
+}
+
 export function buildDraftGuiPlanTurnOverrides(input: {
   request: string
   workspaceRoot: string
@@ -138,7 +153,7 @@ export function useWorkbenchPlanController({
 }: WorkbenchPlanControllerOptions) {
   const activeGuiPlan = useGuiPlanStore((s) => s.activePlan)
   const latestPlanBlock = useMemo(() => latestSuccessfulPlanBlock(blocks), [blocks])
-  const planTurnInFlightRef = useRef(false)
+  const planTurnInFlightThreadIdRef = useRef<string | null>(null)
   const lastLoadedPlanBlockIdRef = useRef<string | null>(null)
 
   const openGuiPlanPanel = useCallback((): void => {
@@ -209,7 +224,6 @@ export function useWorkbenchPlanController({
       setError(t('workspaceRequiredToCreateThread'))
       return false
     }
-    planTurnInFlightRef.current = true
     const { workspaceRoot: _workspaceRoot, ...messageOverrides } = overrides ?? {}
     // Default to draft: an explicit guiPlan override (e.g. from SDD upgrade)
     // takes priority; otherwise we always start a fresh plan. Previously the
@@ -225,7 +239,14 @@ export function useWorkbenchPlanController({
       ...messageOverrides,
       guiPlan
     })
-    if (!sent) planTurnInFlightRef.current = false
+    // Tag the in-flight plan turn with the thread it belongs to. The id is
+    // resolved only after sendMessage, since a brand-new chat creates the
+    // thread during the send. The auto-open effect honors this marker only
+    // while that same thread is still active, so switching threads mid-turn
+    // can never pop open another thread's plan panel.
+    planTurnInFlightThreadIdRef.current = sent
+      ? useChatStore.getState().activeThreadId ?? null
+      : null
     return sent
   }
 
@@ -387,10 +408,15 @@ export function useWorkbenchPlanController({
     if (latestPlanBlock && lastLoadedPlanBlockIdRef.current === latestPlanBlock.blockId) return
     if (!latestPlanBlock) return
     lastLoadedPlanBlockIdRef.current = latestPlanBlock.blockId
-    // Keep generated plans inline until the user explicitly opens the preview.
-    // This avoids squeezing the chat on portrait/narrow screens after a plan turn.
-    const shouldOpen = false
-    planTurnInFlightRef.current = false
+    // Auto-open the preview only for a plan we just generated in this thread's
+    // plan turn. Loading an old thread that merely contains a plan — or a plan
+    // turn started in a different thread we've since switched away from — must
+    // not pop the panel open and squeeze the chat on portrait/narrow screens.
+    const shouldOpen = shouldAutoOpenPlanPanel(
+      planTurnInFlightThreadIdRef.current,
+      useChatStore.getState().activeThreadId
+    )
+    planTurnInFlightThreadIdRef.current = null
     void loadPlanFromMeta(latestPlanBlock.meta, shouldOpen).catch((error) => {
       useGuiPlanStore.getState().setOperationStatus(
         'error',
@@ -400,7 +426,7 @@ export function useWorkbenchPlanController({
   }, [latestPlanBlock, loadPlanFromMeta])
 
   useEffect(() => {
-    if (!busy) planTurnInFlightRef.current = false
+    if (!busy) planTurnInFlightThreadIdRef.current = null
   }, [busy])
 
   return {

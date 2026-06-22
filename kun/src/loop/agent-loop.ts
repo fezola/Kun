@@ -190,9 +190,10 @@ export const PLAN_MODE_INSTRUCTION = [
   'You are in Plan mode.',
   'Investigate the task first using read-only tools: prefer `read`, `grep`, `find`, and `ls` to gather the facts you need.',
   'Do NOT modify project files, apply edits, run shell commands, or run mutating commands in this mode.',
+  'If the request is ambiguous or hinges on a decision only the user can make, ask one concise round of clarifying questions and stop: end your turn with the question(s) and wait for the answer. Do NOT call `create_plan` yet — a set of options the user still has to choose between is not a plan.',
   'When you understand the task well enough, call the `create_plan` tool to save a complete implementation plan as Markdown.',
   'Use `operation: "draft"` for the first plan, and `operation: "refine"` when revising an existing plan; you may call `create_plan` multiple times as the plan evolves.',
-  'Write concrete, actionable steps (summary, implementation steps, tests, risks) rather than vague intentions.',
+  'Write concrete, actionable steps rather than vague intentions, and structure the saved Markdown with `##` section headings (e.g. Summary, Steps, Tests, Risks).',
   'Favor the smallest plan that fully solves the task: question whether each proposed component, abstraction, dependency, config knob, or new file needs to exist at all (YAGNI), and prefer the standard library, a native platform feature, or an already-present dependency over new custom code. Do NOT trim correctness, input validation, error handling, security, or accessibility to make a plan smaller.',
   'After saving, give the user a short summary of the plan and what to review.'
 ].join('\n')
@@ -251,6 +252,39 @@ export function isStalePlanContext(
   workspace: string
 ): boolean {
   return planContext ? !guiPlanWorkspaceMatches(workspace, planContext.workspaceRoot) : false
+}
+
+/**
+ * Phrases that signal the assistant is asking the user to *choose* between
+ * options or supply missing scope (a clarification) rather than to *approve*
+ * a finished plan. Deliberately choice-oriented: a real plan that ends with a
+ * generic confirmation ("sound good?", "does this work?") matches none of
+ * these and is therefore still materialized rather than dropped.
+ */
+const PLAN_CLARIFYING_CUE =
+  /\b(which|what kind|do you want|would you (?:like|prefer)|let me know which|prefer)\b|哪|还是|你想要|请选择|选项/i
+
+/**
+ * A Plan-mode turn requires `create_plan`; when the model returns prose
+ * instead of calling the tool, the loop materializes that prose into the
+ * plan (see runStep). But if the model is asking the user to make a
+ * decision (an ambiguous request), that prose is a question, not a plan —
+ * materializing it produces a useless "plan" full of unanswered options.
+ * Detect that case so the turn can pause for the user instead.
+ *
+ * Signal (all required): no Markdown heading (a structured plan has `##`
+ * sections per PLAN_MODE_INSTRUCTION), a question mark in the last couple of
+ * lines, and an explicit choice/clarification cue. The cue requirement is
+ * what keeps a genuine plan that merely ends with a confirmation question
+ * ("Ready?", "Sound good?") from being misread as a question and dropped.
+ */
+export function isPlanClarifyingQuestion(text: string): boolean {
+  const trimmed = text.trim()
+  if (!trimmed) return false
+  if (/^#{1,6}\s/m.test(trimmed)) return false
+  const tail = trimmed.split('\n').slice(-2).join('\n')
+  if (!/[?？]/.test(tail)) return false
+  return PLAN_CLARIFYING_CUE.test(trimmed)
 }
 
 export function buildRuntimeContextInstruction(input: {
@@ -1539,6 +1573,13 @@ export class AgentLoop {
           request.requiredToolName === CREATE_PLAN_TOOL_NAME &&
           textAccumulator.value.trim()
         ) {
+          // The model asked the user to decide instead of producing a plan
+          // (ambiguous request). Don't materialize a question into a bogus
+          // plan — end the turn so the user can answer; the next plan turn
+          // produces a real plan once the scope is settled.
+          if (isPlanClarifyingQuestion(textAccumulator.value)) {
+            return 'stop'
+          }
           const callId = this.opts.ids.next('call_plan')
           const provider = toolProviderMetadata.get(CREATE_PLAN_TOOL_NAME)
           const toolKind = toolKinds.get(CREATE_PLAN_TOOL_NAME)
@@ -1964,6 +2005,11 @@ export class AgentLoop {
             throw error
           }
           const message = error instanceof Error ? error.message : String(error)
+          const planActive =
+            input.context.threadMode === 'plan' || Boolean(input.context.guiPlan)
+          const guidance = planActive
+            ? `\`${input.call.toolName}\` is not available in Plan mode. Do NOT try to write deliverable files now. Call \`create_plan\` and put a COMPLETE implementation plan in its \`markdown\` argument — concrete steps, the files to create with their intended contents, and how to verify. Do NOT copy this message into the plan; write the actual plan. If the request is still ambiguous, ask the user a clarifying question and wait instead.`
+            : 'Use only tools advertised in the current turn context.'
           await this.opts.events.record({
             kind: 'error',
             threadId: input.threadId,
@@ -1983,7 +2029,7 @@ export class AgentLoop {
               output: {
                 code: 'tool_dispatch_rejected',
                 error: message,
-                guidance: 'Use only tools advertised in the current turn context.'
+                guidance
               },
               isError: true
             }),
