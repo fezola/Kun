@@ -45,6 +45,7 @@ import {
   Clapperboard,
   Download,
   Image as ImageIcon,
+  Info,
   KeyRound,
   Loader2,
   Lock,
@@ -1602,11 +1603,17 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                       t={t}
                     />
                   ) : isAnthropicProvider(activeProvider.id) ? (
-                    <AnthropicLoginSection
-                      provider={activeProvider}
-                      onCredentialChange={(apiKey) => updateModelProvider(activeProvider.id, { apiKey })}
-                      t={t}
-                    />
+                    <>
+                      <AnthropicLoginSection
+                        provider={activeProvider}
+                        onCredentialChange={(apiKey) => updateModelProvider(activeProvider.id, { apiKey })}
+                        t={t}
+                      />
+                      <div className="flex gap-2 rounded-xl border border-amber-300/60 bg-amber-50/60 px-3 py-2.5 text-[12px] leading-relaxed text-amber-900 dark:border-amber-700/40 dark:bg-amber-950/30 dark:text-amber-200">
+                        <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" strokeWidth={2} />
+                        <span>{t('claudeExtraUsageNotice')}</span>
+                      </div>
+                    </>
                   ) : (
                     <>
                       <label className={fieldLabelClass}>

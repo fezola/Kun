@@ -67,8 +67,7 @@ import {
 import {
   DESIGN_ASSISTANT_THREAD_TITLE,
   activeDesignThreadForWorkspace,
-  designWorkspaceKey,
-  isDesignThreadId,
+  designDocKey,
   markDesignThread,
   readDesignThreadRegistry,
   saveDesignThreadRegistry
@@ -298,7 +297,7 @@ export function createNavigationActions(
     await get().selectThread(targetId)
   },
 
-  ensureDesignThreadForWorkspace: async (workspaceRoot) => {
+  ensureDesignThreadForWorkspace: async (workspaceRoot, docId) => {
     const state = get()
     const targetWorkspace =
       normalizeWorkspaceRoot(workspaceRoot) || normalizeWorkspaceRoot(state.workspaceRoot)
@@ -310,28 +309,28 @@ export function createNavigationActions(
       set({ error: i18n.t('common:runtimeActionNeedsConnection') })
       return null
     }
+    const targetDoc = (docId ?? '').trim()
     const registry = readDesignThreadRegistry()
+    const record = registry.workspaces[designDocKey(targetWorkspace, targetDoc)]
     const activeThread = state.activeThreadId
       ? state.threads.find((thread) => thread.id === state.activeThreadId) ?? null
       : null
-    if (
-      activeThread &&
-      isDesignThreadId(activeThread.id, registry) &&
-      designWorkspaceKey(activeThread.workspace) === designWorkspaceKey(targetWorkspace)
-    ) {
+    // Reuse the active thread only when it is THIS 设计稿's registered thread (a
+    // thread id belongs to exactly one (workspace, 设计稿) scope).
+    if (activeThread && record && record.threadIds.includes(activeThread.id)) {
       set({ route: 'design', error: null })
       return activeThread.id
     }
-    const existing = activeDesignThreadForWorkspace(targetWorkspace, state.threads, registry)
+    const existing = activeDesignThreadForWorkspace(targetWorkspace, targetDoc, state.threads, registry)
     if (existing) {
       set({ route: 'design' })
       await get().selectThread(existing.id)
       return existing.id
     }
-    return get().createDesignThread(targetWorkspace)
+    return get().createDesignThread(targetWorkspace, targetDoc)
   },
 
-  createDesignThread: async (workspaceRoot) => {
+  createDesignThread: async (workspaceRoot, docId) => {
     const targetWorkspace =
       normalizeWorkspaceRoot(workspaceRoot) || normalizeWorkspaceRoot(get().workspaceRoot)
     if (!targetWorkspace) {
@@ -342,6 +341,7 @@ export function createNavigationActions(
       set({ error: i18n.t('common:runtimeActionNeedsConnection') })
       return null
     }
+    const targetDoc = (docId ?? '').trim()
     try {
       const provider = getProvider()
       const thread = await provider.createThread({
@@ -349,7 +349,7 @@ export function createNavigationActions(
         title: DESIGN_ASSISTANT_THREAD_TITLE,
         mode: 'agent'
       })
-      saveDesignThreadRegistry(markDesignThread(targetWorkspace, thread.id))
+      saveDesignThreadRegistry(markDesignThread(targetWorkspace, targetDoc, thread.id))
       set((s) => ({
         route: 'design',
         threads: s.threads.some((item) => item.id === thread.id) ? s.threads : [thread, ...s.threads],

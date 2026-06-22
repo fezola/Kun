@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useDesignWorkspaceStore } from './design-workspace-store'
-import type { DesignArtifact } from './design-types'
+import type { DesignArtifact, DesignDocument } from './design-types'
 
 const createdAt = '2026-06-20T00:00:00.000Z'
 
 function artifact(id: string, kind: DesignArtifact['kind']): DesignArtifact {
   const relativePath =
-    kind === 'canvas' ? `.kun-design/${id}/canvas.json` : `.kun-design/${id}/v1.html`
+    kind === 'canvas' ? `.kun-design/doc/${id}/canvas.json` : `.kun-design/doc/${id}/v1.html`
   return {
     id,
     kind,
@@ -26,8 +26,19 @@ describe('design workspace store', () => {
     vi.stubGlobal('window', { kunGui: { writeWorkspaceFile } })
     const canvas = artifact('canvas', 'canvas')
     const screen = artifact('screen', 'html')
+    const doc: DesignDocument = {
+      id: 'doc',
+      title: 'Doc',
+      createdAt,
+      updatedAt: createdAt,
+      order: 0,
+      artifacts: [canvas, screen],
+      activeArtifactId: canvas.id
+    }
     useDesignWorkspaceStore.setState({
       workspaceRoot: '/workspace',
+      documents: [doc],
+      activeDocumentId: 'doc',
       artifacts: [canvas, screen],
       activeArtifactId: canvas.id,
       designIntentMode: 'modify',
@@ -46,26 +57,60 @@ describe('design workspace store', () => {
 
     expect(result).toEqual({
       artifactId: 'screen',
-      relativePath: '.kun-design/screen/v2.html',
-      basePath: '.kun-design/screen/v1.html',
-      designMdPath: '.kun-design/screen/DESIGN.md'
+      relativePath: '.kun-design/doc/screen/v2.html',
+      basePath: '.kun-design/doc/screen/v1.html',
+      designMdPath: '.kun-design/doc/screen/DESIGN.md'
     })
 
     const state = useDesignWorkspaceStore.getState()
     const screen = state.artifacts.find((item) => item.id === 'screen')
     expect(state.activeArtifactId).toBe('canvas')
-    expect(screen?.relativePath).toBe('.kun-design/screen/v2.html')
-    expect(screen?.designMdPath).toBe('.kun-design/screen/DESIGN.md')
+    expect(screen?.relativePath).toBe('.kun-design/doc/screen/v2.html')
+    expect(screen?.designMdPath).toBe('.kun-design/doc/screen/DESIGN.md')
     expect(screen?.previewStatus).toBe('pending')
     expect(screen?.versions[0]).toMatchObject({
       id: 'screen-v2',
-      relativePath: '.kun-design/screen/v2.html',
+      relativePath: '.kun-design/doc/screen/v2.html',
       summary: 'Make it a login screen'
     })
     expect(writeWorkspaceFile).toHaveBeenCalledWith(expect.objectContaining({
-      path: '.kun-design/screen/meta.json',
+      path: '.kun-design/doc/screen/meta.json',
       workspaceRoot: '/workspace',
-      content: expect.stringContaining('.kun-design/screen/v2.html')
+      content: expect.stringContaining('.kun-design/doc/screen/v2.html')
     }))
+  })
+
+  it('createDocument adds a new active 设计稿 with an empty projection', () => {
+    const id = useDesignWorkspaceStore.getState().createDocument('Second')
+    const state = useDesignWorkspaceStore.getState()
+    expect(state.documents).toHaveLength(2)
+    expect(state.activeDocumentId).toBe(id)
+    expect(state.documents.find((d) => d.id === id)?.title).toBe('Second')
+    expect(state.artifacts).toEqual([])
+    expect(state.activeArtifactId).toBeNull()
+  })
+
+  it('new 画布 nest under the active 设计稿 directory', () => {
+    const id = useDesignWorkspaceStore.getState().createDocument('Second')
+    const { artifactId, relativePath } = useDesignWorkspaceStore.getState().prepareHtmlTurn('A landing page')
+    expect(relativePath).toBe(`.kun-design/${id}/${artifactId}/v1.html`)
+    expect(useDesignWorkspaceStore.getState().artifacts.map((a) => a.id)).toContain(artifactId)
+  })
+
+  it('switchActiveDocument re-projects to the target 设计稿', () => {
+    const second = useDesignWorkspaceStore.getState().createDocument('Second')
+    useDesignWorkspaceStore.getState().switchActiveDocument('doc')
+    expect(useDesignWorkspaceStore.getState().artifacts.map((a) => a.id).sort()).toEqual(['canvas', 'screen'])
+    useDesignWorkspaceStore.getState().switchActiveDocument(second)
+    expect(useDesignWorkspaceStore.getState().artifacts).toEqual([])
+  })
+
+  it('removeDocument drops it and falls back to a remaining 设计稿', () => {
+    const second = useDesignWorkspaceStore.getState().createDocument('Second')
+    useDesignWorkspaceStore.getState().removeDocument(second)
+    const state = useDesignWorkspaceStore.getState()
+    expect(state.documents.map((d) => d.id)).toEqual(['doc'])
+    expect(state.activeDocumentId).toBe('doc')
+    expect(state.artifacts.map((a) => a.id).sort()).toEqual(['canvas', 'screen'])
   })
 })

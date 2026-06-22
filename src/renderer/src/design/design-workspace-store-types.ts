@@ -3,15 +3,33 @@ import type {
   DesignArtifactNode,
   DesignArtifactVersion,
   DesignCanvasView,
+  DesignDocument,
   DesignIntentMode,
   DesignViewport
 } from './design-types'
 import type { DesignContext } from './design-context'
 
+/** Progress of an in-flight Stitch-style multi-page generation run. */
+export type DesignPagesRunState = {
+  phase: 'planning' | 'generating'
+  /** Total pages to generate (0 while still planning). */
+  total: number
+  /** Pages already generated. */
+  done: number
+  /** Title of the page being generated (or '' while planning). */
+  title: string
+}
+
 export type DesignWorkspaceState = {
   /** Workspace root design artifacts live under; '' = none chosen yet. */
   workspaceRoot: string
+  /** 设计稿 (design documents) — top-level containers, source of truth. */
+  documents: DesignDocument[]
+  /** Active 设计稿 id; null = none (empty workspace). */
+  activeDocumentId: string | null
+  /** Projection of the active 设计稿's 画布 (artifacts). Do not mutate directly. */
   artifacts: DesignArtifact[]
+  /** Projection of the active 设计稿's active 画布 id. */
   activeArtifactId: string | null
   canvasView: DesignCanvasView
   viewport: DesignViewport
@@ -46,6 +64,10 @@ export type DesignWorkspaceState = {
   canvasInspectorPinned: boolean
   /** Stitch-style design intent for the floating composer and command pill. */
   designIntentMode: DesignIntentMode
+  /** When ON, a "generate" brief is decomposed into multiple cohesive pages. */
+  multiPageMode: boolean
+  /** Progress of an in-flight multi-page run; null = idle. */
+  pagesRun: DesignPagesRunState | null
 
   setWorkspaceRoot: (workspaceRoot: string) => void
   setCanvasView: (view: DesignCanvasView) => void
@@ -53,6 +75,16 @@ export type DesignWorkspaceState = {
   setDevPreviewUrl: (url: string) => void
   setCanvasBackground: (background: 'light' | 'dark') => void
   setActiveArtifact: (artifactId: string | null) => void
+  /** Create a new 设计稿 (empty), make it active, and return its id. */
+  createDocument: (title?: string) => string
+  /** Rename a 设计稿 (persisted to documents.json). */
+  renameDocument: (documentId: string, title: string) => void
+  /** Delete a 设计稿 and all its 画布 (on-disk dirs + index entry). */
+  removeDocument: (documentId: string) => void
+  /** Switch the active 设计稿 (re-projects artifacts; thread switch is wired by the workbench). */
+  switchActiveDocument: (documentId: string) => void
+  /** Return the active 设计稿 id, creating a default 设计稿 if none exists yet. */
+  ensureActiveDocument: () => string
   /** Insert a new artifact (or replace one with the same id) and make it active. */
   upsertArtifact: (artifact: DesignArtifact) => void
   /** Append a new version, repointing the artifact's current document at it. */
@@ -66,6 +98,9 @@ export type DesignWorkspaceState = {
   duplicateArtifact: (artifactId: string) => Promise<void>
   selectArtifactVersion: (artifactId: string, versionId: string) => void
   setDesignIntentMode: (mode: DesignIntentMode) => void
+  setMultiPageMode: (on: boolean) => void
+  /** Update or clear (null) the multi-page run progress. */
+  setPagesRun: (state: DesignPagesRunState | null) => void
   /** Set or clear the design-mode error banner. */
   setFileError: (error: string | null) => void
   /** Open the in-page "implement in code" assistant for an artifact. */

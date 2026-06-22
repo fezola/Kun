@@ -1,145 +1,139 @@
-import { memo } from 'react'
+import { memo, useCallback, useState } from 'react'
 import {
-  MousePointer2,
-  Square,
+  ArrowRight,
   Circle,
-  Type,
   Frame,
-  Monitor,
-  ImagePlus,
-  ArrowUpRight,
-  Slash,
-  Pencil,
   Hand,
-  ZoomIn,
-  ZoomOut,
-  Maximize,
-  Undo2,
-  Redo2,
-  Grid3x3,
-  Magnet
+  ImagePlus,
+  Minus,
+  Monitor,
+  MousePointer2,
+  Palette,
+  Pencil,
+  Sparkles,
+  Square,
+  Type as TypeIcon
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { useCanvasViewportStore } from '../../../design/canvas/canvas-viewport-store'
-import { useCanvasShapeStore } from '../../../design/canvas/canvas-shape-store'
+import { importWorkspaceImageToCanvas } from '../../../design/canvas/canvas-image-import'
 import type { CanvasTool } from '../../../design/canvas/canvas-types'
+import { useCanvasViewportStore } from '../../../design/canvas/canvas-viewport-store'
+import { useDesignWorkspaceStore } from '../../../design/design-workspace-store'
+import { DesignContextPopover } from '../DesignContextPopover'
 
-const tools: { id: CanvasTool; icon: typeof MousePointer2; labelKey: string }[] = [
+type Props = {
+  workspaceRoot: string
+  onOpenAgentSettings?: () => void
+}
+
+type ToolButton = {
+  id: CanvasTool
+  icon: typeof MousePointer2
+  labelKey: string
+}
+
+const tools: ToolButton[] = [
   { id: 'select', icon: MousePointer2, labelKey: 'canvasToolSelect' },
   { id: 'screen', icon: Monitor, labelKey: 'canvasToolScreen' },
   { id: 'frame', icon: Frame, labelKey: 'canvasToolFrame' },
   { id: 'rect', icon: Square, labelKey: 'canvasToolRect' },
   { id: 'ellipse', icon: Circle, labelKey: 'canvasToolEllipse' },
-  { id: 'text', icon: Type, labelKey: 'canvasToolText' },
-  { id: 'arrow', icon: ArrowUpRight, labelKey: 'canvasToolArrow' },
-  { id: 'line', icon: Slash, labelKey: 'canvasToolLine' },
+  { id: 'text', icon: TypeIcon, labelKey: 'canvasToolText' },
+  { id: 'arrow', icon: ArrowRight, labelKey: 'canvasToolArrow' },
+  { id: 'line', icon: Minus, labelKey: 'canvasToolLine' },
   { id: 'draw', icon: Pencil, labelKey: 'canvasToolDraw' },
-  { id: 'image', icon: ImagePlus, labelKey: 'canvasToolImage' },
   { id: 'hand', icon: Hand, labelKey: 'canvasToolHand' }
 ]
 
-function CanvasToolbarInner() {
-  const { t } = useTranslation()
+function CanvasToolbarInner({ workspaceRoot, onOpenAgentSettings }: Props) {
+  const { t } = useTranslation('common')
   const activeTool = useCanvasViewportStore((s) => s.activeTool)
   const setActiveTool = useCanvasViewportStore((s) => s.setActiveTool)
-  const zoomTo = useCanvasViewportStore((s) => s.zoomTo)
-  const zoomToFit = useCanvasViewportStore((s) => s.zoomToFit)
-  const zoom = useCanvasViewportStore((s) => s.getZoom())
-  const gridVisible = useCanvasViewportStore((s) => s.gridVisible)
-  const toggleGrid = useCanvasViewportStore((s) => s.toggleGrid)
-  const snapEnabled = useCanvasViewportStore((s) => s.snapEnabled)
-  const toggleSnap = useCanvasViewportStore((s) => s.toggleSnap)
-  const undo = useCanvasShapeStore((s) => s.undo)
-  const redo = useCanvasShapeStore((s) => s.redo)
+  const vbox = useCanvasViewportStore((s) => s.vbox)
+  const setFileError = useDesignWorkspaceStore((s) => s.setFileError)
+  const setCanvasAssistantOpen = useDesignWorkspaceStore((s) => s.setCanvasAssistantOpen)
+  const [imageImportBusy, setImageImportBusy] = useState(false)
+  const [contextOpen, setContextOpen] = useState(false)
 
-  const zoomPercent = `${Math.round(zoom * 100)}%`
+  const importImage = useCallback((): void => {
+    if (imageImportBusy) return
+    setImageImportBusy(true)
+    setFileError(null)
+    void importWorkspaceImageToCanvas({ workspaceRoot, vbox })
+      .then((result) => {
+        if (!result.ok && !result.canceled) {
+          setFileError(result.message ?? t('canvasToolUploadFailed'))
+        }
+      })
+      .finally(() => setImageImportBusy(false))
+  }, [imageImportBusy, setFileError, t, vbox, workspaceRoot])
 
   const iconBtnBase =
-    'inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors'
-  const zoomBtnBase =
-    'inline-flex h-9 min-w-[58px] shrink-0 items-center justify-center rounded-full px-2 transition-colors'
-  const btnActive =
-    'bg-accent-soft text-accent shadow-[inset_0_0_0_1px_var(--ds-sidebar-row-ring)]'
+    'inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-45'
+  const btnActive = 'bg-[#1f2733] text-white shadow-[0_6px_16px_rgba(15,23,42,0.22)]'
   const btnInactive =
-    'text-ds-faint hover:bg-ds-hover hover:text-ds-ink dark:hover:bg-white/10'
-  const divider = 'mx-1 h-6 w-px shrink-0 bg-ds-border-muted/80'
+    'text-ds-muted hover:bg-ds-hover hover:text-ds-ink dark:hover:bg-white/10'
+  const divider = 'my-1 h-px w-7 shrink-0 bg-ds-border-muted/80'
 
   return (
-    <div className="flex max-w-[calc(100vw-7rem)] min-w-0 items-center gap-1 overflow-x-auto rounded-full border border-ds-border bg-white/74 px-1.5 py-1.5 shadow-[0_16px_42px_rgba(20,47,95,0.11)] backdrop-blur-2xl dark:bg-ds-card/72 dark:shadow-none">
-      {tools.map((tool) => (
+    <div className="relative pointer-events-auto">
+      <div className="flex flex-col items-center gap-1 rounded-full border border-ds-border bg-white/82 px-1.5 py-2 shadow-[0_16px_42px_rgba(20,47,95,0.13)] backdrop-blur-2xl dark:bg-ds-card/84 dark:shadow-none">
+        {tools.map((tool) => (
+          <button
+            key={tool.id}
+            type="button"
+            className={`${iconBtnBase} ${activeTool === tool.id ? btnActive : btnInactive}`}
+            onClick={() => setActiveTool(tool.id)}
+            title={t(tool.labelKey)}
+            aria-label={t(tool.labelKey)}
+          >
+            <tool.icon className="h-[18px] w-[18px]" strokeWidth={1.9} />
+          </button>
+        ))}
+
         <button
-          key={tool.id}
-          className={`${iconBtnBase} ${activeTool === tool.id ? btnActive : btnInactive}`}
-          onClick={() => setActiveTool(tool.id)}
-          title={t(tool.labelKey)}
-          aria-label={t(tool.labelKey)}
+          type="button"
+          className={`${iconBtnBase} ${btnInactive}`}
+          onClick={importImage}
+          disabled={imageImportBusy}
+          title={t('canvasToolUploadImage')}
+          aria-label={t('canvasToolUploadImage')}
         >
-          <tool.icon className="h-4 w-4" />
+          <ImagePlus className="h-[18px] w-[18px]" strokeWidth={1.9} />
         </button>
-      ))}
 
-      <div className={divider} />
+        <div className={divider} />
 
-      <button className={`${iconBtnBase} ${btnInactive}`} onClick={undo} title={t('canvasUndo')} aria-label={t('canvasUndo')}>
-        <Undo2 className="h-4 w-4" />
-      </button>
-      <button className={`${iconBtnBase} ${btnInactive}`} onClick={redo} title={t('canvasRedo')} aria-label={t('canvasRedo')}>
-        <Redo2 className="h-4 w-4" />
-      </button>
+        <button
+          type="button"
+          className={`${iconBtnBase} ${contextOpen ? btnActive : btnInactive}`}
+          onClick={() => setContextOpen((open) => !open)}
+          title={t('designContextLabel')}
+          aria-label={t('designContextLabel')}
+        >
+          <Palette className="h-[18px] w-[18px]" strokeWidth={1.9} />
+        </button>
 
-      <div className={divider} />
-
-      <button
-        className={`${zoomBtnBase} ${btnInactive}`}
-        onClick={() => zoomTo(1 / zoom, { x: 0, y: 0 })}
-        title={t('canvasZoomReset')}
-        aria-label={t('canvasZoomReset')}
-      >
-        <span className="text-center text-[12px] font-semibold tabular-nums">{zoomPercent}</span>
-      </button>
-      <button
-        className={`${iconBtnBase} ${btnInactive}`}
-        onClick={() => zoomTo(1.25, { x: 0, y: 0 })}
-        title={t('canvasZoomIn')}
-        aria-label={t('canvasZoomIn')}
-      >
-        <ZoomIn className="h-4 w-4" />
-      </button>
-      <button
-        className={`${iconBtnBase} ${btnInactive}`}
-        onClick={() => zoomTo(0.8, { x: 0, y: 0 })}
-        title={t('canvasZoomOut')}
-        aria-label={t('canvasZoomOut')}
-      >
-        <ZoomOut className="h-4 w-4" />
-      </button>
-      <button
-        className={`${iconBtnBase} ${btnInactive}`}
-        onClick={() => zoomToFit({ x: -200, y: -200, width: 400, height: 400 })}
-        title={t('canvasZoomFit')}
-        aria-label={t('canvasZoomFit')}
-      >
-        <Maximize className="h-4 w-4" />
-      </button>
-
-      <div className={divider} />
-
-      <button
-        className={`${iconBtnBase} ${gridVisible ? btnActive : btnInactive}`}
-        onClick={toggleGrid}
-        title={t('canvasGridToggle')}
-        aria-label={t('canvasGridToggle')}
-      >
-        <Grid3x3 className="h-4 w-4" />
-      </button>
-      <button
-        className={`${iconBtnBase} ${snapEnabled ? btnActive : btnInactive}`}
-        onClick={toggleSnap}
-        title={t('canvasSnap')}
-        aria-label={t('canvasSnap')}
-      >
-        <Magnet className="h-4 w-4" />
-      </button>
+        <button
+          type="button"
+          className={`${iconBtnBase} ${btnInactive}`}
+          onClick={() => setCanvasAssistantOpen(true)}
+          title={t('canvasToolAssistant')}
+          aria-label={t('canvasToolAssistant')}
+        >
+          <Sparkles className="h-[18px] w-[18px]" strokeWidth={1.9} />
+        </button>
+      </div>
+      {contextOpen ? (
+        <div className="absolute right-14 top-1/2 -translate-y-1/2">
+          <DesignContextPopover
+            open={contextOpen}
+            onClose={() => setContextOpen(false)}
+            onOpenSettings={onOpenAgentSettings}
+            titleKey="designContextLabel"
+          />
+        </div>
+      ) : null}
     </div>
   )
 }

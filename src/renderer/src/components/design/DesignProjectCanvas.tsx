@@ -16,12 +16,17 @@ import {
   ExternalLink,
   Eye,
   FileDown,
+  Frame,
+  Hand,
   Image as ImageIcon,
+  ImagePlus,
   Info,
   Layers,
   Globe,
+  Minus,
   Monitor,
   MoreVertical,
+  MousePointer2,
   Palette,
   PenLine,
   Pipette,
@@ -43,6 +48,7 @@ import { resizeDesignArtifactNode, type DesignNodeResizeHandle } from '../../des
 import { startDesignHtmlPreviewWatch } from '../../design/design-preview-file'
 import { useDesignWorkspaceStore } from '../../design/design-workspace-store'
 import {
+  createDesignArtifactId,
   defaultDesignArtifactNode,
   type DesignArtifact,
   type DesignArtifactNode,
@@ -66,6 +72,13 @@ const PROJECT_VIEWPORT_NODE_WIDTHS: Record<DesignViewport, number> = {
   tablet: 768,
   desktop: 1280
 }
+
+type ProjectCanvasTool = 'select' | 'frame' | 'draw' | 'hand'
+
+const PROJECT_IMAGE_MAX_WIDTH = 360
+const PROJECT_IMAGE_MAX_HEIGHT = 260
+const PROJECT_IMAGE_FALLBACK_WIDTH = 260
+const PROJECT_IMAGE_FALLBACK_HEIGHT = 180
 
 const RESIZE_HANDLES: { id: DesignNodeResizeHandle; className: string; label: string }[] = [
   { id: 'nw', className: 'left-1 top-1 cursor-nwse-resize', label: 'Resize top left' },
@@ -121,6 +134,63 @@ type InlineEditState = {
   style: InlineEditStyle
   text: string
   multiline: boolean
+}
+
+function pathDir(path: string): string {
+  const idx = path.lastIndexOf('/')
+  return idx >= 0 ? path.slice(0, idx) : ''
+}
+
+function relativePathBetween(fromFilePath: string, targetPath: string): string {
+  const fromParts = pathDir(fromFilePath).split('/').filter(Boolean)
+  const targetParts = targetPath.split('/').filter(Boolean)
+  let common = 0
+  while (common < fromParts.length && common < targetParts.length && fromParts[common] === targetParts[common]) {
+    common += 1
+  }
+  const up = fromParts.slice(common).map(() => '..')
+  return [...up, ...targetParts.slice(common)].join('/') || targetPath
+}
+
+function imageArtifactHtml(src: string, title: string): string {
+  const safeTitle = title.replace(/[<>&"]/g, (ch) => {
+    if (ch === '<') return '&lt;'
+    if (ch === '>') return '&gt;'
+    if (ch === '&') return '&amp;'
+    return '&quot;'
+  })
+  const safeSrc = src.replace(/"/g, '&quot;')
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${safeTitle}</title>
+  <style>
+    html, body { margin: 0; width: 100%; height: 100%; background: #f7f8fb; }
+    body { display: grid; place-items: center; overflow: hidden; }
+    img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  </style>
+</head>
+<body>
+  <img src="${safeSrc}" alt="${safeTitle}" />
+</body>
+</html>
+`
+}
+
+function scaledImageNodeSize(width?: number, height?: number): { width: number; height: number } {
+  const sourceWidth = typeof width === 'number' && Number.isFinite(width) && width > 0
+    ? width
+    : PROJECT_IMAGE_FALLBACK_WIDTH
+  const sourceHeight = typeof height === 'number' && Number.isFinite(height) && height > 0
+    ? height
+    : PROJECT_IMAGE_FALLBACK_HEIGHT
+  const scale = Math.min(1, PROJECT_IMAGE_MAX_WIDTH / sourceWidth, PROJECT_IMAGE_MAX_HEIGHT / sourceHeight)
+  return {
+    width: Math.max(180, Math.round(sourceWidth * scale)),
+    height: Math.max(140, Math.round(sourceHeight * scale))
+  }
 }
 
 type Props = {
@@ -1278,6 +1348,8 @@ export function DesignProjectCanvas({
   const setViewport = useDesignWorkspaceStore((s) => s.setViewport)
   const setFileError = useDesignWorkspaceStore((s) => s.setFileError)
   const setDesignIntentMode = useDesignWorkspaceStore((s) => s.setDesignIntentMode)
+  const setCanvasAssistantOpen = useDesignWorkspaceStore((s) => s.setCanvasAssistantOpen)
+  const upsertArtifact = useDesignWorkspaceStore((s) => s.upsertArtifact)
   const updateArtifactNode = useDesignWorkspaceStore((s) => s.updateArtifactNode)
   const duplicateArtifact = useDesignWorkspaceStore((s) => s.duplicateArtifact)
   const removeArtifact = useDesignWorkspaceStore((s) => s.removeArtifact)
@@ -1292,10 +1364,13 @@ export function DesignProjectCanvas({
   const activeHtmlArtifact = activeArtifact?.kind === 'html' ? activeArtifact : null
   const [pan, setPan] = useState({ x: 0, y: 0 })
   const [zoom, setZoom] = useState(0.72)
+  const [projectTool, setProjectTool] = useState<ProjectCanvasTool>('select')
+  const [imageImportBusy, setImageImportBusy] = useState(false)
   const [moreOpen, setMoreOpen] = useState(false)
   const [contextPopoverOpen, setContextPopoverOpen] = useState(false)
   const [draggingId, setDraggingId] = useState<string | null>(null)
   const [resizingId, setResizingId] = useState<string | null>(null)
+  const stageRef = useRef<HTMLDivElement | null>(null)
   const dragRef = useRef<{
     id: string
     startClientX: number
@@ -1316,6 +1391,16 @@ export function DesignProjectCanvas({
     requestAnimationFrame(() => {
       document.querySelector<HTMLTextAreaElement>('[data-design-rail-composer] textarea')?.focus()
     })
+  }
+
+  const canvasCenter = (): { x: number; y: number } => {
+    const rect = stageRef.current?.getBoundingClientRect()
+    const screenX = rect ? rect.width / 2 : 560
+    const screenY = rect ? rect.height / 2 : 360
+    return {
+      x: (screenX - pan.x) / zoom,
+      y: (screenY - pan.y) / zoom
+    }
   }
 
   const startGenerate = (): void => {
@@ -1406,6 +1491,72 @@ export function DesignProjectCanvas({
     setMoreOpen(false)
   }
 
+  const uploadImageToCanvas = (): void => {
+    if (!workspaceRoot || typeof window.kunGui?.pickWorkspaceImage !== 'function' || imageImportBusy) return
+    setImageImportBusy(true)
+    setFileError(null)
+    void (async () => {
+      const picked = await window.kunGui
+        .pickWorkspaceImage({ workspaceRoot, imageDirectory: 'img' })
+        .catch((error: unknown) => ({
+          ok: false as const,
+          canceled: false,
+          message: error instanceof Error ? error.message : String(error)
+        }))
+      if (!picked.ok) {
+        if (!picked.canceled) setFileError(picked.message ?? t('canvasToolUploadFailed'))
+        return
+      }
+      if (typeof window.kunGui?.writeWorkspaceFile !== 'function') {
+        setFileError(t('canvasToolUploadFailed'))
+        return
+      }
+
+      const createdAt = new Date().toISOString()
+      const artifactId = createDesignArtifactId()
+      const relativePath = `.kun-design/${artifactId}/v1.html`
+      const title = picked.workspaceRelativePath.split('/').pop()?.trim() || 'image.png'
+      const htmlSrc = relativePathBetween(relativePath, picked.workspaceRelativePath)
+      const write = await window.kunGui
+        .writeWorkspaceFile({
+          path: relativePath,
+          workspaceRoot,
+          content: imageArtifactHtml(htmlSrc, title)
+        })
+        .catch((error: unknown) => ({
+          ok: false as const,
+          message: error instanceof Error ? error.message : String(error)
+        }))
+      if (!write.ok) {
+        setFileError(write.message ?? t('canvasToolUploadFailed'))
+        return
+      }
+
+      const size = scaledImageNodeSize(picked.width, picked.height)
+      const center = canvasCenter()
+      upsertArtifact({
+        id: artifactId,
+        kind: 'html',
+        title,
+        relativePath,
+        createdAt,
+        updatedAt: createdAt,
+        versions: [{ id: `${artifactId}-v1`, relativePath, createdAt, summary: '' }],
+        previewStatus: 'ready',
+        node: {
+          x: Math.round(center.x - size.width / 2),
+          y: Math.round(center.y - size.height / 2),
+          width: size.width,
+          height: size.height,
+          sizeMode: 'manual',
+          viewMode: 'preview'
+        }
+      })
+      setDesignIntentMode('modify')
+      setProjectTool('select')
+    })().finally(() => setImageImportBusy(false))
+  }
+
   const applyMeasuredContentSize = useCallback(
     (artifactId: string, size: { width: number; height: number }): void => {
       const artifact = useDesignWorkspaceStore.getState().artifacts.find((item) => item.id === artifactId)
@@ -1479,6 +1630,12 @@ export function DesignProjectCanvas({
 
   const onWorldPointerDown = (event: React.PointerEvent<HTMLDivElement>): void => {
     if (event.button !== 0 || event.target !== event.currentTarget) return
+    setMoreOpen(false)
+    if (projectTool !== 'hand') {
+      setActiveArtifact(null)
+      if (designIntentMode !== 'generate') setDesignIntentMode('generate')
+      return
+    }
     panningRef.current = { clientX: event.clientX, clientY: event.clientY, x: pan.x, y: pan.y }
     event.currentTarget.setPointerCapture(event.pointerId)
   }
@@ -1522,9 +1679,17 @@ export function DesignProjectCanvas({
   const activeButton = 'bg-white text-ds-ink shadow-sm dark:bg-white/12 dark:text-white'
   const mutedButton = 'text-ds-muted hover:bg-white/70 hover:text-ds-ink dark:hover:bg-white/10'
   const ViewIcon = viewModeIcon(canvasView)
+  const projectToolButton =
+    'inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition disabled:cursor-not-allowed disabled:opacity-45'
+  const projectToolActive = 'bg-[#1f2733] text-white shadow-[0_6px_16px_rgba(15,23,42,0.22)]'
+  const projectToolInactive =
+    'text-ds-muted hover:bg-ds-hover hover:text-ds-ink dark:hover:bg-white/10'
 
   return (
-    <div className="ds-no-drag relative min-h-0 min-w-0 flex-1 overflow-hidden bg-[color-mix(in_srgb,var(--ds-bg-main)_90%,white)] dark:bg-[color-mix(in_srgb,var(--ds-bg-main)_88%,black)]">
+    <div
+      ref={stageRef}
+      className="ds-no-drag relative min-h-0 min-w-0 flex-1 overflow-hidden bg-[color-mix(in_srgb,var(--ds-bg-main)_90%,white)] dark:bg-[color-mix(in_srgb,var(--ds-bg-main)_88%,black)]"
+    >
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_1px_1px,color-mix(in_srgb,var(--ds-muted)_22%,transparent)_1px,transparent_0)] [background-size:18px_18px]" />
 
       <div
@@ -1541,171 +1706,251 @@ export function DesignProjectCanvas({
         </div>
       </div>
 
-      <div className="pointer-events-none absolute left-1/2 top-3 z-50 w-[min(760px,calc(100%-7rem))] -translate-x-1/2">
-        <div className="pointer-events-auto mx-auto flex w-fit max-w-full items-center gap-1 overflow-x-auto rounded-full border border-ds-border bg-white/76 px-1.5 py-1.5 shadow-[0_16px_42px_rgba(20,47,95,0.11)] backdrop-blur-2xl dark:bg-ds-card/80">
-          <button
-            type="button"
-            onClick={startGenerate}
-            className={`${canvasButton} ${designIntentMode === 'generate' ? activeButton : mutedButton}`}
-          >
-            <Plus className="h-4 w-4" strokeWidth={1.9} />
-            {t('designProjectGenerate')}
-          </button>
-          <button
-            type="button"
-            onClick={startModify}
-            disabled={!activeHtmlArtifact}
-            className={`${canvasButton} ${designIntentMode === 'modify' ? activeButton : mutedButton}`}
-          >
-            <PenLine className="h-4 w-4" strokeWidth={1.9} />
-            {t('designProjectModify')}
-          </button>
-          <button
-            type="button"
-            onClick={startPreview}
-            disabled={!activeHtmlArtifact}
-            className={`${canvasButton} ${designIntentMode === 'preview' ? activeButton : mutedButton}`}
-          >
-            <ViewIcon className="h-4 w-4" strokeWidth={1.9} />
-            {t('designProjectPreview')}
-          </button>
-          {(['preview', 'code', 'live'] as const).map((view) => {
-            if (view === 'live' && !devPreviewUrl) return null
-            const Icon = viewModeIcon(view)
-            const label =
-              view === 'preview'
-                ? t('designViewPreview')
-                : view === 'code'
-                  ? t('designViewCode')
-                  : t('designViewLive')
-            return (
-              <button
-                key={view}
-                type="button"
-                onClick={() => setPreviewMode(view)}
-                disabled={!activeHtmlArtifact}
-                className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition disabled:cursor-not-allowed disabled:opacity-45 ${
-                  canvasView === view ? activeButton : mutedButton
-                }`}
-                title={label}
-                aria-label={label}
-              >
-                <Icon className="h-4 w-4" strokeWidth={1.85} />
-              </button>
-            )
-          })}
-          {VIEWPORTS.map(({ id, icon: Icon, labelKey }) => (
+      {activeHtmlArtifact ? (
+        <div className="pointer-events-none absolute left-1/2 top-3 z-50 w-[min(760px,calc(100%-7rem))] -translate-x-1/2">
+          <div className="pointer-events-auto mx-auto flex w-fit max-w-full items-center gap-1 overflow-x-auto rounded-full border border-ds-border bg-white/76 px-1.5 py-1.5 shadow-[0_16px_42px_rgba(20,47,95,0.11)] backdrop-blur-2xl dark:bg-ds-card/80">
             <button
-              key={id}
               type="button"
-              onClick={() => {
-                setViewport(id)
-                if (activeHtmlArtifact) {
+              onClick={startGenerate}
+              className={`${canvasButton} ${designIntentMode === 'generate' ? activeButton : mutedButton}`}
+            >
+              <Plus className="h-4 w-4" strokeWidth={1.9} />
+              {t('designProjectGenerate')}
+            </button>
+            <button
+              type="button"
+              onClick={startModify}
+              className={`${canvasButton} ${designIntentMode === 'modify' ? activeButton : mutedButton}`}
+            >
+              <PenLine className="h-4 w-4" strokeWidth={1.9} />
+              {t('designProjectModify')}
+            </button>
+            <button
+              type="button"
+              onClick={startPreview}
+              className={`${canvasButton} ${designIntentMode === 'preview' ? activeButton : mutedButton}`}
+            >
+              <ViewIcon className="h-4 w-4" strokeWidth={1.9} />
+              {t('designProjectPreview')}
+            </button>
+            {(['preview', 'code', 'live'] as const).map((view) => {
+              if (view === 'live' && !devPreviewUrl) return null
+              const Icon = viewModeIcon(view)
+              const label =
+                view === 'preview'
+                  ? t('designViewPreview')
+                  : view === 'code'
+                    ? t('designViewCode')
+                    : t('designViewLive')
+              return (
+                <button
+                  key={view}
+                  type="button"
+                  onClick={() => setPreviewMode(view)}
+                  className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition ${
+                    canvasView === view ? activeButton : mutedButton
+                  }`}
+                  title={label}
+                  aria-label={label}
+                >
+                  <Icon className="h-4 w-4" strokeWidth={1.85} />
+                </button>
+              )
+            })}
+            {VIEWPORTS.map(({ id, icon: Icon, labelKey }) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => {
+                  setViewport(id)
                   updateArtifactNode(activeHtmlArtifact.id, {
                     width: PROJECT_VIEWPORT_NODE_WIDTHS[id],
                     sizeMode: 'auto'
                   })
-                }
-              }}
-              className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition ${
-                viewport === id ? activeButton : mutedButton
-              }`}
-              title={t(labelKey)}
-              aria-label={t(labelKey)}
-            >
-              <Icon className="h-4 w-4" strokeWidth={1.85} />
-            </button>
-          ))}
-          <div className="h-6 w-px shrink-0 bg-ds-border-muted/80" />
-          <div className="relative">
-            <button
-              type="button"
-              onClick={() => setMoreOpen((open) => !open)}
-              className={`${canvasButton} ${mutedButton}`}
-              aria-label={t('designProjectMore')}
-              title={t('designProjectMore')}
-            >
-              <MoreVertical className="h-4 w-4" strokeWidth={1.9} />
-              {t('designProjectMore')}
-            </button>
-            {moreOpen ? (
-              <div className="absolute left-1/2 top-full z-50 mt-2 w-56 -translate-x-1/2 overflow-hidden rounded-[18px] border border-ds-border bg-white/95 p-1.5 text-[13px] text-ds-muted shadow-[0_18px_48px_rgba(20,47,95,0.16)] backdrop-blur-xl dark:bg-ds-card/95">
-                <button type="button" onClick={renameActive} disabled={!activeHtmlArtifact} className="flex h-9 w-full items-center gap-2 rounded-xl px-3 text-left transition hover:bg-ds-hover hover:text-ds-ink disabled:opacity-45">
-                  <PenLine className="h-4 w-4" strokeWidth={1.8} /> {t('designProjectRename')}
-                </button>
-                <button type="button" onClick={() => activeHtmlArtifact && void duplicateArtifact(activeHtmlArtifact.id)} disabled={!activeHtmlArtifact} className="flex h-9 w-full items-center gap-2 rounded-xl px-3 text-left transition hover:bg-ds-hover hover:text-ds-ink disabled:opacity-45">
-                  <Copy className="h-4 w-4" strokeWidth={1.8} /> {t('designProjectDuplicate')}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!activeHtmlArtifact) return
-                    updateArtifactNode(activeHtmlArtifact.id, {
-                      favorite: !activeHtmlArtifact.node?.favorite
-                    })
-                  }}
-                  disabled={!activeHtmlArtifact}
-                  className="flex h-9 w-full items-center gap-2 rounded-xl px-3 text-left transition hover:bg-ds-hover hover:text-ds-ink disabled:opacity-45"
-                >
-                  <Star className="h-4 w-4" strokeWidth={1.8} /> {t('designProjectFavorite')}
-                </button>
-                <button type="button" onClick={() => exportPrototype('html')} disabled={!activeHtmlArtifact} className="flex h-9 w-full items-center gap-2 rounded-xl px-3 text-left transition hover:bg-ds-hover hover:text-ds-ink disabled:opacity-45">
-                  <Download className="h-4 w-4" strokeWidth={1.8} />
-                  <span className="flex-1">{t('designExportHtml')}</span>
-                  <span className="text-[10.5px] text-ds-faint">{shortcutLabel('shift', 'e')}</span>
-                </button>
-                <button type="button" onClick={() => exportPrototype('pdf')} disabled={!activeHtmlArtifact} className="flex h-9 w-full items-center gap-2 rounded-xl px-3 text-left transition hover:bg-ds-hover hover:text-ds-ink disabled:opacity-45">
-                  <FileDown className="h-4 w-4" strokeWidth={1.8} /> {t('designExportPdf')}
-                </button>
-                <button type="button" onClick={openExternal} disabled={!activeHtmlArtifact} className="flex h-9 w-full items-center gap-2 rounded-xl px-3 text-left transition hover:bg-ds-hover hover:text-ds-ink disabled:opacity-45">
-                  <ExternalLink className="h-4 w-4" strokeWidth={1.8} /> {t('designOpenExternal')}
-                </button>
-                <button type="button" onClick={shareActive} disabled={!activeHtmlArtifact} className="flex h-9 w-full items-center gap-2 rounded-xl px-3 text-left transition hover:bg-ds-hover hover:text-ds-ink disabled:opacity-45">
-                  <Share2 className="h-4 w-4" strokeWidth={1.8} /> {t('designProjectShare')}
-                </button>
-                {activeHtmlArtifact && onImplementDesign ? (
-                  <button type="button" onClick={() => onImplementDesign(activeHtmlArtifact)} className="flex h-9 w-full items-center gap-2 rounded-xl px-3 text-left transition hover:bg-ds-hover hover:text-ds-ink">
-                    <Play className="h-4 w-4" strokeWidth={1.8} /> {t('designImplement')}
+                }}
+                className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition ${
+                  viewport === id ? activeButton : mutedButton
+                }`}
+                title={t(labelKey)}
+                aria-label={t(labelKey)}
+              >
+                <Icon className="h-4 w-4" strokeWidth={1.85} />
+              </button>
+            ))}
+            <div className="h-6 w-px shrink-0 bg-ds-border-muted/80" />
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setMoreOpen((open) => !open)}
+                className={`${canvasButton} ${mutedButton}`}
+                aria-label={t('designProjectMore')}
+                title={t('designProjectMore')}
+              >
+                <MoreVertical className="h-4 w-4" strokeWidth={1.9} />
+                {t('designProjectMore')}
+              </button>
+              {moreOpen ? (
+                <div className="absolute left-1/2 top-full z-50 mt-2 w-56 -translate-x-1/2 overflow-hidden rounded-[18px] border border-ds-border bg-white/95 p-1.5 text-[13px] text-ds-muted shadow-[0_18px_48px_rgba(20,47,95,0.16)] backdrop-blur-xl dark:bg-ds-card/95">
+                  <button
+                    type="button"
+                    onClick={renameActive}
+                    className="flex h-9 w-full items-center gap-2 rounded-xl px-3 text-left transition hover:bg-ds-hover hover:text-ds-ink"
+                  >
+                    <PenLine className="h-4 w-4" strokeWidth={1.8} /> {t('designProjectRename')}
                   </button>
-                ) : null}
-                {activeHtmlArtifact?.versions.length && activeHtmlArtifact.versions.length > 1 ? (
+                  <button
+                    type="button"
+                    onClick={() => void duplicateArtifact(activeHtmlArtifact.id)}
+                    className="flex h-9 w-full items-center gap-2 rounded-xl px-3 text-left transition hover:bg-ds-hover hover:text-ds-ink"
+                  >
+                    <Copy className="h-4 w-4" strokeWidth={1.8} /> {t('designProjectDuplicate')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      updateArtifactNode(activeHtmlArtifact.id, {
+                        favorite: !activeHtmlArtifact.node?.favorite
+                      })
+                    }}
+                    className="flex h-9 w-full items-center gap-2 rounded-xl px-3 text-left transition hover:bg-ds-hover hover:text-ds-ink"
+                  >
+                    <Star className="h-4 w-4" strokeWidth={1.8} /> {t('designProjectFavorite')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => exportPrototype('html')}
+                    className="flex h-9 w-full items-center gap-2 rounded-xl px-3 text-left transition hover:bg-ds-hover hover:text-ds-ink"
+                  >
+                    <Download className="h-4 w-4" strokeWidth={1.8} />
+                    <span className="flex-1">{t('designExportHtml')}</span>
+                    <span className="text-[10.5px] text-ds-faint">{shortcutLabel('shift', 'e')}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => exportPrototype('pdf')}
+                    className="flex h-9 w-full items-center gap-2 rounded-xl px-3 text-left transition hover:bg-ds-hover hover:text-ds-ink"
+                  >
+                    <FileDown className="h-4 w-4" strokeWidth={1.8} /> {t('designExportPdf')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={openExternal}
+                    className="flex h-9 w-full items-center gap-2 rounded-xl px-3 text-left transition hover:bg-ds-hover hover:text-ds-ink"
+                  >
+                    <ExternalLink className="h-4 w-4" strokeWidth={1.8} /> {t('designOpenExternal')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={shareActive}
+                    className="flex h-9 w-full items-center gap-2 rounded-xl px-3 text-left transition hover:bg-ds-hover hover:text-ds-ink"
+                  >
+                    <Share2 className="h-4 w-4" strokeWidth={1.8} /> {t('designProjectShare')}
+                  </button>
+                  {onImplementDesign ? (
+                    <button
+                      type="button"
+                      onClick={() => onImplementDesign(activeHtmlArtifact)}
+                      className="flex h-9 w-full items-center gap-2 rounded-xl px-3 text-left transition hover:bg-ds-hover hover:text-ds-ink"
+                    >
+                      <Play className="h-4 w-4" strokeWidth={1.8} /> {t('designImplement')}
+                    </button>
+                  ) : null}
+                  {activeHtmlArtifact.versions.length > 1 ? (
+                    <div className="my-1 border-t border-ds-border-muted pt-1">
+                      {activeHtmlArtifact.versions.slice(0, 5).map((version, index) => (
+                        <button
+                          key={version.id}
+                          type="button"
+                          onClick={() => selectArtifactVersion(activeHtmlArtifact.id, version.id)}
+                          className="flex h-8 w-full items-center gap-2 rounded-xl px-3 text-left transition hover:bg-ds-hover hover:text-ds-ink"
+                        >
+                          <CheckCircle2
+                            className={`h-3.5 w-3.5 ${
+                              version.relativePath === activeHtmlArtifact.relativePath
+                                ? 'text-accent'
+                                : 'text-ds-faint'
+                            }`}
+                            strokeWidth={1.8}
+                          />
+                          {t('designProjectVersion', { version: activeHtmlArtifact.versions.length - index })}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
                   <div className="my-1 border-t border-ds-border-muted pt-1">
-                    {activeHtmlArtifact.versions.slice(0, 5).map((version, index) => (
-                      <button
-                        key={version.id}
-                        type="button"
-                        onClick={() => selectArtifactVersion(activeHtmlArtifact.id, version.id)}
-                        className="flex h-8 w-full items-center gap-2 rounded-xl px-3 text-left transition hover:bg-ds-hover hover:text-ds-ink"
-                      >
-                        <CheckCircle2 className={`h-3.5 w-3.5 ${version.relativePath === activeHtmlArtifact.relativePath ? 'text-accent' : 'text-ds-faint'}`} strokeWidth={1.8} />
-                        {t('designProjectVersion', { version: activeHtmlArtifact.versions.length - index })}
-                      </button>
-                    ))}
+                    <button
+                      type="button"
+                      onClick={() => removeArtifact(activeHtmlArtifact.id)}
+                      className="flex h-9 w-full items-center gap-2 rounded-xl px-3 text-left text-[#c0392b] transition hover:bg-[#c0392b]/10"
+                    >
+                      <Trash2 className="h-4 w-4" strokeWidth={1.8} /> {t('designDeleteArtifact')}
+                    </button>
                   </div>
-                ) : null}
-                <div className="my-1 border-t border-ds-border-muted pt-1">
-                  <button type="button" onClick={() => activeHtmlArtifact && removeArtifact(activeHtmlArtifact.id)} disabled={!activeHtmlArtifact} className="flex h-9 w-full items-center gap-2 rounded-xl px-3 text-left text-[#c0392b] transition hover:bg-[#c0392b]/10 disabled:opacity-45">
-                    <Trash2 className="h-4 w-4" strokeWidth={1.8} /> {t('designDeleteArtifact')}
-                  </button>
                 </div>
-              </div>
-            ) : null}
+              ) : null}
+            </div>
           </div>
         </div>
-      </div>
+      ) : null}
 
-      <div className="pointer-events-none absolute right-4 top-4 z-50 flex items-center gap-2">
-        <button
-          type="button"
-          onClick={() => setContextPopoverOpen((open) => !open)}
-          className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full border border-ds-border bg-white/80 text-ds-muted shadow-[0_12px_34px_rgba(20,47,95,0.10)] backdrop-blur-xl transition hover:bg-white hover:text-ds-ink dark:bg-ds-card/82"
-          aria-label={t('designContextLabel')}
-          title={t('designContextLabel')}
-        >
-          <Palette className="h-4 w-4" strokeWidth={1.9} />
-        </button>
+      <div className="pointer-events-none absolute right-4 top-1/2 z-50 -translate-y-1/2">
+        <div className="pointer-events-auto flex flex-col items-center gap-1 rounded-full border border-ds-border bg-white/82 px-1.5 py-2 shadow-[0_16px_42px_rgba(20,47,95,0.13)] backdrop-blur-2xl dark:bg-ds-card/84">
+          {([
+            ['select', MousePointer2, 'canvasToolSelect'],
+            ['frame', Frame, 'canvasToolFrame'],
+            ['draw', PenLine, 'canvasToolDraw'],
+            ['hand', Hand, 'canvasToolHand']
+          ] as const).map(([tool, Icon, labelKey]) => (
+            <button
+              key={tool}
+              type="button"
+              onClick={() => {
+                setProjectTool(tool)
+                if (tool === 'frame') startGenerate()
+                if (tool === 'draw') {
+                  if (activeHtmlArtifact) startModify()
+                  else startGenerate()
+                }
+              }}
+              className={`${projectToolButton} ${projectTool === tool ? projectToolActive : projectToolInactive}`}
+              aria-label={t(labelKey)}
+              title={t(labelKey)}
+            >
+              <Icon className="h-[18px] w-[18px]" strokeWidth={1.9} />
+            </button>
+          ))}
+          <button
+            type="button"
+            onClick={uploadImageToCanvas}
+            disabled={imageImportBusy}
+            className={`${projectToolButton} ${projectToolInactive}`}
+            aria-label={t('canvasToolUploadImage')}
+            title={t('canvasToolUploadImage')}
+          >
+            <ImagePlus className="h-[18px] w-[18px]" strokeWidth={1.9} />
+          </button>
+          <div className="my-1 h-px w-7 bg-ds-border-muted/80" />
+          <button
+            type="button"
+            onClick={() => setContextPopoverOpen((open) => !open)}
+            className={`${projectToolButton} ${contextPopoverOpen ? projectToolActive : projectToolInactive}`}
+            aria-label={t('designContextLabel')}
+            title={t('designContextLabel')}
+          >
+            <Palette className="h-[18px] w-[18px]" strokeWidth={1.9} />
+          </button>
+          <button
+            type="button"
+            onClick={() => setCanvasAssistantOpen(true)}
+            className={`${projectToolButton} ${projectToolInactive}`}
+            aria-label={t('canvasToolAssistant')}
+            title={t('canvasToolAssistant')}
+          >
+            <Sparkles className="h-[18px] w-[18px]" strokeWidth={1.9} />
+          </button>
+        </div>
         {contextPopoverOpen ? (
-          <div className="pointer-events-auto absolute right-0 top-full mt-2">
+          <div className="pointer-events-auto absolute right-14 top-1/2 -translate-y-1/2">
             <DesignContextPopover
               open={contextPopoverOpen}
               onClose={() => setContextPopoverOpen(false)}
@@ -1717,7 +1962,9 @@ export function DesignProjectCanvas({
       </div>
 
       <div
-        className="absolute inset-0 cursor-grab overflow-hidden active:cursor-grabbing"
+        className={`absolute inset-0 overflow-hidden ${
+          projectTool === 'hand' ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'
+        }`}
         onPointerDown={onWorldPointerDown}
         onPointerMove={onWorldPointerMove}
         onPointerUp={endPointerAction}
@@ -1859,8 +2106,31 @@ export function DesignProjectCanvas({
       ) : null}
 
       <div className="pointer-events-none absolute bottom-4 right-4 z-40 hidden items-center gap-2 lg:flex">
-        <div className="pointer-events-auto rounded-full border border-ds-border bg-white/78 px-3 py-2 text-[13px] font-semibold text-ds-muted shadow-[0_12px_34px_rgba(20,47,95,0.10)] backdrop-blur-xl">
-          {Math.round(zoom * 100)}%
+        <div className="pointer-events-auto flex items-center gap-1 rounded-full border border-ds-border bg-white/82 px-1.5 py-1 shadow-[0_12px_34px_rgba(20,47,95,0.10)] backdrop-blur-2xl dark:bg-ds-card/84 dark:shadow-none">
+          <button
+            type="button"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-ds-muted transition-colors hover:bg-ds-hover hover:text-ds-ink dark:hover:bg-white/10"
+            onClick={() => setZoom((z) => Math.min(1.8, z * 1.2))}
+            title={t('canvasZoomIn')}
+          >
+            <Plus className="h-4 w-4" strokeWidth={1.8} />
+          </button>
+          <button
+            type="button"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-ds-muted transition-colors hover:bg-ds-hover hover:text-ds-ink dark:hover:bg-white/10"
+            onClick={() => setZoom((z) => Math.max(0.22, z / 1.2))}
+            title={t('canvasZoomOut')}
+          >
+            <Minus className="h-4 w-4" strokeWidth={1.8} />
+          </button>
+          <button
+            type="button"
+            className="inline-flex h-8 min-w-[3rem] items-center justify-center rounded-lg px-2 text-[13px] font-semibold tabular-nums text-ds-muted transition-colors hover:bg-ds-hover hover:text-ds-ink dark:hover:bg-white/10"
+            onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }) }}
+            title={t('canvasZoomTo100')}
+          >
+            {Math.round(zoom * 100)}%
+          </button>
         </div>
       </div>
     </div>

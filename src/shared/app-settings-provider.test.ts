@@ -106,7 +106,7 @@ describe('model provider settings', () => {
 
     expect(provider.proxy).toEqual({
       enabled: true,
-      url: 'socks5://127.0.0.1:1080'
+      url: ' socks5://127.0.0.1:1080 '
     })
 
     const state = settings()
@@ -114,7 +114,7 @@ describe('model provider settings', () => {
     expect(resolveModelProviderProxyUrl(state)).toBe('socks5://127.0.0.1:1080')
   })
 
-  it('disables invalid model request proxy URLs', () => {
+  it('resolves empty for invalid proxy URLs even when enabled', () => {
     const provider = normalizeModelProviderSettings({
       proxy: {
         enabled: true,
@@ -123,9 +123,13 @@ describe('model provider settings', () => {
     })
 
     expect(provider.proxy).toEqual({
-      enabled: false,
-      url: ''
+      enabled: true,
+      url: 'ftp://127.0.0.1:2121'
     })
+
+    const state = settings()
+    state.provider.proxy = provider.proxy
+    expect(resolveModelProviderProxyUrl(state)).toBe('')
   })
 
   it('keeps legacy Kun runtime credential overrides only when no provider is selected', () => {

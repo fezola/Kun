@@ -15,16 +15,34 @@ import {
 
 const DESIGN_DIR = '.kun-design'
 
-export function artifactDirPath(id: string): string {
-  return `${DESIGN_DIR}/${id}`
+// --- Construction helpers: build paths for an artifact nested under its 设计稿.
+export function artifactDirPath(docId: string, artifactId: string): string {
+  return `${DESIGN_DIR}/${docId}/${artifactId}`
 }
 
-export function artifactMetaPath(id: string): string {
-  return `${DESIGN_DIR}/${id}/meta.json`
+export function artifactMetaPath(docId: string, artifactId: string): string {
+  return `${artifactDirPath(docId, artifactId)}/meta.json`
 }
 
-export function artifactDesignMdPath(id: string): string {
-  return `${DESIGN_DIR}/${id}/DESIGN.md`
+export function artifactDesignMdPath(docId: string, artifactId: string): string {
+  return `${artifactDirPath(docId, artifactId)}/DESIGN.md`
+}
+
+// --- Derivation helpers: recover sibling paths from an artifact's stored
+// relativePath. Works uniformly for nested (.kun-design/<doc>/<id>/v1.html) and
+// legacy-flat (.kun-design/<id>/v1.html) artifacts, so persistence/deletion need
+// no docId — the path already encodes where the files live.
+export function artifactDirOf(relativePath: string): string {
+  const i = relativePath.lastIndexOf('/')
+  return i <= 0 ? DESIGN_DIR : relativePath.slice(0, i)
+}
+
+export function artifactMetaPathOf(relativePath: string): string {
+  return `${artifactDirOf(relativePath)}/meta.json`
+}
+
+export function artifactDesignMdPathOf(relativePath: string): string {
+  return `${artifactDirOf(relativePath)}/DESIGN.md`
 }
 
 export function serializeArtifactMeta(artifact: DesignArtifact): string {
@@ -92,7 +110,7 @@ export function parseArtifactMeta(raw: string, dirId: string): DesignArtifact | 
     createdAt,
     updatedAt,
     versions: versions.length > 0 ? versions : [{ id, relativePath, createdAt, summary: '' }],
-    ...(kind === 'html' ? { designMdPath: isStr(o.designMdPath) ? o.designMdPath : artifactDesignMdPath(id) } : {}),
+    ...(kind === 'html' ? { designMdPath: isStr(o.designMdPath) ? o.designMdPath : artifactDesignMdPathOf(relativePath) } : {}),
     ...(previewStatus ? { previewStatus } : {}),
     ...(parsedNode ? { node: parsedNode } : {}),
     implementedAt: isStr(o.implementedAt) ? o.implementedAt : undefined,
@@ -101,8 +119,14 @@ export function parseArtifactMeta(raw: string, dirId: string): DesignArtifact | 
   }
 }
 
-/** Reconstruct an artifact from on-disk files when no meta.json sidecar exists. */
-export function reconstructArtifact(dirId: string, entries: WorkspaceEntry[]): DesignArtifact | null {
+/**
+ * Reconstruct an artifact from on-disk files when no meta.json sidecar exists.
+ * `artifactDir` is the artifact's full workspace-relative directory (nested:
+ * `.kun-design/<docId>/<id>`, or legacy-flat: `.kun-design/<id>`).
+ */
+export function reconstructArtifact(artifactDir: string, entries: WorkspaceEntry[]): DesignArtifact | null {
+  const normalizedDir = artifactDir.startsWith(`${DESIGN_DIR}/`) ? artifactDir : `${DESIGN_DIR}/${artifactDir}`
+  const dirId = normalizedDir.slice(normalizedDir.lastIndexOf('/') + 1)
   const files = entries.filter((e) => e.type === 'file')
   const hasCanvas = files.some((f) => f.name === 'canvas.json')
   const htmlVersions = files
@@ -114,13 +138,13 @@ export function reconstructArtifact(dirId: string, entries: WorkspaceEntry[]): D
   const now = new Date().toISOString()
   const kind: DesignArtifact['kind'] = hasCanvas ? 'canvas' : 'html'
   const relativePath = hasCanvas
-    ? `${DESIGN_DIR}/${dirId}/canvas.json`
-    : `${DESIGN_DIR}/${dirId}/v${htmlVersions[0]}.html`
+    ? `${normalizedDir}/canvas.json`
+    : `${normalizedDir}/v${htmlVersions[0]}.html`
   const versions =
     kind === 'html'
       ? htmlVersions.map((n) => ({
           id: `${dirId}-v${n}`,
-          relativePath: `${DESIGN_DIR}/${dirId}/v${n}.html`,
+          relativePath: `${normalizedDir}/v${n}.html`,
           createdAt: now,
           summary: ''
         }))
@@ -133,17 +157,17 @@ export function reconstructArtifact(dirId: string, entries: WorkspaceEntry[]): D
     createdAt: now,
     updatedAt: now,
     versions,
-    ...(kind === 'html' ? { designMdPath: artifactDesignMdPath(dirId) } : {}),
+    ...(kind === 'html' ? { designMdPath: `${normalizedDir}/DESIGN.md` } : {}),
     node: defaultDesignArtifactNode(0)
   }
 }
 
-/** Fire-and-forget write of an artifact's meta.json sidecar. */
+/** Fire-and-forget write of an artifact's meta.json sidecar (alongside its files). */
 export function persistArtifactMeta(workspaceRoot: string, artifact: DesignArtifact): void {
   if (!workspaceRoot || typeof window.kunGui?.writeWorkspaceFile !== 'function') return
   void window.kunGui
     .writeWorkspaceFile({
-      path: artifactMetaPath(artifact.id),
+      path: artifactMetaPathOf(artifact.relativePath),
       workspaceRoot,
       content: serializeArtifactMeta(artifact)
     })
@@ -151,7 +175,9 @@ export function persistArtifactMeta(workspaceRoot: string, artifact: DesignArtif
 }
 
 /** Fire-and-forget delete of an artifact's whole on-disk dir (keeps disk in sync with the list). */
-export function deleteArtifactDir(workspaceRoot: string, artifactId: string): void {
+export function deleteArtifactDir(workspaceRoot: string, relativePath: string): void {
   if (!workspaceRoot || typeof window.kunGui?.deleteWorkspaceEntry !== 'function') return
-  void window.kunGui.deleteWorkspaceEntry({ path: artifactDirPath(artifactId), workspaceRoot }).catch(() => undefined)
+  void window.kunGui
+    .deleteWorkspaceEntry({ path: artifactDirOf(relativePath), workspaceRoot })
+    .catch(() => undefined)
 }

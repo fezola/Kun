@@ -1129,6 +1129,7 @@
   "codexLoginButton": "登录 ChatGPT",
   "claudeLoginButton": "登录 Claude",
   "claudeEndpointLocked": "Claude 订阅使用固定端点，不可修改。",
+  "claudeExtraUsageNotice": "第三方应用的用量从「额外用量」(Extra Usage) 中扣费，不消耗套餐内额度。请前往 claude.ai/settings/usage 确认已开通并充值。",
   "codexLoginDeviceCodeFallback": "改用验证码登录",
   "codexBrowserOpened": "已打开浏览器，完成登录后会自动返回。",
   "codexDisconnect": "断开连接",

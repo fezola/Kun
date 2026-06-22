@@ -1,5 +1,5 @@
 import { memo, useCallback, useMemo, useState, type ReactElement, type ReactNode } from 'react'
-import { Monitor, Pin, PinOff, Smartphone, Sparkles, Tablet, X } from 'lucide-react'
+import { Monitor, PenLine, Pin, PinOff, Play, Smartphone, Sparkles, Tablet, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useCanvasSelectionStore } from '../../../design/canvas/canvas-selection-store'
 import { useCanvasShapeStore } from '../../../design/canvas/canvas-shape-store'
@@ -15,6 +15,7 @@ import {
   type StrokeDash
 } from '../../../design/canvas/canvas-types'
 import { useDesignWorkspaceStore } from '../../../design/design-workspace-store'
+import type { DesignArtifact } from '../../../design/design-types'
 
 const MIXED = '__mixed__'
 
@@ -372,12 +373,18 @@ function arrowheadOptions(flip: boolean): { value: Arrowhead; label: string; ren
 // Main component
 // ────────────────────────────────────────────────────────────────────────────
 
-function PropertiesPanelInner(): ReactElement | null {
+type Props = {
+  onImplementDesign?: (artifact: DesignArtifact) => void
+}
+
+function PropertiesPanelInner({ onImplementDesign }: Props): ReactElement | null {
   const { t } = useTranslation('common')
   const selectedIds = useCanvasSelectionStore((s) => s.selectedIds)
   const document = useCanvasShapeStore((s) => s.document)
   const pinned = useDesignWorkspaceStore((s) => s.canvasInspectorPinned)
   const setPinned = useDesignWorkspaceStore((s) => s.setCanvasInspectorPinned)
+  const setDesignIntentMode = useDesignWorkspaceStore((s) => s.setDesignIntentMode)
+  const setCanvasAssistantOpen = useDesignWorkspaceStore((s) => s.setCanvasAssistantOpen)
 
   const ids = useMemo(() => Array.from(selectedIds), [selectedIds])
   const shapes = useMemo(
@@ -390,10 +397,10 @@ function PropertiesPanelInner(): ReactElement | null {
     [ids]
   )
 
-  if (shapes.length === 0 && !pinned) return null
+  if (shapes.length === 0) return null
 
   const renderShell = (children: ReactNode): ReactElement => (
-    <aside className="ds-no-drag absolute bottom-[104px] right-3 top-[72px] z-40 flex w-[252px] flex-col overflow-hidden rounded-[18px] border border-ds-border-muted bg-white/82 text-[12px] text-ds-ink shadow-[0_18px_48px_rgba(20,47,95,0.12)] backdrop-blur-2xl dark:bg-ds-canvas/88 max-lg:bottom-[116px] max-lg:top-[76px]">
+    <aside className="ds-no-drag absolute bottom-[104px] right-[76px] top-[72px] z-40 flex w-[252px] flex-col overflow-hidden rounded-[18px] border border-ds-border-muted bg-white/82 text-[12px] text-ds-ink shadow-[0_18px_48px_rgba(20,47,95,0.12)] backdrop-blur-2xl dark:bg-ds-canvas/88 max-lg:bottom-[116px] max-lg:top-[76px]">
       <div className="flex h-9 shrink-0 items-center justify-between px-4">
         <span className="select-none text-[11px] font-medium uppercase tracking-[0.1em] text-ds-faint">
           {t('canvasInspectorTitle', 'Properties')}
@@ -416,14 +423,6 @@ function PropertiesPanelInner(): ReactElement | null {
       <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">{children}</div>
     </aside>
   )
-
-  if (shapes.length === 0) {
-    return renderShell(
-      <div className="flex h-full flex-col items-center justify-center text-center">
-        <p className="text-[12px] leading-5 text-ds-faint">{t('canvasInspectorEmpty')}</p>
-      </div>
-    )
-  }
 
   const x = reduceField(shapes, (s) => s.x)
   const y = reduceField(shapes, (s) => s.y)
@@ -459,6 +458,16 @@ function PropertiesPanelInner(): ReactElement | null {
   const linkedArtifact = singleHtmlFrame
     ? useDesignWorkspaceStore.getState().artifacts.find((a) => a.id === singleHtmlFrame.htmlArtifactId)
     : null
+
+  const requestScreenModify = (): void => {
+    setDesignIntentMode('modify')
+    setCanvasAssistantOpen(true)
+    requestAnimationFrame(() => {
+      globalThis.document
+        .querySelector<HTMLTextAreaElement>('[data-design-rail-composer] textarea')
+        ?.focus()
+    })
+  }
 
   // AI image holder: only fillable boxes (image/frame/rect) can be a slot the
   // agent fills. The marking flows into the AI snapshot so "fill this" resolves.
@@ -530,6 +539,27 @@ function PropertiesPanelInner(): ReactElement | null {
               <div className="mt-0.5 truncate text-ds-faint">{linkedArtifact.relativePath}</div>
             </div>
           )}
+          <div className="grid grid-cols-2 gap-1">
+            <button
+              type="button"
+              onClick={requestScreenModify}
+              className="flex h-8 items-center justify-center gap-1.5 rounded-[8px] bg-ds-hover/35 text-[11.5px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+            >
+              <PenLine className="h-3.5 w-3.5" strokeWidth={1.8} />
+              {t('designProjectModify')}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (linkedArtifact) onImplementDesign?.(linkedArtifact)
+              }}
+              disabled={!linkedArtifact || !onImplementDesign}
+              className="flex h-8 items-center justify-center gap-1.5 rounded-[8px] bg-ds-hover/35 text-[11.5px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-45"
+            >
+              <Play className="h-3.5 w-3.5" strokeWidth={1.8} />
+              {t('designImplement')}
+            </button>
+          </div>
         </Section>
       )}
 

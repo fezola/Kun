@@ -4,11 +4,16 @@ import { useCanvasShapeStore } from '../../../design/canvas/canvas-shape-store'
 import { useCanvasViewportStore } from '../../../design/canvas/canvas-viewport-store'
 import { useCanvasSelectionStore } from '../../../design/canvas/canvas-selection-store'
 import { isHtmlFrame, type CanvasShape } from '../../../design/canvas/canvas-types'
+import type { DesignHtmlElementContext } from '../../../design/design-composer-context'
 import { startDesignHtmlPreviewWatch } from '../../../design/design-preview-file'
 import { useDesignWorkspaceStore } from '../../../design/design-workspace-store'
 
 const MAX_ACTIVE_WEBVIEWS = 6
 const MIN_ZOOM_FOR_WEBVIEW = 0.04
+
+type WebviewElement = HTMLElement & {
+  executeJavaScript?: (code: string) => Promise<unknown>
+}
 
 type ScreenOverlayProps = {
   shape: CanvasShape
@@ -20,6 +25,7 @@ type ScreenOverlayProps = {
   active: boolean
   interactive: boolean
   onDoubleClick: (shapeId: string) => void
+  onUseElementAsContext?: (context: DesignHtmlElementContext | null, promptSeed?: string) => void
 }
 
 function ScreenOverlayInner({
@@ -31,16 +37,25 @@ function ScreenOverlayInner({
   screenHeight,
   active,
   interactive,
-  onDoubleClick
+  onDoubleClick,
+  onUseElementAsContext
 }: ScreenOverlayProps): ReactElement {
   const [fileUrl, setFileUrl] = useState('')
   const [revision, setRevision] = useState(0)
   const [previewError, setPreviewError] = useState('')
-  const webviewRef = useRef<HTMLElement | null>(null)
+  const [selectedElementRect, setSelectedElementRect] = useState<{
+    left: number
+    top: number
+    width: number
+    height: number
+  } | null>(null)
+  const webviewRef = useRef<WebviewElement | null>(null)
 
   const artifact = useDesignWorkspaceStore((s) =>
     s.artifacts.find((a) => a.id === shape.htmlArtifactId)
   )
+  const artifactKind = artifact?.kind
+  const artifactRelativePath = artifact?.relativePath
   const setFileError = useDesignWorkspaceStore((s) => s.setFileError)
 
   useEffect(() => {
@@ -51,7 +66,7 @@ function ScreenOverlayInner({
     setFileUrl('')
     setRevision(0)
     setPreviewError('')
-    if (!artifact || artifact.kind !== 'html' || !workspaceRoot) return
+    if (!artifactRelativePath || artifactKind !== 'html' || !workspaceRoot) return
     if (typeof window.kunGui?.authorizeWritePrototype !== 'function') return
 
     const reportError = (message: string): void => {
@@ -62,7 +77,7 @@ function ScreenOverlayInner({
     const tryAuthorize = (): void => {
       attempts += 1
       void window.kunGui
-        .authorizeWritePrototype({ path: artifact.relativePath, workspaceRoot })
+        .authorizeWritePrototype({ path: artifactRelativePath, workspaceRoot })
         .then((res) => {
           if (cancelled) return
           if (res.ok) {
@@ -71,7 +86,7 @@ function ScreenOverlayInner({
             cleanupWatch?.()
             cleanupWatch = startDesignHtmlPreviewWatch({
               workspaceRoot,
-              path: artifact.relativePath,
+              path: artifactRelativePath,
               onRevision: (nextRevision) => {
                 setPreviewError('')
                 setRevision(nextRevision)
@@ -98,7 +113,7 @@ function ScreenOverlayInner({
       if (retryTimer) window.clearTimeout(retryTimer)
       cleanupWatch?.()
     }
-  }, [artifact?.relativePath, artifact?.kind, setFileError, workspaceRoot])
+  }, [artifactKind, artifactRelativePath, setFileError, workspaceRoot])
 
   const handleDoubleClick = useCallback(
     (e: React.MouseEvent) => {
@@ -107,6 +122,124 @@ function ScreenOverlayInner({
     },
     [shape.id, onDoubleClick]
   )
+
+  const selectElementAt = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>): void => {
+      if (!active || interactive || !artifact || !webviewRef.current?.executeJavaScript) return
+      event.preventDefault()
+      event.stopPropagation()
+      const rect = event.currentTarget.getBoundingClientRect()
+      const x = event.clientX - rect.left
+      const y = event.clientY - rect.top
+      void webviewRef.current
+        .executeJavaScript(`(() => {
+          const x = ${JSON.stringify(x)}
+          const y = ${JSON.stringify(y)}
+          const escapeCss = (value) => {
+            if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(value)
+            return String(value).replace(/[^a-zA-Z0-9_-]/g, '\\\\$&')
+          }
+          const selectorFor = (element) => {
+            if (!element || element.nodeType !== Node.ELEMENT_NODE) return ''
+            if (element.id) return '#' + escapeCss(element.id)
+            const parts = []
+            let current = element
+            while (current && current.nodeType === Node.ELEMENT_NODE && current !== document.documentElement) {
+              const tag = current.tagName.toLowerCase()
+              if (tag === 'body') {
+                parts.unshift('body')
+                break
+              }
+              let index = 1
+              let sibling = current.previousElementSibling
+              while (sibling) {
+                if (sibling.tagName === current.tagName) index += 1
+                sibling = sibling.previousElementSibling
+              }
+              parts.unshift(tag + ':nth-of-type(' + index + ')')
+              current = current.parentElement
+            }
+            return parts.join(' > ')
+          }
+          const element = document.elementFromPoint(x, y)
+          if (!element || element === document.documentElement || element === document.body) {
+            return { ok: false, message: 'No editable element at this point.' }
+          }
+          const bounds = element.getBoundingClientRect()
+          return {
+            ok: true,
+            selector: selectorFor(element),
+            tagName: element.tagName,
+            text: (element.innerText || element.textContent || '').trim().slice(0, 500),
+            html: element.outerHTML.slice(0, 1400),
+            rect: {
+              left: Math.round(bounds.left),
+              top: Math.round(bounds.top),
+              width: Math.round(bounds.width),
+              height: Math.round(bounds.height)
+            }
+          }
+        })()`)
+        .then((value) => {
+          if (!value || typeof value !== 'object') return
+          const result = value as {
+            ok?: unknown
+            message?: unknown
+            selector?: unknown
+            tagName?: unknown
+            text?: unknown
+            html?: unknown
+            rect?: unknown
+          }
+          if (!result.ok) {
+            if (typeof result.message === 'string') setPreviewError(result.message)
+            setSelectedElementRect(null)
+            onUseElementAsContext?.(null)
+            return
+          }
+          const resultRect = result.rect as { left?: unknown; top?: unknown; width?: unknown; height?: unknown } | undefined
+          if (
+            typeof result.selector !== 'string' ||
+            typeof result.tagName !== 'string' ||
+            typeof result.text !== 'string' ||
+            typeof result.html !== 'string' ||
+            !resultRect ||
+            typeof resultRect.left !== 'number' ||
+            typeof resultRect.top !== 'number' ||
+            typeof resultRect.width !== 'number' ||
+            typeof resultRect.height !== 'number'
+          ) {
+            return
+          }
+          setPreviewError('')
+          setSelectedElementRect({
+            left: resultRect.left,
+            top: resultRect.top,
+            width: resultRect.width,
+            height: resultRect.height
+          })
+          onUseElementAsContext?.({
+            artifactId: artifact.id,
+            artifactTitle: artifact.title,
+            artifactRelativePath: artifact.relativePath,
+            selector: result.selector,
+            tagName: result.tagName,
+            text: result.text,
+            html: result.html
+          })
+        })
+        .catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error)
+          setPreviewError(message)
+          setFileError(message)
+        })
+    },
+    [active, artifact, interactive, onUseElementAsContext, setFileError]
+  )
+
+  useEffect(() => {
+    setSelectedElementRect(null)
+  }, [artifact?.id, artifact?.relativePath, shape.id])
 
   if (screenWidth < 20 || screenHeight < 20) return <></>
 
@@ -121,7 +254,7 @@ function ScreenOverlayInner({
         top: screenY,
         width: screenWidth,
         height: screenHeight,
-        pointerEvents: interactive ? 'auto' : 'none',
+        pointerEvents: active || interactive ? 'auto' : 'none',
         borderRadius: Math.min(8, screenWidth * 0.01)
       }}
       onDoubleClick={handleDoubleClick}
@@ -146,11 +279,11 @@ function ScreenOverlayInner({
       </div>
 
       {/* Content */}
-      <div style={{ height: screenHeight - titleBarHeight }} className="bg-white">
+      <div style={{ height: screenHeight - titleBarHeight }} className="relative bg-white">
         {webviewUrl ? (
           <webview
             key={webviewUrl}
-            ref={webviewRef as React.Ref<HTMLElement>}
+            ref={webviewRef as React.Ref<WebviewElement>}
             src={webviewUrl}
             partition="kun-proto"
             webpreferences="contextIsolation=yes,nodeIntegration=no,sandbox=yes"
@@ -164,6 +297,24 @@ function ScreenOverlayInner({
             </div>
           </div>
         )}
+        {webviewUrl && active && !interactive ? (
+          <div
+            className="absolute inset-0 cursor-crosshair"
+            title="Select an element"
+            onPointerDown={selectElementAt}
+          />
+        ) : null}
+        {selectedElementRect && active && !interactive ? (
+          <div
+            className="pointer-events-none absolute border border-accent bg-accent/10 shadow-[0_0_0_1px_rgba(255,255,255,0.75)]"
+            style={{
+              left: selectedElementRect.left,
+              top: selectedElementRect.top,
+              width: selectedElementRect.width,
+              height: selectedElementRect.height
+            }}
+          />
+        ) : null}
       </div>
     </div>
   )
@@ -173,9 +324,10 @@ const ScreenOverlay = memo(ScreenOverlayInner)
 
 type Props = {
   workspaceRoot: string
+  onUseElementAsContext?: (context: DesignHtmlElementContext | null, promptSeed?: string) => void
 }
 
-export function HtmlFrameOverlay({ workspaceRoot }: Props): ReactElement {
+export function HtmlFrameOverlay({ workspaceRoot, onUseElementAsContext }: Props): ReactElement {
   const objects = useCanvasShapeStore((s) => s.document.objects)
   const vbox = useCanvasViewportStore((s) => s.vbox)
   const containerWidth = useCanvasViewportStore((s) => s.containerWidth)
@@ -225,6 +377,12 @@ export function HtmlFrameOverlay({ workspaceRoot }: Props): ReactElement {
     }
   }, [selectedIds, interactiveId])
 
+  const selectedIdsKey = useMemo(() => [...selectedIds].sort().join(','), [selectedIds])
+
+  useEffect(() => {
+    onUseElementAsContext?.(null)
+  }, [onUseElementAsContext, selectedIdsKey])
+
   if (htmlFrames.length === 0 || zoom < MIN_ZOOM_FOR_WEBVIEW) return <></>
 
   return (
@@ -248,6 +406,7 @@ export function HtmlFrameOverlay({ workspaceRoot }: Props): ReactElement {
             active={active}
             interactive={interactiveId === shape.id}
             onDoubleClick={onDoubleClick}
+            onUseElementAsContext={onUseElementAsContext}
           />
         )
       })}

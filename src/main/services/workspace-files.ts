@@ -63,6 +63,7 @@ const WORKSPACE_IMAGE_MIME_BY_EXT = new Map([
   ['.jpeg', 'image/jpeg'],
   ['.gif', 'image/gif'],
   ['.webp', 'image/webp'],
+  ['.svg', 'image/svg+xml'],
   ['.bmp', 'image/bmp'],
   ['.avif', 'image/avif'],
   ['.ico', 'image/x-icon']
@@ -289,6 +290,86 @@ function buildPickedImageName(ext: string, now = new Date()): string {
   return `image-${iso}-${randomUUID().slice(0, 8)}${safeExt}`
 }
 
+function readUInt24LE(buffer: Buffer, offset: number): number {
+  return buffer[offset] + (buffer[offset + 1] << 8) + (buffer[offset + 2] << 16)
+}
+
+function imageDimensionsFromBuffer(
+  buffer: Buffer,
+  ext: string
+): { width: number; height: number } | null {
+  const lowerExt = ext.toLowerCase()
+
+  if (
+    lowerExt === '.png' &&
+    buffer.length >= 24 &&
+    buffer[0] === 0x89 &&
+    buffer.toString('ascii', 1, 4) === 'PNG'
+  ) {
+    return {
+      width: buffer.readUInt32BE(16),
+      height: buffer.readUInt32BE(20)
+    }
+  }
+
+  if (
+    lowerExt === '.gif' &&
+    buffer.length >= 10 &&
+    (buffer.toString('ascii', 0, 6) === 'GIF87a' || buffer.toString('ascii', 0, 6) === 'GIF89a')
+  ) {
+    return {
+      width: buffer.readUInt16LE(6),
+      height: buffer.readUInt16LE(8)
+    }
+  }
+
+  if (lowerExt === '.webp' && buffer.length >= 30 && buffer.toString('ascii', 0, 4) === 'RIFF') {
+    const chunk = buffer.toString('ascii', 12, 16)
+    if (chunk === 'VP8X' && buffer.length >= 30) {
+      return {
+        width: readUInt24LE(buffer, 24) + 1,
+        height: readUInt24LE(buffer, 27) + 1
+      }
+    }
+  }
+
+  if (
+    (lowerExt === '.jpg' || lowerExt === '.jpeg') &&
+    buffer.length >= 4 &&
+    buffer[0] === 0xff &&
+    buffer[1] === 0xd8
+  ) {
+    let offset = 2
+    while (offset + 9 < buffer.length) {
+      if (buffer[offset] !== 0xff) {
+        offset += 1
+        continue
+      }
+      while (buffer[offset] === 0xff) offset += 1
+      const marker = buffer[offset]
+      offset += 1
+      if (marker === 0xd9 || marker === 0xda) break
+      if (offset + 2 > buffer.length) break
+      const length = buffer.readUInt16BE(offset)
+      if (length < 2 || offset + length > buffer.length) break
+      const isSof =
+        (marker >= 0xc0 && marker <= 0xc3) ||
+        (marker >= 0xc5 && marker <= 0xc7) ||
+        (marker >= 0xc9 && marker <= 0xcb) ||
+        (marker >= 0xcd && marker <= 0xcf)
+      if (isSof && length >= 7) {
+        return {
+          height: buffer.readUInt16BE(offset + 3),
+          width: buffer.readUInt16BE(offset + 5)
+        }
+      }
+      offset += length
+    }
+  }
+
+  return null
+}
+
 function buildClipboardTempImagePath(now = new Date()): string {
   return join(CLIPBOARD_TEMP_DIR, `${now.getTime()}.png`)
 }
@@ -398,9 +479,6 @@ export async function pickAndSaveWorkspaceImage(
     if (!buffer.length) {
       return { ok: false, message: 'Selected image is empty.' }
     }
-    const currentFilePath = await resolveOpenTargetPath(payload.currentFilePath, payload.workspaceRoot, {
-      allowBasenameFallback: false
-    })
     const imageDirectory = payload.imageDirectory?.trim() || WORKSPACE_IMAGE_DIR
     const imageDir = await resolveTargetPathWithinWorkspace(imageDirectory, payload.workspaceRoot)
     await mkdir(imageDir, { recursive: true })
@@ -410,10 +488,22 @@ export async function pickAndSaveWorkspaceImage(
       payload.workspaceRoot
     )
     await writeFile(targetPath, buffer)
+    const workspacePath = await canonicalPath(resolve(expandHomePath(payload.workspaceRoot)))
+    const workspaceRelativePath = normalizePathSeparators(relative(workspacePath, targetPath))
+    const currentFilePath = payload.currentFilePath
+      ? await resolveOpenTargetPath(payload.currentFilePath, payload.workspaceRoot, {
+          allowBasenameFallback: false
+        })
+      : null
+    const dimensions = imageDimensionsFromBuffer(buffer, ext)
     return {
       ok: true,
       path: targetPath,
-      relativePath: normalizePathSeparators(relative(dirname(currentFilePath), targetPath)),
+      relativePath: currentFilePath
+        ? normalizePathSeparators(relative(dirname(currentFilePath), targetPath))
+        : workspaceRelativePath,
+      workspaceRelativePath,
+      ...(dimensions ? { width: dimensions.width, height: dimensions.height } : {}),
       createdAt: new Date().toISOString()
     }
   } catch (error) {

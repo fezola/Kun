@@ -4,9 +4,10 @@ import { normalizeWorkspaceRoot } from '../lib/workspace-path'
 
 /**
  * Thin design-thread registry — keeps design-assistant threads out of the
- * code-thread sidebar and lets a workspace reuse its design thread. MVP scope:
- * mark + lookup + active-for-workspace (R3). The startup-inference / hydrate
- * pass that `write-thread-registry.ts` has is intentionally deferred.
+ * code-thread sidebar and lets each 设计稿 (design document) reuse its own
+ * thread. Records are keyed by a composite (workspace + 设计稿) scope so that
+ * switching 设计稿 switches the conversation. Legacy per-workspace records are
+ * re-keyed onto the default 设计稿 by {@link migrateRegistryToDoc}.
  */
 
 export const DESIGN_ASSISTANT_THREAD_TITLE = 'Design Assistant'
@@ -28,6 +29,33 @@ export function designWorkspaceKey(workspaceRoot: string | undefined | null): st
   return normalizeWorkspaceRoot(workspaceRoot ?? '')
 }
 
+/**
+ * Scope separator joining a workspace key and a 设计稿 id into one registry key.
+ * A NUL byte can never appear in a filesystem path, so a composite scope key is
+ * unambiguous to split and a plain workspace key (legacy, pre-migration) never
+ * collides with a composite one.
+ */
+const DOC_SCOPE_SEP = String.fromCharCode(0)
+
+/** Composite registry key: each 设计稿 has its own design-assistant thread. */
+export function designDocKey(
+  workspaceRoot: string | undefined | null,
+  docId: string | undefined | null
+): string {
+  const ws = designWorkspaceKey(workspaceRoot)
+  const doc = (docId ?? '').trim()
+  return doc ? `${ws}${DOC_SCOPE_SEP}${doc}` : ws
+}
+
+/** Normalize a stored key, preserving the 设计稿 suffix of a composite scope key. */
+function normalizeScopeKey(key: string): string {
+  const i = key.indexOf(DOC_SCOPE_SEP)
+  if (i === -1) return designWorkspaceKey(key)
+  const ws = designWorkspaceKey(key.slice(0, i))
+  if (!ws) return ''
+  return `${ws}${DOC_SCOPE_SEP}${key.slice(i + DOC_SCOPE_SEP.length)}`
+}
+
 export function emptyDesignThreadRegistry(): DesignThreadRegistry {
   return { version: 1, workspaces: {} }
 }
@@ -47,8 +75,8 @@ export function normalizeDesignThreadRegistry(raw: unknown): DesignThreadRegistr
   if (!source.workspaces || typeof source.workspaces !== 'object') return emptyDesignThreadRegistry()
 
   const workspaces: DesignThreadRegistry['workspaces'] = {}
-  for (const [workspaceRoot, value] of Object.entries(source.workspaces as Record<string, unknown>)) {
-    const key = designWorkspaceKey(workspaceRoot)
+  for (const [scopeKey, value] of Object.entries(source.workspaces as Record<string, unknown>)) {
+    const key = normalizeScopeKey(scopeKey)
     if (!key || !value || typeof value !== 'object') continue
     const record = value as { activeThreadId?: unknown; threadIds?: unknown }
     const threadIds = normalizeThreadIds(record.threadIds)
@@ -108,10 +136,11 @@ export function isDesignThreadId(
 
 export function markDesignThread(
   workspaceRoot: string,
+  docId: string,
   threadId: string,
   registry: DesignThreadRegistry = readDesignThreadRegistry()
 ): DesignThreadRegistry {
-  const key = designWorkspaceKey(workspaceRoot)
+  const key = designDocKey(workspaceRoot, docId)
   const id = threadId.trim()
   if (!key || !id) return registry
   const record = registry.workspaces[key] ?? { activeThreadId: '', threadIds: [] }
@@ -129,10 +158,10 @@ export function forgetDesignThread(
   const id = threadId.trim()
   if (!id) return registry
   const workspaces: DesignThreadRegistry['workspaces'] = {}
-  for (const [workspaceRoot, record] of Object.entries(registry.workspaces)) {
+  for (const [scopeKey, record] of Object.entries(registry.workspaces)) {
     const threadIds = record.threadIds.filter((item) => item !== id)
     if (threadIds.length === 0) continue
-    workspaces[workspaceRoot] = {
+    workspaces[scopeKey] = {
       activeThreadId: record.activeThreadId === id ? threadIds[0] : record.activeThreadId,
       threadIds
     }
@@ -142,10 +171,11 @@ export function forgetDesignThread(
 
 export function activeDesignThreadForWorkspace(
   workspaceRoot: string,
+  docId: string,
   threads: NormalizedThread[],
   registry: DesignThreadRegistry = readDesignThreadRegistry()
 ): NormalizedThread | null {
-  const key = designWorkspaceKey(workspaceRoot)
+  const key = designDocKey(workspaceRoot, docId)
   if (!key) return null
   const record = registry.workspaces[key]
   if (!record) return null
@@ -154,4 +184,31 @@ export function activeDesignThreadForWorkspace(
     .filter((thread): thread is NormalizedThread => Boolean(thread))
     .filter((thread) => thread.archived !== true)
   return candidates.find((thread) => thread.id === record.activeThreadId) ?? candidates[0] ?? null
+}
+
+/**
+ * One-time migration: re-key a workspace's legacy per-workspace record (written
+ * before 设计稿 existed) onto the default 设计稿's composite scope key, so the
+ * existing conversation stays attached after the hierarchy upgrade. Idempotent —
+ * once the plain workspace key is gone, subsequent calls are no-ops.
+ */
+export function migrateRegistryToDoc(
+  registry: DesignThreadRegistry,
+  workspaceRoot: string,
+  docId: string
+): DesignThreadRegistry {
+  const wsKey = designWorkspaceKey(workspaceRoot)
+  if (!wsKey) return registry
+  const legacy = registry.workspaces[wsKey]
+  if (!legacy) return registry
+  const docKey = designDocKey(workspaceRoot, docId)
+  const workspaces = { ...registry.workspaces }
+  delete workspaces[wsKey]
+  const existing = workspaces[docKey]
+  const threadIds = existing ? [...existing.threadIds, ...legacy.threadIds] : [...legacy.threadIds]
+  workspaces[docKey] = {
+    activeThreadId: legacy.activeThreadId || existing?.activeThreadId || threadIds[0] || '',
+    threadIds
+  }
+  return normalizeDesignThreadRegistry({ version: 1, workspaces })
 }

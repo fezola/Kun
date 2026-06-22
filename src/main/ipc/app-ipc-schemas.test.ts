@@ -777,7 +777,17 @@ describe('app-ipc-schemas', () => {
       imageDirectory: 'img'
     })
     expect(payload.workspaceRoot).toBe('/tmp/workspace')
+    expect(payload.currentFilePath).toBe('/tmp/workspace/.kun-design/abc/v1.html')
     expect(payload.imageDirectory).toBe('img')
+    expect(
+      workspaceImagePickPayloadSchema.parse({
+        workspaceRoot: '/tmp/workspace',
+        imageDirectory: 'img'
+      })
+    ).toEqual({
+      workspaceRoot: '/tmp/workspace',
+      imageDirectory: 'img'
+    })
     // .strict() must reject unknown keys so settings sync can't be poisoned.
     expect(() =>
       workspaceImagePickPayloadSchema.parse({

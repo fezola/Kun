@@ -1,11 +1,23 @@
 import { memo, useEffect, useRef, useState, type ReactElement } from 'react'
-import { ChevronDown, MessageSquare, PanelLeftClose, PanelLeftOpen, Plus, Sparkles, X } from 'lucide-react'
+import {
+  ChevronDown,
+  Layers,
+  Loader2,
+  MessageSquare,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Plus,
+  Sparkles,
+  StopCircle,
+  X
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { formatRelativeTime } from '../../lib/format-relative-time'
 import type { AttachmentReference, NormalizedThread, RuntimeConnectionStatus, ChatBlock } from '../../agent/types'
 import type { QueuedUserMessage } from '../../store/chat-store-types'
 import type { ModelProviderModelGroup } from '@shared/kun-gui-api'
 import { useDesignWorkspaceStore } from '../../design/design-workspace-store'
+import { cancelDesignPagesRun } from '../../design/design-pages-run'
 import { MessageTimeline } from '../chat/MessageTimeline'
 import { FloatingComposer } from '../chat/FloatingComposer'
 import type { DesignComposerContext } from '../chat/FloatingComposer'
@@ -98,8 +110,9 @@ function DesignAIRailInner({
   const artifacts = useDesignWorkspaceStore((s) => s.artifacts)
   const activeArtifactId = useDesignWorkspaceStore((s) => s.activeArtifactId)
   const designIntentMode = useDesignWorkspaceStore((s) => s.designIntentMode)
-  const setActiveArtifact = useDesignWorkspaceStore((s) => s.setActiveArtifact)
-  const setDesignIntentMode = useDesignWorkspaceStore((s) => s.setDesignIntentMode)
+  const multiPageMode = useDesignWorkspaceStore((s) => s.multiPageMode)
+  const setMultiPageMode = useDesignWorkspaceStore((s) => s.setMultiPageMode)
+  const pagesRun = useDesignWorkspaceStore((s) => s.pagesRun)
   const [narrowPanelOpen, setNarrowPanelOpen] = useState(false)
   const [threadListOpen, setThreadListOpen] = useState(false)
   const threadListRef = useRef<HTMLDivElement | null>(null)
@@ -131,11 +144,19 @@ function DesignAIRailInner({
 
   const hasTimeline =
     blocks.length > 0 || liveReasoning.trim().length > 0 || liveAssistant.trim().length > 0
-  const canCreateConversation = runtimeConnection === 'ready' && !busy
+  const runActive = Boolean(pagesRun)
   const activeArtifact = artifacts.find((artifact) => artifact.id === activeArtifactId) ?? null
-  const contextLabel = activeArtifact
-    ? `${designIntentMode === 'preview' ? t('designProjectPreview') : t('designProjectModify')} · ${activeArtifact.title}`
-    : t('designProjectGenerateContext')
+  const primaryContextChip = contextChips[0] ?? null
+  // Keep the composer + new-conversation locked across the whole multi-page run,
+  // even during the brief idle gaps between page turns.
+  const effectiveBusy = busy || runActive
+  const canCreateConversation = runtimeConnection === 'ready' && !busy && !runActive
+  const showMultiPageToggle =
+    designIntentMode === 'generate' && !runActive && activeArtifact?.kind !== 'canvas'
+  const contextLabel = primaryContextChip
+    ? `${designIntentMode === 'preview' ? t('designProjectPreview') : t('designProjectModify')} · ${primaryContextChip.label}`
+    : ''
+  const showContextControls = runActive || Boolean(primaryContextChip) || showMultiPageToggle
 
   const openAssistant = (): void => {
     if (isNarrowViewport()) {
@@ -304,26 +325,70 @@ function DesignAIRailInner({
         data-design-rail-composer
         className="pointer-events-auto absolute bottom-4 left-1/2 z-[60] w-[min(760px,calc(100%-2rem))] -translate-x-1/2 max-sm:bottom-3 max-sm:w-[calc(100%-1rem)]"
       >
-        <div className="mb-2 flex justify-center">
-          <div className="flex max-w-full items-center gap-2 rounded-full border border-ds-border bg-white/84 px-3 py-2 text-[12.5px] font-semibold text-ds-muted shadow-[0_12px_34px_rgba(20,47,95,0.10)] backdrop-blur-xl dark:bg-ds-card/88">
-            <Sparkles className="h-3.5 w-3.5 shrink-0 text-accent" strokeWidth={1.8} />
-            <span className="min-w-0 truncate">{contextLabel}</span>
-            {activeArtifact ? (
-              <button
-                type="button"
-                onClick={() => {
-                  setActiveArtifact(null)
-                  setDesignIntentMode('generate')
-                }}
-                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink"
-                title={t('designProjectClearContext')}
-                aria-label={t('designProjectClearContext')}
-              >
-                <X className="h-3.5 w-3.5" strokeWidth={1.9} />
-              </button>
-            ) : null}
+        {showContextControls ? (
+          <div className="mb-2 flex flex-wrap items-center justify-center gap-2">
+            {pagesRun ? (
+              <div className="flex max-w-full items-center gap-2 rounded-full border border-accent/40 bg-accent/10 px-3 py-2 text-[12.5px] font-semibold text-accent shadow-[0_12px_34px_rgba(20,47,95,0.10)] backdrop-blur-xl">
+                <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" strokeWidth={2} />
+                <span className="min-w-0 truncate">
+                  {pagesRun.phase === 'planning'
+                    ? t('designPagesPlanning')
+                    : t('designPagesGenerating', {
+                        done: Math.min(pagesRun.done + 1, pagesRun.total),
+                        total: pagesRun.total,
+                        title: pagesRun.title
+                      })}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => cancelDesignPagesRun()}
+                  className="flex h-6 shrink-0 items-center gap-1 rounded-full px-2 text-[11.5px] transition hover:bg-accent/15"
+                  title={t('designPagesStop')}
+                  aria-label={t('designPagesStop')}
+                >
+                  <StopCircle className="h-3.5 w-3.5" strokeWidth={1.9} />
+                  {t('designPagesStop')}
+                </button>
+              </div>
+            ) : (
+              <>
+                {primaryContextChip ? (
+                  <div className="flex max-w-full items-center gap-2 rounded-full border border-ds-border bg-white/84 px-3 py-2 text-[12.5px] font-semibold text-ds-muted shadow-[0_12px_34px_rgba(20,47,95,0.10)] backdrop-blur-xl dark:bg-ds-card/88">
+                    <Sparkles className="h-3.5 w-3.5 shrink-0 text-accent" strokeWidth={1.8} />
+                    <span className="min-w-0 truncate">{contextLabel}</span>
+                    {primaryContextChip.removable !== false && onRemoveContextChip ? (
+                      <button
+                        type="button"
+                        onClick={() => onRemoveContextChip(primaryContextChip.id)}
+                        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink"
+                        title={t('designProjectClearContext')}
+                        aria-label={t('designProjectClearContext')}
+                      >
+                        <X className="h-3.5 w-3.5" strokeWidth={1.9} />
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
+                {showMultiPageToggle ? (
+                  <button
+                    type="button"
+                    onClick={() => setMultiPageMode(!multiPageMode)}
+                    aria-pressed={multiPageMode}
+                    title={t('designPagesToggleHint')}
+                    className={`flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-2 text-[12.5px] font-semibold shadow-[0_12px_34px_rgba(20,47,95,0.10)] backdrop-blur-xl transition ${
+                      multiPageMode
+                        ? 'border-accent bg-accent text-white'
+                        : 'border-ds-border bg-white/84 text-ds-muted hover:text-ds-ink dark:bg-ds-card/88'
+                    }`}
+                  >
+                    <Layers className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
+                    {t('designPagesToggle')}
+                  </button>
+                ) : null}
+              </>
+            )}
           </div>
-        </div>
+        ) : null}
         <DesignQuickSuggestions input={input} setInput={setInput} />
 
         <FloatingComposer
@@ -332,7 +397,7 @@ function DesignAIRailInner({
           setInput={setInput}
           mode={mode}
           setMode={setMode}
-          busy={busy}
+          busy={effectiveBusy}
           runtimeReady={runtimeConnection === 'ready'}
           hasActiveThread={Boolean(activeThreadId)}
           composerModel={composerModel}

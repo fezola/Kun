@@ -17,12 +17,17 @@ import type { CanvasToolHandler } from '../../../design/canvas/tools/tool-types'
 import type { CanvasTool } from '../../../design/canvas/canvas-types'
 import { createEmptyDocument } from '../../../design/canvas/canvas-types'
 import { loadCanvasDocument, persistCanvasDocument } from '../../../design/canvas/canvas-persistence'
+import { syncHtmlArtifactsToBoardDocument } from '../../../design/design-board'
+import type { DesignArtifact } from '../../../design/design-types'
+import type { DesignHtmlElementContext } from '../../../design/design-composer-context'
+import { useDesignWorkspaceStore } from '../../../design/design-workspace-store'
 import { CanvasWorkspaceContext } from '../../../design/canvas/canvas-workspace-context'
 import { handleCanvasKeyDown, handleCanvasKeyUp } from '../../../design/canvas/canvas-shortcuts'
 import { hitTest } from '../../../design/canvas/canvas-hit-test'
 import { ShapeDispatcher } from './shapes/ShapeDispatcher'
 import { CanvasGrid } from './CanvasGrid'
 import { CanvasToolbar } from './CanvasToolbar'
+import { CanvasZoomBar } from './CanvasZoomBar'
 import { SelectionOverlay } from './SelectionOverlay'
 import { AlignmentToolbar } from './AlignmentToolbar'
 import { HtmlFrameOverlay } from './HtmlFrameOverlay'
@@ -49,6 +54,10 @@ type Props = {
   baseDir?: string
   leftSidebarCollapsed?: boolean
   onToggleLeftSidebar?: () => void
+  onOpenAgentSettings?: () => void
+  syncHtmlScreens?: boolean
+  onImplementDesign?: (artifact: DesignArtifact) => void
+  onUseElementAsContext?: (context: DesignHtmlElementContext | null, promptSeed?: string) => void
 }
 
 export function CanvasViewport({
@@ -56,7 +65,10 @@ export function CanvasViewport({
   artifactId,
   baseDir,
   leftSidebarCollapsed,
-  onToggleLeftSidebar
+  onToggleLeftSidebar,
+  onOpenAgentSettings,
+  syncHtmlScreens = false,
+  onUseElementAsContext
 }: Props) {
   const { t } = useTranslation('common')
   const svgRef = useRef<SVGSVGElement>(null)
@@ -68,6 +80,7 @@ export function CanvasViewport({
   const gridVisible = useCanvasViewportStore((s) => s.gridVisible)
   const containerWidth = useCanvasViewportStore((s) => s.containerWidth)
   const setContainerSize = useCanvasViewportStore((s) => s.setContainerSize)
+  const designArtifacts = useDesignWorkspaceStore((s) => s.artifacts)
 
   const selectedIds = useCanvasSelectionStore((s) => s.selectedIds)
   const hoverTargetId = useCanvasSelectionStore((s) => s.hoverTargetId)
@@ -114,7 +127,17 @@ export function CanvasViewport({
     // 2) Load from disk, fall back to empty document
     void loadCanvasDocument(workspaceRoot, artifactId, baseDir).then((loaded) => {
       if (cancelled) return
-      const doc = loaded ?? createEmptyDocument()
+      let doc = loaded ?? createEmptyDocument()
+      if (syncHtmlScreens) {
+        const synced = syncHtmlArtifactsToBoardDocument(
+          doc,
+          useDesignWorkspaceStore.getState().artifacts
+        )
+        doc = synced.document
+        if (synced.addedFrameIds.length > 0) {
+          persistCanvasDocument(workspaceRoot, artifactId, doc, baseDir)
+        }
+      }
       useCanvasShapeStore.getState().loadDocument(doc)
       setDocLoaded(true)
     })
@@ -130,7 +153,34 @@ export function CanvasViewport({
       cancelled = true
       unsubscribe()
     }
-  }, [workspaceRoot, artifactId, baseDir])
+  }, [workspaceRoot, artifactId, baseDir, syncHtmlScreens])
+
+  const htmlArtifactSyncKey = useMemo(() => {
+    if (!syncHtmlScreens) return ''
+    return designArtifacts
+      .filter((artifact) => artifact.kind === 'html')
+      .map((artifact) => {
+        const node = artifact.node
+        return [
+          artifact.id,
+          artifact.title,
+          node?.x ?? '',
+          node?.y ?? '',
+          node?.width ?? '',
+          node?.height ?? ''
+        ].join(':')
+      })
+      .join('|')
+  }, [designArtifacts, syncHtmlScreens])
+
+  useEffect(() => {
+    if (!docLoaded || !syncHtmlScreens || !artifactId || !workspaceRoot) return
+    const current = useCanvasShapeStore.getState().document
+    const synced = syncHtmlArtifactsToBoardDocument(current, useDesignWorkspaceStore.getState().artifacts)
+    if (synced.addedFrameIds.length === 0) return
+    useCanvasShapeStore.getState().loadDocument(synced.document)
+    persistCanvasDocument(workspaceRoot, artifactId, synced.document, baseDir)
+  }, [artifactId, baseDir, docLoaded, htmlArtifactSyncKey, syncHtmlScreens, workspaceRoot])
 
   const screenToCanvas = useCallback(
     (clientX: number, clientY: number) => {
@@ -252,7 +302,7 @@ export function CanvasViewport({
   return (
     <CanvasWorkspaceContext.Provider value={workspaceValue}>
       <div className="ds-no-drag relative h-full w-full overflow-hidden bg-ds-main">
-        <div className="pointer-events-none absolute left-3 right-3 top-3 z-40 flex min-w-0 items-start">
+        <div className="pointer-events-none absolute left-3 top-3 z-40 flex min-w-0 items-start">
           <div
             className={`pointer-events-auto flex min-w-0 items-center gap-2 ${
               leftSidebarCollapsed ? 'ds-window-controls-safe-inset' : ''
@@ -265,7 +315,14 @@ export function CanvasViewport({
                 ariaLabel={leftSidebarCollapsed ? t('sidebarExpand') : t('sidebarCollapse')}
               />
             ) : null}
-            <CanvasToolbar />
+          </div>
+        </div>
+        <div className="pointer-events-none absolute right-3 top-1/2 z-40 -translate-y-1/2">
+          <CanvasToolbar workspaceRoot={workspaceRoot} onOpenAgentSettings={onOpenAgentSettings} />
+        </div>
+        <div className="pointer-events-none absolute bottom-4 right-4 z-40 hidden lg:block">
+          <div className="pointer-events-auto">
+            <CanvasZoomBar />
           </div>
         </div>
         <div
@@ -319,7 +376,10 @@ export function CanvasViewport({
               </g>
             </svg>
           )}
-          <HtmlFrameOverlay workspaceRoot={workspaceRoot} />
+          <HtmlFrameOverlay
+            workspaceRoot={workspaceRoot}
+            onUseElementAsContext={onUseElementAsContext}
+          />
         </div>
       </div>
     </CanvasWorkspaceContext.Provider>

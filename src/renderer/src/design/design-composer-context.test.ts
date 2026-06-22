@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createDefaultShape, createEmptyDocument, createHtmlFrameShape, type CanvasDocument } from './canvas/canvas-types'
 import {
   designHtmlElementContextTarget,
+  designSelectedContextLocations,
   resolveDesignComposerContextTargets
 } from './design-composer-context'
 import type { DesignArtifact } from './design-types'
@@ -92,6 +93,21 @@ describe('design composer context', () => {
     })
   })
 
+  it('does not expose a canvas modify context when no shape is selected', () => {
+    const canvas = artifact('canvas', 'canvas')
+    const image = createDefaultShape('image', 20, 40)
+    const doc = withShape(image)
+
+    const targets = resolveDesignComposerContextTargets({
+      artifacts: [canvas],
+      activeArtifactId: canvas.id,
+      canvasDocument: doc,
+      selectedIds: new Set()
+    })
+
+    expect(targets).toEqual([])
+  })
+
   it('omits suppressed context chips', () => {
     const html = artifact('screen-a')
     const targets = resolveDesignComposerContextTargets({
@@ -129,5 +145,88 @@ describe('design composer context', () => {
         detail: 'body > main:nth-of-type(1) > h1:nth-of-type(1)'
       }
     })
+  })
+})
+
+describe('designSelectedContextLocations', () => {
+  it('points at the HTML artifact file + directory for an html target', () => {
+    const html = artifact('screen-a')
+    const targets = resolveDesignComposerContextTargets({
+      artifacts: [html],
+      activeArtifactId: html.id,
+      canvasDocument: createEmptyDocument(),
+      selectedIds: new Set()
+    })
+
+    expect(designSelectedContextLocations({ targets })).toEqual([
+      {
+        title: 'screen-a',
+        kind: 'html',
+        path: '.kun-design/screen-a/v1.html',
+        directory: '.kun-design/screen-a'
+      }
+    ])
+  })
+
+  it('points a canvas selection at the board canvas.json directory', () => {
+    const canvas = artifact('board', 'canvas')
+    const rect = createDefaultShape('rect', 0, 0)
+    const doc = withShape(rect)
+    const targets = resolveDesignComposerContextTargets({
+      artifacts: [canvas],
+      activeArtifactId: canvas.id,
+      canvasDocument: doc,
+      selectedIds: new Set([rect.id])
+    })
+
+    expect(designSelectedContextLocations({ targets, canvasArtifact: canvas })).toEqual([
+      {
+        title: 'board',
+        kind: 'canvas',
+        path: '.kun-design/board/canvas.json',
+        directory: '.kun-design/board'
+      }
+    ])
+  })
+
+  it('adds a path pointer for a selected workspace-file image but skips inline data URLs', () => {
+    const canvas = artifact('board', 'canvas')
+    const fileImage = createDefaultShape('image', 0, 0)
+    fileImage.name = 'Hero'
+    fileImage.imageUrl = '.deepseekgui-images/hero.png'
+    const dataImage = createDefaultShape('image', 50, 50)
+    dataImage.imageUrl = 'data:image/png;base64,AAAA'
+    const doc = createEmptyDocument()
+    for (const shape of [fileImage, dataImage]) {
+      doc.objects[shape.id] = shape
+      doc.objects[doc.rootId].children.push(shape.id)
+    }
+    const targets = resolveDesignComposerContextTargets({
+      artifacts: [canvas],
+      activeArtifactId: canvas.id,
+      canvasDocument: doc,
+      selectedIds: new Set([fileImage.id, dataImage.id])
+    })
+
+    const locations = designSelectedContextLocations({ targets, canvasArtifact: canvas })
+    expect(locations).toContainEqual({
+      title: 'Hero',
+      kind: 'image',
+      path: '.deepseekgui-images/hero.png',
+      directory: '.deepseekgui-images'
+    })
+    expect(locations.some((loc) => loc.path.startsWith('data:'))).toBe(false)
+  })
+
+  it('returns [] when nothing is selected', () => {
+    const canvas = artifact('board', 'canvas')
+    const targets = resolveDesignComposerContextTargets({
+      artifacts: [canvas],
+      activeArtifactId: canvas.id,
+      canvasDocument: createEmptyDocument(),
+      selectedIds: new Set()
+    })
+
+    expect(designSelectedContextLocations({ targets, canvasArtifact: canvas })).toEqual([])
   })
 })

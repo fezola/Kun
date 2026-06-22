@@ -1,6 +1,8 @@
 import { useCanvasViewportStore } from './canvas-viewport-store'
 import { useCanvasShapeStore } from './canvas-shape-store'
 import { useCanvasSelectionStore } from './canvas-selection-store'
+import { getSelectionBounds } from './canvas-hit-test'
+import { pasteClipboardImageToCanvas } from './canvas-image-import'
 import type { CanvasTool } from './canvas-types'
 
 const KEY_TO_TOOL: Record<string, CanvasTool> = {
@@ -35,6 +37,13 @@ export function handleCanvasKeyDown(e: KeyboardEvent): boolean {
     const doc = useCanvasShapeStore.getState().document
     const root = doc.objects[doc.rootId]
     if (root) useCanvasSelectionStore.getState().selectAll(root.children)
+    return true
+  }
+
+  if (meta && key === 'v') {
+    e.preventDefault()
+    const vbox = useCanvasViewportStore.getState().vbox
+    void pasteClipboardImageToCanvas({ vbox })
     return true
   }
 
@@ -73,6 +82,55 @@ export function handleCanvasKeyDown(e: KeyboardEvent): boolean {
     e.preventDefault()
     useCanvasSelectionStore.getState().clearSelection()
     useCanvasViewportStore.getState().setActiveTool('select')
+    return true
+  }
+
+  // Zoom: Cmd/Ctrl + / Cmd/Ctrl -
+  if (meta && (key === '=' || key === '+')) {
+    e.preventDefault()
+    const s = useCanvasViewportStore.getState()
+    const cx = s.vbox.x + s.vbox.width / 2
+    const cy = s.vbox.y + s.vbox.height / 2
+    s.zoomTo(1.2, { x: cx, y: cy })
+    return true
+  }
+  if (meta && key === '-') {
+    e.preventDefault()
+    const s = useCanvasViewportStore.getState()
+    const cx = s.vbox.x + s.vbox.width / 2
+    const cy = s.vbox.y + s.vbox.height / 2
+    s.zoomTo(1 / 1.2, { x: cx, y: cy })
+    return true
+  }
+
+  // Shift+0 → zoom to 100%
+  if (shift && !meta && key === '0') {
+    e.preventDefault()
+    useCanvasViewportStore.getState().resetView()
+    return true
+  }
+
+  // Shift+1 → zoom to fit all
+  if (shift && !meta && key === '1') {
+    e.preventDefault()
+    const doc = useCanvasShapeStore.getState().document
+    const root = doc.objects[doc.rootId]
+    if (root) {
+      const bounds = getSelectionBounds(doc.objects, new Set(root.children))
+      if (bounds) useCanvasViewportStore.getState().zoomToFit(bounds)
+    }
+    return true
+  }
+
+  // Shift+2 → zoom to selection
+  if (shift && !meta && key === '2') {
+    e.preventDefault()
+    const doc = useCanvasShapeStore.getState().document
+    const { selectedIds } = useCanvasSelectionStore.getState()
+    if (selectedIds.size > 0) {
+      const bounds = getSelectionBounds(doc.objects, selectedIds)
+      if (bounds) useCanvasViewportStore.getState().zoomToFit(bounds, 60)
+    }
     return true
   }
 

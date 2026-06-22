@@ -1,13 +1,13 @@
 import { useEffect, type ReactElement } from 'react'
 import { useDesignWorkspaceStore } from '../../design/design-workspace-store'
-import { DESIGN_CANVAS_ENABLED } from '../../design/design-feature-flags'
-import { createDesignArtifactId, defaultDesignArtifactNode } from '../../design/design-types'
+import { createDesignArtifactId } from '../../design/design-types'
 import type { DesignArtifact } from '../../design/design-types'
 import type { DesignHtmlElementContext } from '../../design/design-composer-context'
 import { setScreenArtifactFactory } from '../../design/canvas/screen-artifact-bridge'
+import { artifactDesignMdPath, artifactDirPath } from '../../design/design-artifact-persistence'
+import { ensureDesignBoardArtifact, findDesignBoardArtifact } from '../../design/design-board'
 import { CanvasViewport } from './canvas/CanvasViewport'
 import { PropertiesPanel } from './canvas/PropertiesPanel'
-import { DesignProjectCanvas } from './DesignProjectCanvas'
 import { useApplyShapeOpsOnTurnComplete } from '../../design/canvas/use-apply-shape-ops-on-turn-complete'
 
 type CanvasProps = {
@@ -19,10 +19,7 @@ type CanvasProps = {
   onUseElementAsContext?: (context: DesignHtmlElementContext | null, promptSeed?: string) => void
 }
 
-/**
- * Design-mode stage router. SVG canvas artifacts keep the Figma-style ShapeOps
- * editor; HTML artifacts and the empty state use the Stitch-style project canvas.
- */
+/** Design-mode unified stage: one SVG/Figma-style board hosts HTML screen frames and vector layers. */
 export function DesignCanvas({
   leftSidebarCollapsed,
   onToggleLeftSidebar,
@@ -33,20 +30,28 @@ export function DesignCanvas({
 }: CanvasProps): ReactElement {
   const workspaceRoot = useDesignWorkspaceStore((s) => s.workspaceRoot)
   const artifacts = useDesignWorkspaceStore((s) => s.artifacts)
-  const activeArtifactId = useDesignWorkspaceStore((s) => s.activeArtifactId)
-  const activeArtifact = artifacts.find((item) => item.id === activeArtifactId) ?? null
-  const showCanvasStage = DESIGN_CANVAS_ENABLED && activeArtifact?.kind === 'canvas'
+  const activeDocumentId = useDesignWorkspaceStore((s) => s.activeDocumentId)
+  const boardArtifact = findDesignBoardArtifact(artifacts)
+  const baseDir = activeDocumentId ? `.kun-design/${activeDocumentId}` : undefined
 
-  useApplyShapeOpsOnTurnComplete(showCanvasStage, onScreenCreated)
+  useApplyShapeOpsOnTurnComplete(Boolean(boardArtifact), onScreenCreated)
+
+  useEffect(() => {
+    if (!workspaceRoot) return
+    void ensureDesignBoardArtifact(workspaceRoot)
+  }, [workspaceRoot, artifacts.length])
 
   // Register the factory that add-screen ShapeOps and the Screen tool use to
   // create a linked HTML artifact (returns the new artifact id synchronously).
   useEffect(() => {
+    if (!boardArtifact) return
     setScreenArtifactFactory((name: string) => {
       const store = useDesignWorkspaceStore.getState()
+      const docId = store.ensureActiveDocument()
       const createdAt = new Date().toISOString()
       const artifactId = createDesignArtifactId()
-      const relativePath = `.kun-design/${artifactId}/v1.html`
+      const relativePath = `${artifactDirPath(docId, artifactId)}/v1.html`
+      const designMdPath = artifactDesignMdPath(docId, artifactId)
       const title = name || 'Screen'
       store.upsertArtifact({
         id: artifactId,
@@ -56,34 +61,37 @@ export function DesignCanvas({
         createdAt,
         updatedAt: createdAt,
         versions: [{ id: `${artifactId}-v1`, relativePath, createdAt, summary: '' }],
-        node: defaultDesignArtifactNode(store.artifacts.length)
+        designMdPath,
+        previewStatus: 'pending'
       })
+      store.setActiveArtifact(boardArtifact.id)
       return artifactId
     })
     return () => setScreenArtifactFactory(() => null)
-  }, [])
+  }, [boardArtifact])
 
-  if (showCanvasStage && activeArtifact) {
+  if (!boardArtifact) {
     return (
-      <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden bg-ds-main">
-        <CanvasViewport
-          workspaceRoot={workspaceRoot}
-          artifactId={activeArtifact.id}
-          leftSidebarCollapsed={leftSidebarCollapsed}
-          onToggleLeftSidebar={onToggleLeftSidebar}
-        />
-        <PropertiesPanel />
+      <div className="relative flex min-h-0 min-w-0 flex-1 items-center justify-center overflow-hidden bg-ds-main text-sm text-ds-faint">
+        Loading design board...
       </div>
     )
   }
 
   return (
-    <DesignProjectCanvas
-      leftSidebarCollapsed={leftSidebarCollapsed}
-      onToggleLeftSidebar={onToggleLeftSidebar}
-      onOpenAgentSettings={onOpenAgentSettings}
-      onImplementDesign={onImplementDesign}
-      onUseElementAsContext={onUseElementAsContext}
-    />
+    <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden bg-ds-main">
+      <CanvasViewport
+        workspaceRoot={workspaceRoot}
+        artifactId={boardArtifact.id}
+        {...(baseDir ? { baseDir } : {})}
+        leftSidebarCollapsed={leftSidebarCollapsed}
+        onToggleLeftSidebar={onToggleLeftSidebar}
+        onOpenAgentSettings={onOpenAgentSettings}
+        syncHtmlScreens
+        onImplementDesign={onImplementDesign}
+        onUseElementAsContext={onUseElementAsContext}
+      />
+      <PropertiesPanel onImplementDesign={onImplementDesign} />
+    </div>
   )
 }

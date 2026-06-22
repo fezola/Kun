@@ -2,7 +2,7 @@ import { WRITE_PROTOTYPE_DEFAULT_PROMPT, WRITE_PROTOTYPE_MAX_TEXT_CHARS } from '
 import { DESIGN_CRAFT_LINES, formatDesignContextLines, type DesignContext } from './design-context'
 import type { CanvasSnapshot } from './canvas/canvas-snapshot'
 import { snapshotToCompactJson } from './canvas/canvas-snapshot'
-import type { DesignHtmlElementContext } from './design-composer-context'
+import type { DesignContextLocation, DesignHtmlElementContext } from './design-composer-context'
 
 export type DesignTurnTarget = 'html' | 'canvas' | 'screen'
 
@@ -25,6 +25,42 @@ export type DesignTurnOptions = {
   designContext?: DesignContext
   /** Canvas mode only: current snapshot of the shape document for AI reasoning. */
   canvasSnapshot?: CanvasSnapshot
+  /**
+   * Sibling pages already on the project canvas. Passed so a generated/iterated
+   * page stays visually consistent with the rest of the project (shared palette,
+   * typography, spacing) — the cohesion half of the Stitch-style multi-page model.
+   */
+  screenManifest?: ScreenManifestEntry[]
+  /**
+   * Lightweight pointers to the design artifacts the user has selected on the
+   * canvas/board (HTML page, SVG canvas, image). We pass each one's file path +
+   * directory — NOT the inlined content — so the agent reads them on demand
+   * instead of us bloating the turn with full HTML/JSON.
+   */
+  contextLocations?: DesignContextLocation[]
+}
+
+/**
+ * Render the "the user is pointing at these" block: a short list of selected
+ * artifact paths + directories. The agent reads them on demand — we deliberately
+ * do NOT inline HTML/JSON so the turn stays small.
+ */
+function formatContextLocationLines(locations: DesignContextLocation[] | undefined): string[] {
+  if (!locations || locations.length === 0) return []
+  const seen = new Set<string>()
+  const rows: string[] = []
+  for (const loc of locations) {
+    const path = loc.path.trim()
+    if (!path || seen.has(path)) continue
+    seen.add(path)
+    const title = loc.title.trim() || path
+    rows.push(`- ${title} [${loc.kind}] → \`${path}\` (directory: \`${loc.directory}\`)`)
+  }
+  if (rows.length === 0) return []
+  return [
+    'Selected on the canvas (the user is pointing at these). Read the listed file(s) only if you need their current content — do not assume their contents, and do not inline them wholesale:',
+    ...rows
+  ]
 }
 
 /**
@@ -39,9 +75,31 @@ export type DesignTurnOptions = {
  */
 export type ScreenManifestEntry = {
   name: string
-  width: number
-  height: number
+  /** Canvas placement size in px; omitted for free-flow HTML pages. */
+  width?: number
+  height?: number
   htmlPath: string
+  /** One-line brief of what the page is, so the agent can align without reading it. */
+  summary?: string
+}
+
+/**
+ * Render the "other pages in this project" block shared by the HTML and screen
+ * turn prompts. Lets a generated/iterated page align with its siblings.
+ */
+function formatScreenManifestLines(manifest: ScreenManifestEntry[] | undefined): string[] {
+  if (!manifest || manifest.length === 0) return []
+  return [
+    'Other pages already in this project (keep ONE cohesive design system across them — shared palette, typography, spacing, components):',
+    ...manifest.map((s) => {
+      const dims = typeof s.width === 'number' && typeof s.height === 'number'
+        ? ` (${Math.round(s.width)}x${Math.round(s.height)})`
+        : ''
+      const summary = s.summary?.trim() ? ` — ${s.summary.trim().slice(0, 160)}` : ''
+      return `- "${s.name}"${dims} → ${s.htmlPath}${summary}`
+    }),
+    'Read a relevant sibling page if you need to match its exact styling. Do NOT modify sibling files — only the reserved file for this turn.'
+  ]
 }
 
 export type ScreenTurnOptions = DesignTurnOptions & {
@@ -91,9 +149,17 @@ export function buildDesignTurnPrompt(options: DesignTurnOptions): string {
     '- The file content must be raw HTML — no markdown fences, no commentary inside the file.',
     '- Finish with the document ending in `</html>`, then reply with a one-paragraph summary of what you designed and the interactions you implemented.'
   ]
+  const manifestLines = formatScreenManifestLines(options.screenManifest)
+  if (manifestLines.length > 0) {
+    lines.push('', ...manifestLines)
+  }
   const designContextLines = formatDesignContextLines(options.designContext)
   if (designContextLines.length > 0) {
     lines.push('', ...designContextLines)
+  }
+  const contextLocationLines = formatContextLocationLines(options.contextLocations)
+  if (contextLocationLines.length > 0) {
+    lines.push('', ...contextLocationLines)
   }
   const htmlElementLines = formatHtmlElementContextLines(options.htmlElementContext)
   if (htmlElementLines.length > 0) {
@@ -157,20 +223,18 @@ function buildScreenTurnPrompt(options: ScreenTurnOptions): string {
     '- Finish with the document ending in `</html>`, then reply with a one-paragraph summary of what you designed.'
   ]
 
-  if (options.screenManifest.length > 0) {
-    lines.push(
-      '',
-      'Other screens in the same project (maintain visual consistency — shared palette, typography, spacing):',
-      ...options.screenManifest.map(
-        (s) => `- "${s.name}" (${s.width}x${s.height}) → ${s.htmlPath}`
-      ),
-      'Read relevant sibling screens if you need to align with their styling.'
-    )
+  const manifestLines = formatScreenManifestLines(options.screenManifest)
+  if (manifestLines.length > 0) {
+    lines.push('', ...manifestLines)
   }
 
   const designContextLines = formatDesignContextLines(options.designContext)
   if (designContextLines.length > 0) {
     lines.push('', ...designContextLines)
+  }
+  const contextLocationLines = formatContextLocationLines(options.contextLocations)
+  if (contextLocationLines.length > 0) {
+    lines.push('', ...contextLocationLines)
   }
   const htmlElementLines = formatHtmlElementContextLines(options.htmlElementContext)
   if (htmlElementLines.length > 0) {
@@ -270,6 +334,10 @@ function buildCanvasTurnPrompt(options: DesignTurnOptions): string {
   const designContextLines = formatDesignContextLines(options.designContext)
   if (designContextLines.length > 0) {
     lines.push('', ...designContextLines)
+  }
+  const contextLocationLines = formatContextLocationLines(options.contextLocations)
+  if (contextLocationLines.length > 0) {
+    lines.push('', ...contextLocationLines)
   }
   const text = options.text?.trim()
   if (text) {

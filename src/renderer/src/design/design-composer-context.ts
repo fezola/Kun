@@ -1,3 +1,5 @@
+import { artifactDirOf } from './design-artifact-persistence'
+import { isDirectImageUrl } from './canvas/canvas-image-source'
 import { isHtmlFrame, type CanvasDocument, type CanvasShape } from './canvas/canvas-types'
 import type { DesignArtifact } from './design-types'
 
@@ -138,4 +140,79 @@ export function designHtmlElementContextTarget(input: {
 
 export function designComposerContextChips(targets: readonly DesignComposerContextTarget[]): DesignComposerContext[] {
   return targets.map((target) => target.chip)
+}
+
+/**
+ * A selected design artifact conveyed to the agent as a path pointer rather than
+ * inlined content. `path`/`directory` are workspace-relative. The design turn
+ * prompt renders these so the agent is TOLD where the selected page / canvas /
+ * image lives (and can read it on demand) instead of us dumping full HTML/JSON
+ * into the turn.
+ */
+export type DesignContextLocation = {
+  title: string
+  kind: 'html' | 'canvas' | 'image'
+  path: string
+  directory: string
+}
+
+function dirOfPath(path: string): string {
+  const i = path.lastIndexOf('/')
+  return i <= 0 ? '.' : path.slice(0, i)
+}
+
+/**
+ * Map the resolved composer-context targets to lightweight path pointers for the
+ * agent. HTML targets point at their artifact file; a canvas selection points at
+ * the board's `canvas.json`; image shapes with a workspace-relative `imageUrl`
+ * (i.e. saved files, not inline data URLs) point at the image file. Inline
+ * (data:/http/blob) images are skipped — those ride along as composer attachments.
+ */
+export function designSelectedContextLocations(input: {
+  targets: readonly DesignComposerContextTarget[]
+  /** The active board/canvas artifact, used to locate a canvas-selection. */
+  canvasArtifact?: Pick<DesignArtifact, 'title' | 'relativePath'> | null
+}): DesignContextLocation[] {
+  const out: DesignContextLocation[] = []
+  for (const target of input.targets) {
+    if (
+      target.kind === 'html-artifact' ||
+      target.kind === 'html-screen-frame' ||
+      target.kind === 'html-element'
+    ) {
+      const path = target.artifact.relativePath.trim()
+      if (path) {
+        out.push({
+          title: target.artifact.title || target.chip.label,
+          kind: 'html',
+          path,
+          directory: artifactDirOf(path)
+        })
+      }
+      continue
+    }
+    if (target.kind === 'canvas-selection') {
+      const canvasPath = input.canvasArtifact?.relativePath.trim()
+      if (canvasPath) {
+        out.push({
+          title: input.canvasArtifact?.title || 'Design canvas',
+          kind: 'canvas',
+          path: canvasPath,
+          directory: artifactDirOf(canvasPath)
+        })
+      }
+      for (const shape of target.selectedShapes) {
+        const imageUrl = shape.imageUrl?.trim()
+        if (shape.type === 'image' && imageUrl && !isDirectImageUrl(imageUrl)) {
+          out.push({
+            title: shape.name || 'Image',
+            kind: 'image',
+            path: imageUrl,
+            directory: dirOfPath(imageUrl)
+          })
+        }
+      }
+    }
+  }
+  return out
 }

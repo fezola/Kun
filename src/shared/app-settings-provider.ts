@@ -159,7 +159,8 @@ export function resolveModelProviderBaseUrl(settings: AppSettingsV1): string {
 
 export function resolveModelProviderProxyUrl(settings: AppSettingsV1): string {
   const proxy = getModelProviderSettings(settings).proxy
-  return proxy.enabled ? proxy.url.trim() : ''
+  if (!proxy.enabled) return ''
+  return normalizeProxyUrl(proxy.url)
 }
 
 export function getDefaultModelProviderProfile(settings: AppSettingsV1): ModelProviderProfileV1 {
@@ -1238,10 +1239,9 @@ export function defaultNetworkProxySettings(): NetworkProxySettingsV1 {
 export function normalizeNetworkProxySettings(
   input: Partial<NetworkProxySettingsV1> | undefined
 ): NetworkProxySettingsV1 {
-  const url = normalizeProxyUrl(input?.url)
   return {
-    enabled: input?.enabled === true && Boolean(url),
-    url
+    enabled: input?.enabled === true,
+    url: typeof input?.url === 'string' ? input.url : ''
   }
 }
 

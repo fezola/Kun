@@ -68,12 +68,19 @@ import {
   buildDesignTurnPrompt
 } from '../design/design-turn-prompt'
 import { buildDesignArtifactMarkdown } from '../design/design-artifact-markdown'
+import { buildHtmlSiblingManifest } from '../design/design-pages'
+import { runDesignPages } from '../design/design-pages-run'
 import { prepareDesignPreviewFile } from '../design/design-preview-file'
 import { buildImplementDesignPrompt } from '../design/design-implement-prompt'
-import { createDesignArtifactId, defaultDesignArtifactNode, type DesignArtifact } from '../design/design-types'
+import { createDesignArtifactId, type DesignArtifact } from '../design/design-types'
 import { formatDesignSystemMarkdown, hashDesignSystem } from '../design/design-context'
 import { canImplementDesignArtifact } from '../design/design-artifact-actions'
-import { createEmptyDocument, isHtmlFrame } from '../design/canvas/canvas-types'
+import { createEmptyDocument, isHtmlFrame, type CanvasShape } from '../design/canvas/canvas-types'
+import {
+  createScreenFrameArtifact,
+  ensureDesignBoardArtifact,
+  findDesignBoardArtifact
+} from '../design/design-board'
 import { serializeCanvasDocument } from '../design/canvas/canvas-persistence'
 import { useCanvasShapeStore } from '../design/canvas/canvas-shape-store'
 import { useCanvasSelectionStore } from '../design/canvas/canvas-selection-store'
@@ -81,6 +88,7 @@ import { snapshotCanvas } from '../design/canvas/canvas-snapshot'
 import {
   designComposerContextChips,
   designHtmlElementContextTarget,
+  designSelectedContextLocations,
   resolveDesignComposerContextTargets
 } from '../design/design-composer-context'
 import type { DesignHtmlElementContext } from '../design/design-composer-context'
@@ -94,7 +102,8 @@ import { useWriteWorkspaceStore } from '../write/write-workspace-store'
 import { isWriteThreadId } from '../write/write-thread-registry'
 import {
   readDesignThreadRegistry,
-  designWorkspaceKey,
+  activeDesignThreadForWorkspace,
+  designDocKey,
   markDesignThread,
   saveDesignThreadRegistry
 } from '../design/design-thread-registry'
@@ -531,6 +540,7 @@ export function Workbench(): ReactElement {
   const designImplementTitle = useDesignWorkspaceStore((s) => s.implementTitle)
   const designArtifacts = useDesignWorkspaceStore((s) => s.artifacts)
   const designActiveArtifactId = useDesignWorkspaceStore((s) => s.activeArtifactId)
+  const designActiveDocumentId = useDesignWorkspaceStore((s) => s.activeDocumentId)
   const writeAssistantModel = useWriteWorkspaceStore((s) => s.assistantModel)
   const writeAssistantProviderId = useWriteWorkspaceStore((s) => s.assistantProviderId)
   const setWriteAssistantModel = useWriteWorkspaceStore((s) => s.setAssistantModel)
@@ -579,9 +589,13 @@ export function Workbench(): ReactElement {
     setDesignHtmlElementContext((current) => {
       if (!current) return current
       if (route !== 'design') return null
+      const active = designArtifacts.find((artifact) => artifact.id === designActiveArtifactId) ?? null
+      if (active?.kind === 'canvas') {
+        return designArtifacts.some((artifact) => artifact.id === current.artifactId) ? current : null
+      }
       return current.artifactId === designActiveArtifactId ? current : null
     })
-  }, [designActiveArtifactId, route])
+  }, [designActiveArtifactId, designArtifacts, route])
   const visibleDesignContextTargets = useMemo(
     () => {
       if (route !== 'design') return []
@@ -710,6 +724,8 @@ export function Workbench(): ReactElement {
   const sddUpgradeTargetRef = useRef<PendingSddPlanTarget | null>(null)
   const sddTitleSyncTimerRef = useRef<number | null>(null)
   const lastSyncedSddTitleRef = useRef<Record<string, string>>({})
+  const canvasAutoAttachIdRef = useRef<string | null>(null)
+  const canvasAutoAttachSeqRef = useRef(0)
   const timelineBlocks = blocks
   const lockVisionToTextModelSwitch = route === 'chat' && timelineBlocks.some((block) => block.kind === 'user')
   const timelineLiveReasoning = liveReasoning
@@ -1043,21 +1059,32 @@ export function Workbench(): ReactElement {
   const designThreads = useMemo(() => {
     const registry = readDesignThreadRegistry()
     const root = useDesignWorkspaceStore.getState().workspaceRoot || workspaceRoot
-    const key = root ? designWorkspaceKey(root) : null
+    const key = root && designActiveDocumentId ? designDocKey(root, designActiveDocumentId) : null
     const record = key ? registry.workspaces[key] : null
     if (!record) return []
     const idSet = new Set(record.threadIds)
     return threads
       .filter((t) => idSet.has(t.id) && t.archived !== true)
       .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
-  }, [threads, workspaceRoot])
+  }, [threads, workspaceRoot, designActiveDocumentId])
 
   const switchDesignThread = useCallback(async (threadId: string) => {
-    const root = useDesignWorkspaceStore.getState().workspaceRoot || workspaceRoot
+    const designStore = useDesignWorkspaceStore.getState()
+    const root = designStore.workspaceRoot || workspaceRoot
     if (!root) return
-    saveDesignThreadRegistry(markDesignThread(root, threadId))
+    saveDesignThreadRegistry(markDesignThread(root, designStore.activeDocumentId ?? '', threadId))
     await selectThread(threadId)
   }, [selectThread, workspaceRoot])
+
+  // Switching the active 设计稿 switches the conversation: select that 设计稿's
+  // existing thread if it has one. Creation stays lazy until the first send.
+  useEffect(() => {
+    if (route !== 'design' || !designActiveDocumentId) return
+    const root = useDesignWorkspaceStore.getState().workspaceRoot || workspaceRoot
+    if (!root) return
+    const existing = activeDesignThreadForWorkspace(root, designActiveDocumentId, threads)
+    if (existing && existing.id !== activeThreadId) void selectThread(existing.id)
+  }, [designActiveDocumentId, route, threads, activeThreadId, workspaceRoot, selectThread])
 
   const mirrorClawCommand = async (userText: string, replyText: string): Promise<void> => {
     if (!activeThreadId || typeof window.kunGui?.mirrorClawChannelMessage !== 'function') return
@@ -1213,6 +1240,7 @@ export function Workbench(): ReactElement {
 
   const clearComposerAttachments = (): void => {
     setComposerAttachments([])
+    canvasAutoAttachIdRef.current = null
   }
 
   const activeComposerWorkspace = (): string | undefined => {
@@ -1384,6 +1412,101 @@ export function Workbench(): ReactElement {
     await handlePickAttachments([clipboardImageToFile(image)], { localFilePaths: [image.localFilePath] })
   }
 
+  // Auto-attach selected canvas image to design composer
+  useEffect(() => {
+    if (route !== 'design') {
+      if (canvasAutoAttachIdRef.current) {
+        setComposerAttachments((cur) => cur.filter((a) => a.id !== canvasAutoAttachIdRef.current))
+        canvasAutoAttachIdRef.current = null
+      }
+      return
+    }
+
+    const removeAutoAttach = (): void => {
+      if (canvasAutoAttachIdRef.current) {
+        setComposerAttachments((cur) => cur.filter((a) => a.id !== canvasAutoAttachIdRef.current))
+        canvasAutoAttachIdRef.current = null
+      }
+    }
+
+    if (canvasSelectedIds.size !== 1) {
+      removeAutoAttach()
+      return
+    }
+
+    const shapeId = [...canvasSelectedIds][0]
+    const shape = canvasDocument.objects[shapeId]
+    if (!shape || shape.type !== 'image' || !shape.imageUrl) {
+      removeAutoAttach()
+      return
+    }
+
+    const seq = ++canvasAutoAttachSeqRef.current
+    const imageUrl = shape.imageUrl
+    const shapeName = shape.name || 'Canvas Image'
+
+    void (async () => {
+      try {
+        let dataBase64: string
+        let mimeType: string
+
+        const dataUrlMatch = imageUrl.match(/^data:([^;]+);base64,(.+)$/)
+        if (dataUrlMatch) {
+          mimeType = dataUrlMatch[1]
+          dataBase64 = dataUrlMatch[2]
+        } else {
+          if (typeof window.kunGui?.readWorkspaceImage !== 'function') return
+          const result = await window.kunGui.readWorkspaceImage({ path: imageUrl, workspaceRoot })
+          if (!result.ok || canvasAutoAttachSeqRef.current !== seq) return
+          const match = result.dataUrl.match(/^data:([^;]+);base64,(.+)$/)
+          if (!match) return
+          mimeType = match[1]
+          dataBase64 = match[2]
+        }
+        if (canvasAutoAttachSeqRef.current !== seq) return
+
+        const provider = getProvider()
+        if (typeof provider.uploadAttachment !== 'function') return
+        const caps = runtimeInfo?.capabilities.attachments
+        if (!caps) return
+
+        const file = base64ToFile(dataBase64, shapeName, mimeType)
+        const prepared = await prepareImageAttachmentUpload(file, caps)
+        if (canvasAutoAttachSeqRef.current !== seq) return
+
+        const ws = activeComposerWorkspace()
+        const uploaded = await provider.uploadAttachment({
+          name: file.name,
+          mimeType: prepared.mimeType,
+          dataBase64: prepared.dataBase64,
+          textFallback: prepared.textFallback,
+          ...(activeThreadId ? { threadId: activeThreadId } : {}),
+          ...(ws ? { workspace: ws } : {})
+        })
+        if (canvasAutoAttachSeqRef.current !== seq) return
+
+        removeAutoAttach()
+        const ref: AttachmentReference = {
+          id: uploaded.id,
+          name: uploaded.name,
+          mimeType: uploaded.mimeType,
+          width: uploaded.width,
+          height: uploaded.height,
+          previewUrl: `data:${prepared.mimeType};base64,${prepared.dataBase64}`
+        }
+        setComposerAttachments((cur) => [...cur, ref])
+        canvasAutoAttachIdRef.current = uploaded.id
+      } catch {
+        // Silently fail — don't disrupt canvas selection UX
+      }
+    })()
+
+    return () => {
+      canvasAutoAttachSeqRef.current += 1
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [route, canvasSelectedIds, canvasDocument])
+
   const sendWritePrompt = (value: string): void => {
     const v = value.trim()
     const attachments = composerAttachments
@@ -1452,6 +1575,44 @@ export function Workbench(): ReactElement {
     })()
   }
 
+  // Stitch-style multi-page generation: plan N pages from one brief, then
+  // generate each on its own turn (each cohesive with its siblings).
+  const generateDesignPages = (brief: string): void => {
+    const designState = useDesignWorkspaceStore.getState()
+    const designWorkspaceRoot = designState.workspaceRoot || workspaceRoot
+    if (!designWorkspaceRoot) {
+      setError(t('workspaceRequiredToCreateThread'))
+      return
+    }
+    void (async () => {
+      const docId = useDesignWorkspaceStore.getState().ensureActiveDocument()
+      const threadId = await ensureDesignThreadForWorkspace(designWorkspaceRoot, docId)
+      if (!threadId) {
+        setInput(brief)
+        return
+      }
+      const promptState = useDesignWorkspaceStore.getState()
+      const model = promptState.assistantModel.trim()
+      const providerId =
+        promptState.assistantProviderId.trim() || providerIdForComposerModel(composerModelGroups, model)
+      const reasoningEffort = composerReasoningEffortRequestValue(composerReasoningEffort)
+      await runDesignPages({
+        brief,
+        workspaceRoot: designWorkspaceRoot,
+        sendMessage,
+        ...(model ? { model } : {}),
+        ...(providerId ? { providerId } : {}),
+        ...(reasoningEffort ? { reasoningEffort } : {}),
+        ...(promptState.generationPrompt ? { generationPrompt: promptState.generationPrompt } : {}),
+        designContext: promptState.designContext,
+        labels: {
+          plan: (b) => t('designPagesPlanDisplay', { brief: b }),
+          page: (title, index, total) => t('designPagesPageDisplay', { title, index, total })
+        }
+      })
+    })()
+  }
+
   const sendDesignPrompt = (value: string): void => {
     const text = value.trim()
     const attachments = composerAttachments
@@ -1467,24 +1628,51 @@ export function Workbench(): ReactElement {
       setError(t('workspaceRequiredToCreateThread'))
       return
     }
+    // Route a "generate" brief (nothing targeted) through the multi-page planner
+    // when multi-page mode is on. Iterating an existing page stays single-page.
+    const activeForGate =
+      designState.artifacts.find((artifact) => artifact.id === designState.activeArtifactId) ?? null
+    if (
+      designState.multiPageMode &&
+      designState.designIntentMode === 'generate' &&
+      (!activeForGate || activeForGate.kind !== 'html') &&
+      text.length > 0 &&
+      attachmentIds.length === 0 &&
+      !useDesignWorkspaceStore.getState().pagesRun
+    ) {
+      setInput('')
+      generateDesignPages(text)
+      return
+    }
     const displayText = text || t('composerImageOnlyDisplay')
     const promptText = text || t('composerImageOnlyPrompt')
     setInput('')
     void (async () => {
-      const threadId = await ensureDesignThreadForWorkspace(designWorkspaceRoot)
+      const docId = useDesignWorkspaceStore.getState().ensureActiveDocument()
+      const threadId = await ensureDesignThreadForWorkspace(designWorkspaceRoot, docId)
       if (!threadId) {
         setInput(text)
         return
       }
       const latestDesignState = useDesignWorkspaceStore.getState()
-      const active =
-        latestDesignState.artifacts.find((a) => a.id === latestDesignState.activeArtifactId) ?? null
-      const isCanvas = active?.kind === 'canvas'
-      let artifactRelativePath = active?.relativePath ?? ''
+      let boardArtifact = findDesignBoardArtifact(latestDesignState.artifacts)
+      if (!boardArtifact) {
+        boardArtifact = await ensureDesignBoardArtifact(designWorkspaceRoot)
+      }
+      if (!boardArtifact) {
+        setInput(text)
+        return
+      }
+      if (latestDesignState.activeArtifactId !== boardArtifact.id) {
+        useDesignWorkspaceStore.getState().setActiveArtifact(boardArtifact.id)
+      }
+      let artifactRelativePath = boardArtifact.relativePath
       let basePath: string | undefined
       let htmlArtifactId = ''
       let designNotesPath = ''
       let htmlElementContext: DesignHtmlElementContext | undefined
+      let selectedFrame: CanvasShape | null = null
+      let target: 'html' | 'canvas' | 'screen' = 'canvas'
 
       const canvasDoc = useCanvasShapeStore.getState().document
       const selectedShapeIds = useCanvasSelectionStore.getState().selectedIds
@@ -1505,16 +1693,15 @@ export function Workbench(): ReactElement {
       const visibleTargets = elementTarget ? [elementTarget, ...baseVisibleTargets] : baseVisibleTargets
       const primaryTarget = visibleTargets[0] ?? null
       const isScreenTarget = primaryTarget?.kind === 'html-screen-frame'
-      const selectedFrame = isScreenTarget ? primaryTarget.shape : null
+      if (isScreenTarget) selectedFrame = primaryTarget.shape
       const canvasSelectionIds =
         primaryTarget?.kind === 'canvas-selection'
           ? new Set(primaryTarget.selectedIds)
           : new Set<string>()
-      const canvasSnapshot = isCanvas && !isScreenTarget
-        ? snapshotCanvas(canvasDoc, canvasSelectionIds)
-        : undefined
+      let canvasSnapshot: ReturnType<typeof snapshotCanvas> | undefined
 
       if (isScreenTarget) {
+        target = 'screen'
         const prep = latestDesignState.prepareHtmlTurn(promptText, {
           artifactId: primaryTarget.artifact.id,
           forceNew: false,
@@ -1525,10 +1712,11 @@ export function Workbench(): ReactElement {
         htmlArtifactId = prep.artifactId
         designNotesPath = prep.designMdPath
       } else if (primaryTarget?.kind === 'html-element') {
+        target = 'html'
         const prep = latestDesignState.prepareHtmlTurn(promptText, {
           artifactId: primaryTarget.artifact.id,
           forceNew: false,
-          activate: true
+          activate: false
         })
         artifactRelativePath = prep.relativePath
         basePath = prep.basePath
@@ -1540,31 +1728,41 @@ export function Workbench(): ReactElement {
         }
         useDesignWorkspaceStore.getState().setDesignIntentMode('modify')
       } else if (primaryTarget?.kind === 'html-artifact') {
+        target = 'html'
         const prep = latestDesignState.prepareHtmlTurn(promptText, {
           artifactId: primaryTarget.artifact.id,
           forceNew: false,
-          activate: true
+          activate: false
         })
         artifactRelativePath = prep.relativePath
         basePath = prep.basePath
         htmlArtifactId = prep.artifactId
         designNotesPath = prep.designMdPath
         useDesignWorkspaceStore.getState().setDesignIntentMode('modify')
-      } else if (!isCanvas) {
-        const prep = latestDesignState.prepareHtmlTurn(promptText, { forceNew: true })
-        artifactRelativePath = prep.relativePath
-        basePath = prep.basePath
-        htmlArtifactId = prep.artifactId
-        designNotesPath = prep.designMdPath
+      } else if (primaryTarget?.kind === 'canvas-selection') {
+        target = 'canvas'
+        canvasSnapshot = snapshotCanvas(canvasDoc, canvasSelectionIds)
+      } else {
+        target = 'screen'
+        const screen = createScreenFrameArtifact({
+          boardArtifactId: boardArtifact.id,
+          brief: promptText
+        })
+        artifactRelativePath = screen.relativePath
+        htmlArtifactId = screen.artifactId
+        designNotesPath = screen.designMdPath
+        selectedFrame = screen.shape
         useDesignWorkspaceStore.getState().setDesignIntentMode('modify')
       }
+      useDesignWorkspaceStore.getState().setActiveArtifact(boardArtifact.id)
 
       // Build screen manifest for cross-screen context
       const screenManifest: ScreenManifestEntry[] = []
-      if (isScreenTarget) {
+      if (target === 'screen') {
         const manifestState = useDesignWorkspaceStore.getState()
-        for (const id of Object.keys(canvasDoc.objects)) {
-          const shape = canvasDoc.objects[id]
+        const manifestDoc = useCanvasShapeStore.getState().document
+        for (const id of Object.keys(manifestDoc.objects)) {
+          const shape = manifestDoc.objects[id]
           if (shape && isHtmlFrame(shape) && shape.id !== selectedFrame?.id) {
             const linked = manifestState.artifacts.find((a) => a.id === shape.htmlArtifactId)
             if (linked) {
@@ -1579,7 +1777,6 @@ export function Workbench(): ReactElement {
         }
       }
 
-      const target = isScreenTarget ? 'screen' : isCanvas ? 'canvas' : 'html'
       if (target !== 'canvas') {
         const previewFile = await prepareDesignPreviewFile(
           designWorkspaceRoot,
@@ -1631,6 +1828,19 @@ export function Workbench(): ReactElement {
       }
 
       const promptState = useDesignWorkspaceStore.getState()
+      // Cross-page cohesion: tell the agent about the other pages already on the
+      // project canvas so a generated/iterated HTML page stays consistent with them.
+      const htmlSiblingManifest =
+        target === 'html'
+          ? buildHtmlSiblingManifest(promptState.artifacts, htmlArtifactId || null)
+          : []
+      // Lightweight path pointers for whatever the user selected on the canvas
+      // (HTML page / SVG canvas / image): tell the agent WHERE it lives so it can
+      // read on demand, instead of inlining full HTML/JSON into the turn.
+      const contextLocations = designSelectedContextLocations({
+        targets: visibleTargets,
+        canvasArtifact: boardArtifact
+      })
       const prompt = buildDesignTurnPrompt({
         target,
         mode: attachmentIds.length > 0 ? 'image' : 'text',
@@ -1642,8 +1852,10 @@ export function Workbench(): ReactElement {
         workspaceRoot: designWorkspaceRoot,
         customPrompt: promptState.generationPrompt || undefined,
         designContext: promptState.designContext,
+        ...(contextLocations.length > 0 ? { contextLocations } : {}),
         ...(canvasSnapshot ? { canvasSnapshot } : {}),
-        ...(isScreenTarget && selectedFrame ? {
+        ...(htmlSiblingManifest.length > 0 ? { screenManifest: htmlSiblingManifest } : {}),
+        ...(target === 'screen' && selectedFrame ? {
           screenName: selectedFrame.name,
           screenWidth: selectedFrame.width,
           screenHeight: selectedFrame.height,
@@ -2573,14 +2785,17 @@ export function Workbench(): ReactElement {
   }
 
   const createDesignCanvas = (): void => {
-    const designWorkspaceRoot = useDesignWorkspaceStore.getState().workspaceRoot || workspaceRoot
+    const designStore = useDesignWorkspaceStore.getState()
+    const designWorkspaceRoot = designStore.workspaceRoot || workspaceRoot
     if (!designWorkspaceRoot) {
       setError(t('workspaceRequiredToCreateThread'))
       return
     }
+    designStore.setWorkspaceRoot(designWorkspaceRoot)
+    const docId = designStore.ensureActiveDocument()
     const artifactId = createDesignArtifactId()
     const createdAt = new Date().toISOString()
-    const relativePath = `.kun-design/${artifactId}/canvas.json`
+    const relativePath = `.kun-design/${docId}/${artifactId}/canvas.json`
     void (async () => {
       try {
         await window.kunGui.writeWorkspaceFile({
@@ -2591,9 +2806,7 @@ export function Workbench(): ReactElement {
       } catch {
         // non-fatal
       }
-      const store = useDesignWorkspaceStore.getState()
-      store.setWorkspaceRoot(designWorkspaceRoot)
-      store.upsertArtifact({
+      useDesignWorkspaceStore.getState().upsertArtifact({
         id: artifactId,
         kind: 'canvas',
         title: t('designCanvasTitle'),
@@ -2673,23 +2886,23 @@ export function Workbench(): ReactElement {
     }
     const fileName = source.replaceAll('\\', '/').split('/').pop() || source
     void (async () => {
-      const threadId = await ensureDesignThreadForWorkspace(designWorkspaceRoot)
+      const store = useDesignWorkspaceStore.getState()
+      store.setWorkspaceRoot(designWorkspaceRoot)
+      const docId = store.ensureActiveDocument()
+      const threadId = await ensureDesignThreadForWorkspace(designWorkspaceRoot, docId)
       if (!threadId) return
       const artifactId = createDesignArtifactId()
       const createdAt = new Date().toISOString()
-      const relativePath = `.kun-design/${artifactId}/v1.html`
+      const relativePath = `.kun-design/${docId}/${artifactId}/v1.html`
       const title = t('designFromCodeTitle', { file: fileName })
-      const store = useDesignWorkspaceStore.getState()
-      store.setWorkspaceRoot(designWorkspaceRoot)
-      store.upsertArtifact({
+      useDesignWorkspaceStore.getState().upsertArtifact({
         id: artifactId,
         kind: 'html',
         title,
         relativePath,
         createdAt,
         updatedAt: createdAt,
-        versions: [{ id: `${artifactId}-v1`, relativePath, createdAt, summary: title }],
-        node: defaultDesignArtifactNode(store.artifacts.length)
+        versions: [{ id: `${artifactId}-v1`, relativePath, createdAt, summary: title }]
       })
       const prompt = buildDesignFromCodePrompt({
         sourceRelativePath: source,
@@ -3037,6 +3250,8 @@ export function Workbench(): ReactElement {
                 onWriteOpen={openWriteMode}
                 onDesignOpen={openDesignMode}
                 onNewCanvas={createDesignCanvas}
+                onOpenSettings={(section) => openSettings(section)}
+                onToggleTheme={toggleTheme}
               />
             ) : route === 'write' ? (
               <WriteSidebar
@@ -3208,8 +3423,9 @@ export function Workbench(): ReactElement {
                 onOpenSettings={(section) => openSettings((section ?? 'design') as never)}
                 onConfigureProviders={() => openSettings('providers')}
                 onNewConversation={() => {
-                  const root = useDesignWorkspaceStore.getState().workspaceRoot || workspaceRoot
-                  if (root) void createDesignThread(root)
+                  const designStore = useDesignWorkspaceStore.getState()
+                  const root = designStore.workspaceRoot || workspaceRoot
+                  if (root) void createDesignThread(root, designStore.ensureActiveDocument())
                 }}
                 designThreads={designThreads}
                 onSwitchThread={(id) => void switchDesignThread(id)}

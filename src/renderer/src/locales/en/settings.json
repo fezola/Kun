@@ -1129,6 +1129,7 @@
   "codexLoginButton": "Log in to ChatGPT",
   "claudeLoginButton": "Log in to Claude",
   "claudeEndpointLocked": "Claude subscription uses a fixed endpoint and cannot be changed.",
+  "claudeExtraUsageNotice": "Third-party apps draw from your Extra Usage balance, not your plan limits. Make sure Extra Usage is enabled and funded at claude.ai/settings/usage.",
   "codexLoginDeviceCodeFallback": "Use device code instead",
   "codexBrowserOpened": "Browser opened. Complete the sign-in to return automatically.",
   "codexDisconnect": "Disconnect",
