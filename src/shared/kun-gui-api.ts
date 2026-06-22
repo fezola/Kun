@@ -37,6 +37,8 @@ import type {
   ClipboardImageReadResult,
   WorkspaceClipboardImageSavePayload,
   WorkspaceClipboardImageSaveResult,
+  WorkspaceImagePickPayload,
+  WorkspaceImagePickResult,
   WorkspaceFileReadResult,
   WorkspaceFileSaveAsPayload,
   WorkspaceFileSaveAsResult,
@@ -412,6 +414,7 @@ export type KunGuiApi = {
   saveWorkspaceClipboardImage: (
     payload: WorkspaceClipboardImageSavePayload
   ) => Promise<WorkspaceClipboardImageSaveResult>
+  pickWorkspaceImage: (payload: WorkspaceImagePickPayload) => Promise<WorkspaceImagePickResult>
   readClipboardImage: () => Promise<ClipboardImageReadResult>
   getPathForFile: (file: File) => string
   renameWorkspaceEntry: (

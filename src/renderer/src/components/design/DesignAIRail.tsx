@@ -324,6 +324,8 @@ function DesignAIRailInner({
             ) : null}
           </div>
         </div>
+        <DesignQuickSuggestions input={input} setInput={setInput} />
+
         <FloatingComposer
           variant="compact"
           input={input}
@@ -362,3 +364,63 @@ function DesignAIRailInner({
 }
 
 export const DesignAIRail = memo(DesignAIRailInner)
+
+const DESIGN_QUICK_SUGGESTIONS: { key: string; fallback: string }[] = [
+  { key: 'designQuickSuggestMobile', fallback: '适配手机端看看效果' },
+  { key: 'designQuickSuggestSection', fallback: '增加一个功能介绍板块' },
+  { key: 'designQuickSuggestTheme', fallback: '换一个主题色试试' }
+]
+
+/**
+ * Numbered quick-action chips above the composer. Hotkeys 1/2/3 pre-fill the
+ * input when no text field is focused, matching Stitch's preset chip row.
+ */
+function DesignQuickSuggestions({
+  input,
+  setInput
+}: {
+  input: string
+  setInput: (value: string) => void
+}): ReactElement | null {
+  const { t } = useTranslation('common')
+  useEffect(() => {
+    if (input.trim().length > 0) return
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.metaKey || event.ctrlKey || event.altKey) return
+      const target = event.target as HTMLElement | null
+      // Skip when focus is in any editable surface.
+      if (target) {
+        const tag = target.tagName
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || target.isContentEditable) return
+      }
+      const idx = Number(event.key) - 1
+      if (idx < 0 || idx >= DESIGN_QUICK_SUGGESTIONS.length) return
+      event.preventDefault()
+      setInput(t(DESIGN_QUICK_SUGGESTIONS[idx].key, DESIGN_QUICK_SUGGESTIONS[idx].fallback))
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [input, setInput, t])
+
+  return (
+    <div className="mb-2 flex flex-wrap justify-center gap-1.5">
+      {DESIGN_QUICK_SUGGESTIONS.map((suggestion, idx) => {
+        const label = t(suggestion.key, suggestion.fallback)
+        return (
+          <button
+            key={suggestion.key}
+            type="button"
+            onClick={() => setInput(label)}
+            title={`${label} · ${idx + 1}`}
+            className="inline-flex items-center gap-1.5 rounded-full border border-ds-border bg-white/80 px-2.5 py-1 text-[11.5px] font-medium text-ds-muted shadow-[0_8px_22px_rgba(20,47,95,0.08)] backdrop-blur-xl transition hover:bg-white hover:text-ds-ink dark:bg-ds-card/82"
+          >
+            <span className="min-w-0 truncate">{label}</span>
+            <span className="inline-flex h-4 min-w-[1rem] items-center justify-center rounded bg-ds-hover px-1 text-[10px] font-semibold text-ds-faint">
+              {idx + 1}
+            </span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}

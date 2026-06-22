@@ -16,11 +16,15 @@ import {
   ExternalLink,
   Eye,
   FileDown,
+  Image as ImageIcon,
+  Info,
+  Layers,
   Globe,
   Monitor,
   MoreVertical,
   Palette,
   PenLine,
+  Pipette,
   Play,
   Plus,
   Share2,
@@ -34,6 +38,7 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { DesignHtmlElementContext } from '../../design/design-composer-context'
+import { rgbToHex, type DesignElementMetrics } from '../../design/design-element-metrics'
 import { resizeDesignArtifactNode, type DesignNodeResizeHandle } from '../../design/design-node-resize'
 import { startDesignHtmlPreviewWatch } from '../../design/design-preview-file'
 import { useDesignWorkspaceStore } from '../../design/design-workspace-store'
@@ -44,8 +49,11 @@ import {
   type DesignCanvasView,
   type DesignViewport
 } from '../../design/design-types'
+import { useDesignTokensStore } from '../../design/design-tokens-store'
 import { SidebarTitlebarToggleButton } from '../sidebar/SidebarPrimitives'
 import { DesignContextPopover } from './DesignContextPopover'
+import { DesignTokensPanel } from './DesignTokensPanel'
+import { ElementInspectorPanel } from './ElementInspectorPanel'
 
 const VIEWPORTS: { id: DesignViewport; icon: LucideIcon; labelKey: string }[] = [
   { id: 'mobile', icon: Smartphone, labelKey: 'designViewportMobile' },
@@ -96,6 +104,15 @@ type HtmlElementSelection = DesignHtmlElementContext & {
   editText: string
   /** Typography of the element, used to render the in-place editor on top of it. */
   style: InlineEditStyle
+  /** Box model + color metrics rendered by the inspector panel. */
+  metrics: DesignElementMetrics
+}
+
+type PickedColors = {
+  color: string
+  backgroundColor: string
+  borderColor: string
+  rect: { left: number; top: number; width: number; height: number }
 }
 
 type InlineEditState = {
@@ -141,6 +158,16 @@ function HtmlScreenPreview({
   const [previewError, setPreviewError] = useState('')
   const [selectedElement, setSelectedElement] = useState<HtmlElementSelection | null>(null)
   const [inlineEdit, setInlineEdit] = useState<InlineEditState | null>(null)
+  const [inspectorOpen, setInspectorOpen] = useState(false)
+  const [overlayMode, setOverlayMode] = useState<'select' | 'pick'>('select')
+  const [pickedColors, setPickedColors] = useState<PickedColors | null>(null)
+  const [tokensPanelOpen, setTokensPanelOpen] = useState(false)
+  const updateDesignContext = useDesignWorkspaceStore((s) => s.updateDesignContext)
+  const tokensExtractFor = useDesignTokensStore((s) => s.extractFor)
+  const tokensStatus = useDesignTokensStore((s) => s.status)
+  const tokensSlot = useDesignTokensStore(
+    (s) => s.byArtifact[artifact.relativePath] ?? null
+  )
   const [source, setSource] = useState('')
   const frameRef = useRef<HTMLDivElement | null>(null)
   const webviewRef = useRef<WebviewElement | null>(null)
@@ -278,6 +305,31 @@ function HtmlScreenPreview({
     }
   }, [measureContent, onContentSize, webviewUrl])
 
+  // Auto-extract design tokens once the artifact's webview is loaded (debounced).
+  useEffect(() => {
+    if (!webviewUrl || !editable || viewMode !== 'preview') return
+    const webview = webviewRef.current
+    if (!webview || typeof webview.executeJavaScript !== 'function') return
+    let cancelled = false
+    let timer = 0
+    const queueExtract = (): void => {
+      window.clearTimeout(timer)
+      timer = window.setTimeout(() => {
+        if (cancelled) return
+        void tokensExtractFor(artifact.relativePath, {
+          executeJavaScript: (code) => webview.executeJavaScript!(code)
+        })
+      }, 350)
+    }
+    webview.addEventListener('did-finish-load', queueExtract)
+    queueExtract()
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+      webview.removeEventListener('did-finish-load', queueExtract)
+    }
+  }, [artifact.relativePath, editable, tokensExtractFor, viewMode, webviewUrl])
+
   useEffect(() => {
     const frame = frameRef.current
     if (!frame || !webviewUrl || !onContentSize || typeof ResizeObserver === 'undefined') return
@@ -291,6 +343,9 @@ function HtmlScreenPreview({
   useEffect(() => {
     setSelectedElement(null)
     setInlineEdit(null)
+    setInspectorOpen(false)
+    setOverlayMode('select')
+    setPickedColors(null)
     onUseElementAsContext?.(null)
   }, [artifact.id, artifact.relativePath, onUseElementAsContext])
 
@@ -353,6 +408,10 @@ function HtmlScreenPreview({
           }
           const bounds = element.getBoundingClientRect()
           const cs = window.getComputedStyle(element)
+          const px = (raw) => {
+            const n = parseFloat(raw || '0')
+            return Number.isFinite(n) ? n : 0
+          }
           return {
             ok: true,
             selector: selectorFor(element),
@@ -372,6 +431,28 @@ function HtmlScreenPreview({
               textAlign: cs.textAlign,
               textTransform: cs.textTransform,
               padding: cs.padding
+            },
+            metrics: {
+              width: bounds.width,
+              height: bounds.height,
+              margin: {
+                top: px(cs.marginTop), right: px(cs.marginRight),
+                bottom: px(cs.marginBottom), left: px(cs.marginLeft)
+              },
+              padding: {
+                top: px(cs.paddingTop), right: px(cs.paddingRight),
+                bottom: px(cs.paddingBottom), left: px(cs.paddingLeft)
+              },
+              border: {
+                top: px(cs.borderTopWidth), right: px(cs.borderRightWidth),
+                bottom: px(cs.borderBottomWidth), left: px(cs.borderLeftWidth)
+              },
+              boxSizing: cs.boxSizing,
+              color: cs.color,
+              backgroundColor: cs.backgroundColor,
+              borderColor: cs.borderTopColor,
+              id: element.id || '',
+              className: typeof element.className === 'string' ? element.className : ''
             },
             rect: {
               left: Math.round(bounds.left),
@@ -393,6 +474,7 @@ function HtmlScreenPreview({
             editText?: unknown
             html?: unknown
             style?: unknown
+            metrics?: unknown
             rect?: unknown
           }
           if (!result.ok) {
@@ -410,6 +492,8 @@ function HtmlScreenPreview({
             typeof result.html !== 'string' ||
             typeof result.style !== 'object' ||
             result.style === null ||
+            typeof result.metrics !== 'object' ||
+            result.metrics === null ||
             typeof resultRect.left !== 'number' ||
             typeof resultRect.top !== 'number' ||
             typeof resultRect.width !== 'number' ||
@@ -428,6 +512,7 @@ function HtmlScreenPreview({
             editText: result.editText,
             html: result.html,
             style: result.style as InlineEditStyle,
+            metrics: result.metrics as DesignElementMetrics,
             rect: {
               left: resultRect.left,
               top: resultRect.top,
@@ -447,14 +532,130 @@ function HtmlScreenPreview({
     [artifact.id, artifact.relativePath, artifact.title, editable, onError, onUseElementAsContext]
   )
 
+  const pickColorAt = useCallback(
+    (event: React.PointerEvent<HTMLDivElement>): void => {
+      if (!editable || event.button !== 0) return
+      const webview = webviewRef.current
+      if (!webview || typeof webview.executeJavaScript !== 'function') return
+      event.preventDefault()
+      event.stopPropagation()
+      const frameRect = event.currentTarget.getBoundingClientRect()
+      const x = event.clientX - frameRect.left
+      const y = event.clientY - frameRect.top
+      void webview
+        .executeJavaScript(`(() => {
+          const x = ${JSON.stringify(x)}
+          const y = ${JSON.stringify(y)}
+          const el = document.elementFromPoint(x, y)
+          if (!el || el === document.documentElement || el === document.body) {
+            return { ok: false, message: 'No element at this point.' }
+          }
+          const cs = window.getComputedStyle(el)
+          const b = el.getBoundingClientRect()
+          return {
+            ok: true,
+            color: cs.color,
+            backgroundColor: cs.backgroundColor,
+            borderColor: cs.borderTopColor,
+            rect: {
+              left: Math.round(b.left),
+              top: Math.round(b.top),
+              width: Math.round(b.width),
+              height: Math.round(b.height)
+            }
+          }
+        })()`)
+        .then((value) => {
+          if (!value || typeof value !== 'object') return
+          const result = value as {
+            ok?: unknown
+            color?: unknown
+            backgroundColor?: unknown
+            borderColor?: unknown
+            rect?: unknown
+          }
+          if (!result.ok) return
+          if (
+            typeof result.color !== 'string' ||
+            typeof result.backgroundColor !== 'string' ||
+            typeof result.borderColor !== 'string' ||
+            !result.rect ||
+            typeof result.rect !== 'object'
+          ) return
+          const r = result.rect as { left?: unknown; top?: unknown; width?: unknown; height?: unknown }
+          if (
+            typeof r.left !== 'number' || typeof r.top !== 'number' ||
+            typeof r.width !== 'number' || typeof r.height !== 'number'
+          ) return
+          setPickedColors({
+            color: result.color,
+            backgroundColor: result.backgroundColor,
+            borderColor: result.borderColor,
+            rect: { left: r.left, top: r.top, width: r.width, height: r.height }
+          })
+        })
+        .catch((error: unknown) => {
+          onError(error instanceof Error ? error.message : String(error))
+        })
+    },
+    [editable, onError]
+  )
+
+  const setBrandColorFromPick = useCallback(
+    (raw: string): void => {
+      const hex = rgbToHex(raw)
+      if (!hex) return
+      updateDesignContext({ brandColor: hex })
+      setPickedColors(null)
+      setOverlayMode('select')
+    },
+    [updateDesignContext]
+  )
+
+  const copyHexFromPick = useCallback((raw: string): void => {
+    const hex = rgbToHex(raw)
+    if (!hex) return
+    void navigator.clipboard?.writeText?.(hex)
+  }, [])
+
+  /**
+   * Shared tail for every DOM mutation: take the post-mutation serialized
+   * document, write it to disk, then clear selection state. Keeps the
+   * `visibility:hidden` discipline (and any future transient-style
+   * discipline) in one place.
+   */
+  const writeSerializedDocument = useCallback(
+    async (html: string): Promise<boolean> => {
+      if (typeof window.kunGui?.writeWorkspaceFile !== 'function') {
+        onError('Workspace write API unavailable.')
+        return false
+      }
+      const write = await window.kunGui
+        .writeWorkspaceFile({
+          path: artifact.relativePath,
+          workspaceRoot,
+          content: html
+        })
+        .catch((error: unknown) => ({
+          ok: false as const,
+          message: error instanceof Error ? error.message : String(error)
+        }))
+      if (!write.ok) {
+        onError(write.message)
+        return false
+      }
+      setSelectedElement(null)
+      onUseElementAsContext?.(null)
+      measureContent()
+      return true
+    },
+    [artifact.relativePath, measureContent, onError, onUseElementAsContext, workspaceRoot]
+  )
+
   const persistElementMutation = useCallback(
     async (selector: string, mutation: 'text' | 'delete', nextText?: string): Promise<boolean> => {
       const webview = webviewRef.current
-      if (
-        !webview ||
-        typeof webview.executeJavaScript !== 'function' ||
-        typeof window.kunGui?.writeWorkspaceFile !== 'function'
-      ) {
+      if (!webview || typeof webview.executeJavaScript !== 'function') {
         onError('HTML element editing is unavailable.')
         return false
       }
@@ -491,26 +692,84 @@ function HtmlScreenPreview({
         onError(typeof payload.message === 'string' ? payload.message : 'HTML element edit failed.')
         return false
       }
-      const write = await window.kunGui
-        .writeWorkspaceFile({
-          path: artifact.relativePath,
+      return writeSerializedDocument(payload.html)
+    },
+    [onError, writeSerializedDocument]
+  )
+
+  /**
+   * Image insert/replace: pick a file (workspace `img/` dir), then mutate the
+   * DOM to either replace the selected `<img src>` or append a new `<img>`
+   * inside the selected container. Persists via the shared serialize+write tail.
+   */
+  const handleImageMutation = useCallback(
+    async (mode: 'replace' | 'insert'): Promise<boolean> => {
+      if (!selectedElement) return false
+      const webview = webviewRef.current
+      if (!webview || typeof webview.executeJavaScript !== 'function') {
+        onError('HTML element editing is unavailable.')
+        return false
+      }
+      if (typeof window.kunGui?.pickWorkspaceImage !== 'function') {
+        onError('Image picker is unavailable.')
+        return false
+      }
+      const pick = await window.kunGui
+        .pickWorkspaceImage({
           workspaceRoot,
-          content: payload.html
+          currentFilePath: artifact.relativePath
         })
         .catch((error: unknown) => ({
           ok: false as const,
+          canceled: false,
           message: error instanceof Error ? error.message : String(error)
         }))
-      if (!write.ok) {
-        onError(write.message)
+      if (!pick.ok) {
+        const canceled = 'canceled' in pick && pick.canceled
+        if (!canceled && pick.message) onError(pick.message)
         return false
       }
-      setSelectedElement(null)
-      onUseElementAsContext?.(null)
-      measureContent()
-      return true
+      const result = await webview
+        .executeJavaScript(`(() => {
+          const selector = ${JSON.stringify(selectedElement.selector)}
+          const src = ${JSON.stringify(pick.relativePath)}
+          const mode = ${JSON.stringify(mode)}
+          const target = document.querySelector(selector)
+          if (!target) return { ok: false, message: 'Selected element was not found.' }
+          if (mode === 'replace') {
+            if (target.tagName !== 'IMG') {
+              return { ok: false, message: 'Selected element is not an image.' }
+            }
+            target.setAttribute('src', src)
+            target.style.removeProperty('visibility')
+          } else {
+            const img = document.createElement('img')
+            img.setAttribute('src', src)
+            img.setAttribute('alt', '')
+            if (target.tagName === 'IMG') {
+              target.insertAdjacentElement('afterend', img)
+            } else {
+              target.appendChild(img)
+            }
+          }
+          const doctype = document.doctype
+            ? '<!doctype ' + document.doctype.name + '>'
+            : '<!doctype html>'
+          return { ok: true, html: doctype + '\\n' + document.documentElement.outerHTML + '\\n' }
+        })()`)
+        .catch((error: unknown) => ({
+          ok: false,
+          message: error instanceof Error ? error.message : String(error)
+        }))
+      if (!result || typeof result !== 'object') return false
+      const payload = result as { ok?: unknown; message?: unknown; html?: unknown }
+      if (!payload.ok || typeof payload.html !== 'string') {
+        onError(typeof payload.message === 'string' ? payload.message : 'Image insert failed.')
+        return false
+      }
+      return writeSerializedDocument(payload.html)
     },
-    [artifact.relativePath, measureContent, onError, onUseElementAsContext, workspaceRoot]
+    [artifact.relativePath, onError, selectedElement, workspaceRoot, writeSerializedDocument]
   )
 
   const editSelectedText = useCallback((): void => {
@@ -640,12 +899,127 @@ function HtmlScreenPreview({
         ) : null}
         {editable && !inlineEdit ? (
           <div
-            className="absolute inset-0 z-10 cursor-crosshair"
-            onPointerDown={selectElementAt}
-            title={t('designElementSelectHint', 'Select an element')}
+            className={`absolute inset-0 z-10 ${overlayMode === 'pick' ? 'cursor-copy' : 'cursor-crosshair'}`}
+            onPointerDown={overlayMode === 'pick' ? pickColorAt : selectElementAt}
+            title={overlayMode === 'pick'
+              ? t('designElementPickHint', '点击元素取色')
+              : t('designElementSelectHint', 'Select an element')}
           />
         ) : null}
-        {editable && selectedElement && !inlineEdit ? (
+        {editable && !inlineEdit ? (
+          <div className="pointer-events-none absolute right-3 top-3 z-30 flex flex-col items-end gap-2">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setTokensPanelOpen((v) => !v)}
+                aria-pressed={tokensPanelOpen}
+                title={t('designTokensTitle', '设计系统')}
+                className={`pointer-events-auto inline-flex h-9 w-9 items-center justify-center rounded-full border border-ds-border bg-white/90 text-ds-muted shadow-[0_10px_28px_rgba(20,47,95,0.12)] backdrop-blur-xl transition hover:bg-white hover:text-ds-ink ${tokensPanelOpen ? 'border-accent text-accent' : ''}`}
+              >
+                <Layers className="h-4 w-4" strokeWidth={1.8} />
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setOverlayMode((m) => (m === 'pick' ? 'select' : 'pick'))
+                  setPickedColors(null)
+                  setSelectedElement(null)
+                  setInspectorOpen(false)
+                  onUseElementAsContext?.(null)
+                }}
+                aria-pressed={overlayMode === 'pick'}
+                title={t('designElementEyedropper', '取色器')}
+                className={`pointer-events-auto inline-flex h-9 w-9 items-center justify-center rounded-full border border-ds-border bg-white/90 text-ds-muted shadow-[0_10px_28px_rgba(20,47,95,0.12)] backdrop-blur-xl transition hover:bg-white hover:text-ds-ink ${overlayMode === 'pick' ? 'border-accent text-accent' : ''}`}
+              >
+                <Pipette className="h-4 w-4" strokeWidth={1.8} />
+              </button>
+            </div>
+            {tokensPanelOpen ? (
+              <DesignTokensPanel
+                palette={tokensSlot?.palette ?? {}}
+                typeRows={tokensSlot?.typeRows ?? []}
+                title={tokensSlot?.extracted.title || artifact.title}
+                status={tokensStatus}
+                lastExtractedAt={tokensSlot?.at}
+                onRefresh={() => {
+                  const webview = webviewRef.current
+                  if (!webview || typeof webview.executeJavaScript !== 'function') return
+                  void tokensExtractFor(artifact.relativePath, {
+                    executeJavaScript: (code) => webview.executeJavaScript!(code)
+                  })
+                }}
+                onClose={() => setTokensPanelOpen(false)}
+                onSelectColor={(hex) => { void navigator.clipboard?.writeText?.(hex) }}
+              />
+            ) : null}
+          </div>
+        ) : null}
+        {editable && pickedColors ? (
+          <div className="pointer-events-none absolute inset-0 z-30">
+            <div
+              className="absolute rounded-[4px] border-2 border-accent shadow-[0_0_0_1px_rgba(255,255,255,0.7)]"
+              style={{
+                left: pickedColors.rect.left,
+                top: pickedColors.rect.top,
+                width: Math.max(8, pickedColors.rect.width),
+                height: Math.max(8, pickedColors.rect.height)
+              }}
+            />
+            <div
+              className="pointer-events-auto absolute w-56 overflow-hidden rounded-[14px] border border-ds-border bg-white/96 p-2 text-[12px] text-ds-muted shadow-[0_18px_46px_rgba(20,47,95,0.18)] backdrop-blur-xl"
+              style={{
+                left: Math.min(
+                  Math.max(8, pickedColors.rect.left + Math.min(pickedColors.rect.width, 180) + 8),
+                  Math.max(8, (frameRef.current?.clientWidth ?? 260) - 232)
+                ),
+                top: Math.min(
+                  Math.max(8, pickedColors.rect.top),
+                  Math.max(8, (frameRef.current?.clientHeight ?? 220) - 200)
+                )
+              }}
+              onPointerDown={(event) => event.stopPropagation()}
+            >
+              <div className="mb-1 flex items-center justify-between">
+                <span className="text-[10.5px] font-semibold uppercase tracking-wide text-ds-faint">
+                  {t('designElementEyedropper', '取色器')}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setPickedColors(null)}
+                  aria-label={t('designElementInspectClose', '关闭')}
+                  className="inline-flex h-5 w-5 items-center justify-center rounded text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink"
+                >
+                  <span aria-hidden="true">×</span>
+                </button>
+              </div>
+              <PickedColorRow
+                label={t('designElementInspectText', '文本')}
+                value={pickedColors.color}
+                onSetBrand={() => setBrandColorFromPick(pickedColors.color)}
+                onCopy={() => copyHexFromPick(pickedColors.color)}
+                tCopy={t('designElementCopy', '复制')}
+                tBrand={t('designElementSetBrand', '设为品牌色')}
+              />
+              <PickedColorRow
+                label={t('designElementInspectBackground', '背景')}
+                value={pickedColors.backgroundColor}
+                onSetBrand={() => setBrandColorFromPick(pickedColors.backgroundColor)}
+                onCopy={() => copyHexFromPick(pickedColors.backgroundColor)}
+                tCopy={t('designElementCopy', '复制')}
+                tBrand={t('designElementSetBrand', '设为品牌色')}
+              />
+              <PickedColorRow
+                label={t('designElementInspectBorder', '描边')}
+                value={pickedColors.borderColor}
+                onSetBrand={() => setBrandColorFromPick(pickedColors.borderColor)}
+                onCopy={() => copyHexFromPick(pickedColors.borderColor)}
+                tCopy={t('designElementCopy', '复制')}
+                tBrand={t('designElementSetBrand', '设为品牌色')}
+              />
+            </div>
+          </div>
+        ) : null}
+        {editable && selectedElement && !inlineEdit && overlayMode === 'select' ? (
           <div className="pointer-events-none absolute inset-0 z-20">
             <div
               className="absolute rounded-[4px] border-2 border-accent bg-accent/8 shadow-[0_0_0_1px_rgba(255,255,255,0.7)]"
@@ -694,6 +1068,34 @@ function HtmlScreenPreview({
               </button>
               <button
                 type="button"
+                onClick={() => setInspectorOpen((open) => !open)}
+                aria-pressed={inspectorOpen}
+                className={`flex h-9 w-full items-center gap-2 rounded-xl px-2.5 text-left transition hover:bg-ds-hover hover:text-ds-ink ${inspectorOpen ? 'bg-ds-hover text-ds-ink' : ''}`}
+              >
+                <Info className="h-4 w-4" strokeWidth={1.8} />
+                {t('designElementInspect', '查看详情')}
+              </button>
+              {selectedElement.tagName === 'IMG' ? (
+                <button
+                  type="button"
+                  onClick={() => void handleImageMutation('replace')}
+                  className="flex h-9 w-full items-center gap-2 rounded-xl px-2.5 text-left transition hover:bg-ds-hover hover:text-ds-ink"
+                >
+                  <ImageIcon className="h-4 w-4" strokeWidth={1.8} />
+                  {t('designElementReplaceImage', '替换图片')}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => void handleImageMutation('insert')}
+                  className="flex h-9 w-full items-center gap-2 rounded-xl px-2.5 text-left transition hover:bg-ds-hover hover:text-ds-ink"
+                >
+                  <ImageIcon className="h-4 w-4" strokeWidth={1.8} />
+                  {t('designElementInsertImage', '插入图片')}
+                </button>
+              )}
+              <button
+                type="button"
                 onClick={deleteSelectedElement}
                 className="flex h-9 w-full items-center gap-2 rounded-xl px-2.5 text-left text-[#c0392b] transition hover:bg-[#c0392b]/10"
               >
@@ -701,6 +1103,17 @@ function HtmlScreenPreview({
                 {t('designElementDelete', '删除')}
               </button>
             </div>
+          </div>
+        ) : null}
+        {editable && selectedElement && inspectorOpen && !inlineEdit ? (
+          <div className="pointer-events-none absolute right-3 top-3 z-30">
+            <ElementInspectorPanel
+              selector={selectedElement.selector}
+              tagName={selectedElement.tagName}
+              metrics={selectedElement.metrics}
+              style={selectedElement.style}
+              onClose={() => setInspectorOpen(false)}
+            />
           </div>
         ) : null}
         {editable && inlineEdit ? (
@@ -765,6 +1178,78 @@ function HtmlScreenPreview({
       </div>
     </div>
   )
+}
+
+function PickedColorRow({
+  label,
+  value,
+  onSetBrand,
+  onCopy,
+  tCopy,
+  tBrand
+}: {
+  label: string
+  value: string
+  onSetBrand: () => void
+  onCopy: () => void
+  tCopy: string
+  tBrand: string
+}): ReactElement {
+  const hex = rgbToHex(value)
+  if (!hex) {
+    return (
+      <div className="flex items-center gap-2 px-1 py-1 text-[11px] text-ds-faint">
+        <span
+          className="inline-block h-4 w-4 shrink-0 rounded-[4px] border border-ds-border"
+          style={{ background: 'repeating-linear-gradient(45deg,#eee 0 4px,#fff 4px 8px)' }}
+          aria-hidden="true"
+        />
+        <span className="w-12 shrink-0">{label}</span>
+        <span className="min-w-0 flex-1 truncate font-mono">{value || '—'}</span>
+      </div>
+    )
+  }
+  return (
+    <div className="flex items-center gap-2 rounded-md px-1 py-1 transition hover:bg-ds-hover">
+      <span
+        className="inline-block h-4 w-4 shrink-0 rounded-[4px] border border-ds-border"
+        style={{ background: hex }}
+        aria-hidden="true"
+      />
+      <span className="w-12 shrink-0 text-[11px] text-ds-faint">{label}</span>
+      <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-ds-ink">{hex}</span>
+      <button
+        type="button"
+        onClick={onCopy}
+        className="rounded-md px-1.5 py-0.5 text-[10.5px] text-ds-muted transition hover:bg-white hover:text-ds-ink"
+      >
+        {tCopy}
+      </button>
+      <button
+        type="button"
+        onClick={onSetBrand}
+        className="rounded-md bg-accent px-2 py-0.5 text-[10.5px] font-medium text-white transition hover:opacity-90"
+        title={tBrand}
+      >
+        {tBrand}
+      </button>
+    </div>
+  )
+}
+
+function shortcutLabel(...keys: string[]): string {
+  const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform)
+  const meta = isMac ? '⌘' : 'Ctrl+'
+  const sep = isMac ? '' : '+'
+  const parts: string[] = [meta]
+  for (const key of keys) {
+    if (key === 'shift') parts.push(isMac ? '⇧' : 'Shift')
+    else if (key === 'alt') parts.push(isMac ? '⌥' : 'Alt')
+    else parts.push(key.toUpperCase())
+    if (!isMac) parts.push(sep)
+  }
+  if (!isMac && parts[parts.length - 1] === sep) parts.pop()
+  return parts.join('')
 }
 
 function viewModeIcon(view: DesignCanvasView): LucideIcon {
@@ -876,6 +1361,27 @@ export function DesignProjectCanvas({
       .catch(() => setFileError(t('designExportFailed')))
     setMoreOpen(false)
   }
+
+  // Keyboard shortcuts for the design canvas: Cmd/Ctrl+Shift+E exports HTML;
+  // skipped when the user is typing in any editable surface.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (!activeHtmlArtifact) return
+      const target = event.target as HTMLElement | null
+      if (target) {
+        const tag = target.tagName
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || target.isContentEditable) return
+      }
+      const meta = event.metaKey || event.ctrlKey
+      if (meta && event.shiftKey && event.key.toLowerCase() === 'e') {
+        event.preventDefault()
+        exportPrototype('html')
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeHtmlArtifact, workspaceRoot])
 
   const openExternal = (): void => {
     if (!activeHtmlArtifact || !workspaceRoot) return
@@ -1144,7 +1650,9 @@ export function DesignProjectCanvas({
                   <Star className="h-4 w-4" strokeWidth={1.8} /> {t('designProjectFavorite')}
                 </button>
                 <button type="button" onClick={() => exportPrototype('html')} disabled={!activeHtmlArtifact} className="flex h-9 w-full items-center gap-2 rounded-xl px-3 text-left transition hover:bg-ds-hover hover:text-ds-ink disabled:opacity-45">
-                  <Download className="h-4 w-4" strokeWidth={1.8} /> {t('designExportHtml')}
+                  <Download className="h-4 w-4" strokeWidth={1.8} />
+                  <span className="flex-1">{t('designExportHtml')}</span>
+                  <span className="text-[10.5px] text-ds-faint">{shortcutLabel('shift', 'e')}</span>
                 </button>
                 <button type="button" onClick={() => exportPrototype('pdf')} disabled={!activeHtmlArtifact} className="flex h-9 w-full items-center gap-2 rounded-xl px-3 text-left transition hover:bg-ds-hover hover:text-ds-ink disabled:opacity-45">
                   <FileDown className="h-4 w-4" strokeWidth={1.8} /> {t('designExportPdf')}

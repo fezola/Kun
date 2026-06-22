@@ -12,6 +12,7 @@ import {
   workspaceDirectoryTargetPayloadSchema,
   workspaceEntryDeletePayloadSchema,
   workspaceEntryRenamePayloadSchema,
+  workspaceImagePickPayloadSchema,
   writeExportPayloadSchema,
   writeRichClipboardPayloadSchema,
   writeInlineCompletionPayloadSchema
@@ -648,5 +649,23 @@ describe('app-ipc-schemas', () => {
 
     expect(payload.path).toBe('/tmp/workspace/draft.md')
     expect(payload.content).toBe('# Draft')
+  })
+
+  it('accepts workspace image pick payloads and rejects extra fields', () => {
+    const payload = workspaceImagePickPayloadSchema.parse({
+      workspaceRoot: '/tmp/workspace',
+      currentFilePath: '/tmp/workspace/.kun-design/abc/v1.html',
+      imageDirectory: 'img'
+    })
+    expect(payload.workspaceRoot).toBe('/tmp/workspace')
+    expect(payload.imageDirectory).toBe('img')
+    // .strict() must reject unknown keys so settings sync can't be poisoned.
+    expect(() =>
+      workspaceImagePickPayloadSchema.parse({
+        workspaceRoot: '/tmp/workspace',
+        currentFilePath: '/tmp/workspace/v1.html',
+        somethingExtra: 'nope'
+      })
+    ).toThrow()
   })
 })

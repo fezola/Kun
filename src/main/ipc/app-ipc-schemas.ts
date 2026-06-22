@@ -1438,6 +1438,14 @@ export const workspaceClipboardImageSavePayloadSchema = z
   })
   .strict()
 
+export const workspaceImagePickPayloadSchema = z
+  .object({
+    workspaceRoot: trimmedString(MAX_PATH_LENGTH),
+    currentFilePath: trimmedString(MAX_PATH_LENGTH),
+    imageDirectory: optionalTrimmedString(MAX_PATH_LENGTH)
+  })
+  .strict()
+
 export const workspaceEntryRenamePayloadSchema = z
   .object({
     path: trimmedString(MAX_PATH_LENGTH),

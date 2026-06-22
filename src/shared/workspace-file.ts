@@ -75,6 +75,25 @@ export type WorkspaceClipboardImageSavePayload = {
   imageDirectory?: string
 }
 
+export type WorkspaceImagePickPayload = {
+  workspaceRoot: string
+  /** Source file the picker is relative to (so we can return a relative path). */
+  currentFilePath: string
+  /** Target directory under the workspace; defaults to `img`. */
+  imageDirectory?: string
+}
+
+export type WorkspaceImagePickResult =
+  | {
+      ok: true
+      /** Absolute on-disk path of the saved copy. */
+      path: string
+      /** Path relative to `currentFilePath`'s directory, for use as an HTML `src`. */
+      relativePath: string
+      createdAt: string
+    }
+  | { ok: false; canceled?: boolean; message?: string }
+
 export type ClipboardImageReadResult =
   | {
       ok: true

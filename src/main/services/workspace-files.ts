@@ -1,4 +1,4 @@
-import { clipboard } from 'electron'
+import { BrowserWindow, clipboard, dialog } from 'electron'
 import {
   mkdir,
   open as openFile,
@@ -32,6 +32,8 @@ import type {
   WorkspaceFileTarget,
   WorkspaceFileWritePayload,
   WorkspaceFileWriteResult,
+  WorkspaceImagePickPayload,
+  WorkspaceImagePickResult,
   WorkspaceImageReadResult,
   WorkspacePdfReadResult
 } from '../../shared/workspace-file'
@@ -281,6 +283,12 @@ function buildWorkspaceImageName(now = new Date()): string {
   return `pasted-image-${iso}-${randomUUID().slice(0, 8)}.png`
 }
 
+function buildPickedImageName(ext: string, now = new Date()): string {
+  const iso = now.toISOString().replace(/[-:]/g, '').replace(/\..+$/, '').replace('T', '-')
+  const safeExt = /^\.[a-z0-9]{1,8}$/i.test(ext) ? ext.toLowerCase() : '.png'
+  return `image-${iso}-${randomUUID().slice(0, 8)}${safeExt}`
+}
+
 function buildClipboardTempImagePath(now = new Date()): string {
   return join(CLIPBOARD_TEMP_DIR, `${now.getTime()}.png`)
 }
@@ -351,6 +359,61 @@ export async function saveWorkspaceClipboardImage(
       ok: true,
       path: targetPath,
       markdownPath: normalizePathSeparators(relative(dirname(currentFilePath), targetPath)),
+      createdAt: new Date().toISOString()
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : String(error)
+    }
+  }
+}
+
+export async function pickAndSaveWorkspaceImage(
+  payload: WorkspaceImagePickPayload,
+  options?: { parentWindow?: BrowserWindow | null }
+): Promise<WorkspaceImagePickResult> {
+  try {
+    const parentWindow = options?.parentWindow ?? null
+    const result = parentWindow
+      ? await dialog.showOpenDialog(parentWindow, {
+          title: 'Pick an image',
+          properties: ['openFile'],
+          filters: [
+            { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'avif'] }
+          ]
+        })
+      : await dialog.showOpenDialog({
+          title: 'Pick an image',
+          properties: ['openFile'],
+          filters: [
+            { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'avif'] }
+          ]
+        })
+    if (result.canceled || result.filePaths.length === 0) {
+      return { ok: false, canceled: true }
+    }
+    const sourcePath = result.filePaths[0]
+    const buffer = await readFile(sourcePath)
+    if (!buffer.length) {
+      return { ok: false, message: 'Selected image is empty.' }
+    }
+    const currentFilePath = await resolveOpenTargetPath(payload.currentFilePath, payload.workspaceRoot, {
+      allowBasenameFallback: false
+    })
+    const imageDirectory = payload.imageDirectory?.trim() || WORKSPACE_IMAGE_DIR
+    const imageDir = await resolveTargetPathWithinWorkspace(imageDirectory, payload.workspaceRoot)
+    await mkdir(imageDir, { recursive: true })
+    const ext = extensionFromName(sourcePath)
+    const targetPath = await resolveTargetPathWithinWorkspace(
+      join(imageDir, buildPickedImageName(ext)),
+      payload.workspaceRoot
+    )
+    await writeFile(targetPath, buffer)
+    return {
+      ok: true,
+      path: targetPath,
+      relativePath: normalizePathSeparators(relative(dirname(currentFilePath), targetPath)),
       createdAt: new Date().toISOString()
     }
   } catch (error) {
