@@ -7,6 +7,7 @@ import { useCanvasUndoStore } from '../../../design/canvas/canvas-undo-store'
 import {
   DEFAULT_FILL,
   isHtmlFrame,
+  isImplicitImageSlot,
   type Arrowhead,
   type CanvasShape,
   type DevicePreset,
@@ -475,6 +476,9 @@ function PropertiesPanelInner({ onImplementDesign }: Props): ReactElement | null
     !singleHtmlFrame &&
     shapes.every((s) => s.type === 'image' || s.type === 'frame' || s.type === 'rect')
   const aiHolder = reduceField(shapes, (s) => Boolean(s.aiImageHolder))
+  // Empty boxes are implicit slots: the agent fills a selected empty box on
+  // request automatically, so no manual marking is needed for the common case.
+  const allEmptySlots = canBeHolder && shapes.every(isImplicitImageSlot)
 
   const DEVICE_PRESETS: { id: DevicePreset; icon: typeof Monitor; w: number; h: number }[] = [
     { id: 'mobile', icon: Smartphone, w: 390, h: 844 },
@@ -563,28 +567,41 @@ function PropertiesPanelInner({ onImplementDesign }: Props): ReactElement | null
         </Section>
       )}
 
-      {/* AI image holder — mark a box as a slot the assistant fills on request */}
+      {/* AI image slot — an empty selected box is auto-filled on request; a
+          filled box can still be marked manually as a regenerate target. */}
       {canBeHolder && (
         <Section title={t('canvasInspectorAiHolder', 'AI image')}>
-          <button
-            type="button"
-            onClick={() => updateAll('toggle-ai-holder', { aiImageHolder: aiHolder !== true })}
-            className={`flex h-8 w-full items-center justify-center gap-1.5 rounded-[8px] text-[11.5px] font-medium transition ${
-              aiHolder === true
-                ? 'bg-accent-soft text-accent shadow-[inset_0_0_0_1px_var(--ds-sidebar-row-ring)]'
-                : 'bg-ds-hover/30 text-ds-faint hover:bg-ds-hover/60 hover:text-ds-ink'
-            }`}
-          >
-            <Sparkles className="h-3.5 w-3.5" strokeWidth={1.9} />
-            {aiHolder === true
-              ? t('canvasInspectorAiHolderOn', 'AI image slot · on')
-              : t('canvasInspectorAiHolderMark', 'Mark as AI image slot')}
-          </button>
+          {allEmptySlots ? (
+            <div className="flex h-8 w-full items-center justify-center gap-1.5 rounded-[8px] bg-accent-soft text-[11.5px] font-medium text-accent shadow-[inset_0_0_0_1px_var(--ds-sidebar-row-ring)]">
+              <Sparkles className="h-3.5 w-3.5" strokeWidth={1.9} />
+              {t('canvasInspectorAiHolderAuto', 'Empty box · auto image slot')}
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => updateAll('toggle-ai-holder', { aiImageHolder: aiHolder !== true })}
+              className={`flex h-8 w-full items-center justify-center gap-1.5 rounded-[8px] text-[11.5px] font-medium transition ${
+                aiHolder === true
+                  ? 'bg-accent-soft text-accent shadow-[inset_0_0_0_1px_var(--ds-sidebar-row-ring)]'
+                  : 'bg-ds-hover/30 text-ds-faint hover:bg-ds-hover/60 hover:text-ds-ink'
+              }`}
+            >
+              <Sparkles className="h-3.5 w-3.5" strokeWidth={1.9} />
+              {aiHolder === true
+                ? t('canvasInspectorAiHolderOn', 'AI image slot · on')
+                : t('canvasInspectorAiHolderMark', 'Mark as AI image slot')}
+            </button>
+          )}
           <p className="mt-1 text-[10.5px] leading-4 text-ds-faint">
-            {t(
-              'canvasInspectorAiHolderHint',
-              'Keep it selected and ask the assistant to generate — it fills this slot.'
-            )}
+            {allEmptySlots
+              ? t(
+                  'canvasInspectorAiHolderAutoHint',
+                  'Just ask the assistant to generate — it fills this box automatically. No marking needed.'
+                )
+              : t(
+                  'canvasInspectorAiHolderHint',
+                  'Keep it selected and ask the assistant to generate — it fills this slot.'
+                )}
           </p>
         </Section>
       )}

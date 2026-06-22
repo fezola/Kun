@@ -5,6 +5,7 @@
  *
  * The id is still included so the AI can target shapes precisely in ShapeOps.
  */
+import { isImplicitImageSlot } from './canvas-types'
 import type { CanvasDocument, CanvasShape, Point } from './canvas-types'
 
 export type CanvasSnapshotShape = {
@@ -21,7 +22,11 @@ export type CanvasSnapshotShape = {
   htmlArtifactId?: string
   /** True when this shape is in the user's current selection (what "this"/"here" refers to). */
   selected?: boolean
-  /** True when this shape is an empty AI image slot the agent should fill on request. */
+  /**
+   * True when this shape is an AI image slot the agent should fill on request —
+   * either explicitly marked (`aiImageHolder`) or an empty box the user has
+   * currently selected (auto-detected, so no manual marking is needed).
+   */
   aiImageHolder?: boolean
   /** Linear shapes only: vertices in ABSOLUTE canvas coords. */
   points?: Point[]
@@ -48,6 +53,10 @@ export function snapshotCanvas(
       seen.add(childId)
       const s = objects[childId]
       if (!s) continue
+      const selected = selectedIds?.has(s.id) ?? false
+      // A selected empty box is an implicit slot — the user shouldn't have to
+      // mark it for the agent to fill it on request.
+      const isHolder = Boolean(s.aiImageHolder) || (selected && isImplicitImageSlot(s))
       shapes.push({
         id: s.id,
         name: s.name,
@@ -60,8 +69,8 @@ export function snapshotCanvas(
         parentName,
         ...(s.textContent ? { textContent: s.textContent.slice(0, 120) } : {}),
         ...(s.htmlArtifactId ? { htmlArtifactId: s.htmlArtifactId } : {}),
-        ...(selectedIds?.has(s.id) ? { selected: true } : {}),
-        ...(s.aiImageHolder ? { aiImageHolder: true } : {}),
+        ...(selected ? { selected: true } : {}),
+        ...(isHolder ? { aiImageHolder: true } : {}),
         ...(s.points && s.points.length > 0
           ? { points: s.points.map((p) => ({ x: round(s.x + p.x), y: round(s.y + p.y) })) }
           : {})

@@ -88,4 +88,25 @@ describe('snapshotCanvas', () => {
     expect(snap.shapes[0]).not.toHaveProperty('aiImageHolder')
     expect(snap.shapes[1].aiImageHolder).toBe(true)
   })
+
+  it('auto-flags a selected empty box as a holder, but not when unselected or filled', () => {
+    const doc = createEmptyDocument()
+    const root = doc.objects[doc.rootId]
+    const emptyImg = createDefaultShape('image', 0, 0)
+    const filledImg = createDefaultShape('image', 0, 0)
+    filledImg.imageUrl = '.deepseekgui-images/pic.png'
+    doc.objects[emptyImg.id] = { ...emptyImg, parentId: doc.rootId }
+    doc.objects[filledImg.id] = { ...filledImg, parentId: doc.rootId }
+    doc.objects[doc.rootId] = { ...root, children: [emptyImg.id, filledImg.id] }
+
+    // Both selected: the empty box becomes an implicit slot; the filled one does not.
+    const selected = snapshotCanvas(doc, new Set([emptyImg.id, filledImg.id]))
+    expect(selected.shapes[0].aiImageHolder).toBe(true)
+    expect(selected.shapes[1]).not.toHaveProperty('aiImageHolder')
+
+    // Nothing selected: an empty box is NOT auto-flagged, so asking for an image
+    // elsewhere won't fill stray empty boxes.
+    const none = snapshotCanvas(doc)
+    expect(none.shapes[0]).not.toHaveProperty('aiImageHolder')
+  })
 })

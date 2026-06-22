@@ -96,6 +96,27 @@ export function isHtmlFrame(shape: CanvasShape): boolean {
   return shape.type === 'frame' && Boolean(shape.htmlArtifactId)
 }
 
+/**
+ * An *empty* box that should count as an implicit AI image slot: when the user
+ * selects one and asks for a picture, the design agent fills it in place — no
+ * need to explicitly mark it with `aiImageHolder`. An `image` with no picture,
+ * and a childless `frame`/`rect` are the placeholders people draw where a
+ * generated image should go. HTML frames (webview screens) are never slots —
+ * they already carry content.
+ */
+export function isImplicitImageSlot(shape: CanvasShape): boolean {
+  switch (shape.type) {
+    case 'image':
+      return !shape.imageUrl
+    case 'frame':
+      return !isHtmlFrame(shape) && shape.children.length === 0
+    case 'rect':
+      return shape.children.length === 0
+    default:
+      return false
+  }
+}
+
 export type CanvasTool =
   | 'select'
   | 'rect'
