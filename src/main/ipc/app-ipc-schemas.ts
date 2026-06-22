@@ -36,6 +36,7 @@ import {
   MODEL_PROVIDER_MESSAGE_PARTS,
   MODEL_REASONING_EFFORTS,
   MODEL_REASONING_REQUEST_PROTOCOLS,
+  MIN_KUN_LOCAL_PORT,
   SCHEDULE_MODEL_IDS,
   SCHEDULE_REASONING_EFFORT_IDS,
   SPEECH_TO_TEXT_PROTOCOLS,
@@ -50,6 +51,8 @@ import { KEYBOARD_SHORTCUT_COMMANDS } from '../../shared/keyboard-shortcuts'
 import { WRITE_EXPORT_FORMATS } from '../../shared/write-export'
 import { WRITE_INFOGRAPHIC_MAX_TEXT_CHARS } from '../../shared/write-infographic'
 import { SPEECH_TRANSCRIPTION_MAX_BASE64_CHARS, SPEECH_TRANSCRIPTION_MAX_DURATION_MS } from '../../shared/speech-to-text'
+import { LOCAL_WHISPER_DOWNLOAD_SOURCES, LOCAL_WHISPER_MODELS } from '../../shared/local-whisper'
+import type { LocalWhisperDownloadSourceId } from '../../shared/local-whisper'
 import {
   TERMINAL_DEFAULT_COLS,
   TERMINAL_DEFAULT_ROWS,
@@ -203,7 +206,8 @@ export const runtimeRequestPayloadSchema = z
 const localeSchema = z.enum(['en', 'zh'])
 const themeSchema = z.enum(['system', 'light', 'dark'])
 const uiFontScaleSchema = z.enum(['small', 'medium', 'large'])
-const approvalPolicySchema = z.enum(['on-request', 'untrusted', 'never', 'auto', 'suggest'])
+const hexColorSchema = z.string().trim().regex(/^#[0-9a-fA-F]{6}$/)
+const approvalPolicySchema = z.enum(['always', 'on-request', 'untrusted', 'never', 'auto', 'suggest'])
 const sandboxModeSchema = z.enum(['read-only', 'workspace-write', 'danger-full-access', 'external-sandbox'])
 const mcpSearchModeSchema = z.enum(['direct', 'search', 'auto'])
 const kunStorageBackendSchema = z.enum(['hybrid', 'file'])
@@ -220,6 +224,14 @@ const writeInlineCompletionModelSchema = z.union([
 const modelEndpointFormatSchema = z.enum(MODEL_ENDPOINT_FORMATS)
 const imageGenerationProtocolSchema = z.enum(IMAGE_GENERATION_PROTOCOLS)
 const speechToTextProtocolSchema = z.enum(SPEECH_TO_TEXT_PROTOCOLS)
+const localWhisperModelIdSchema = z.enum(LOCAL_WHISPER_MODELS.map((model) => model.id) as [string, ...string[]])
+const localWhisperDownloadSourceIds = LOCAL_WHISPER_DOWNLOAD_SOURCES.map((source) => source.id) as [
+  LocalWhisperDownloadSourceId,
+  ...LocalWhisperDownloadSourceId[]
+]
+const localWhisperDownloadSourceSchema = z.enum(
+  localWhisperDownloadSourceIds
+)
 const textToSpeechProtocolSchema = z.enum(TEXT_TO_SPEECH_PROTOCOLS)
 const musicGenerationProtocolSchema = z.enum(MUSIC_GENERATION_PROTOCOLS)
 const videoGenerationProtocolSchema = z.enum(VIDEO_GENERATION_PROTOCOLS)
@@ -230,6 +242,7 @@ const speechToTextSettingsSchema = z.object({
   baseUrl: z.string().trim().max(MAX_URL_LENGTH),
   apiKey: z.string().max(MAX_BODY_BYTES),
   model: z.string().trim().max(128),
+  localWhisperDownloadSource: localWhisperDownloadSourceSchema,
   language: z.string().trim().max(16),
   timeoutMs: z.number().int().positive().max(600_000)
 }).strict()
@@ -306,7 +319,7 @@ const modelProviderPatchSchema = z.object({
 
 const kunRuntimePatchSchema = z.object({
   binaryPath: defaultPathSchema,
-  port: z.number().int().min(1).max(65_535).optional(),
+  port: z.number().int().min(MIN_KUN_LOCAL_PORT).max(65_535).optional(),
   autoStart: z.boolean().optional(),
   apiKey: z.string().max(MAX_BODY_BYTES).optional(),
   baseUrl: z.string().trim().max(MAX_URL_LENGTH).optional(),
@@ -388,6 +401,7 @@ const kunRuntimePatchSchema = z.object({
     baseUrl: z.string().trim().max(MAX_URL_LENGTH).optional(),
     apiKey: z.string().max(MAX_BODY_BYTES).optional(),
     model: z.string().trim().max(128).optional(),
+    localWhisperDownloadSource: localWhisperDownloadSourceSchema.optional(),
     language: z.string().trim().max(16).optional(),
     timeoutMs: z.number().int().positive().max(600_000).optional()
   }).strict().optional(),
@@ -523,6 +537,34 @@ const writeSettingsPatchSchema = z.object({
   agentPresets: z.array(writeAgentPresetSchema).max(24).optional()
 }).strict()
 
+const terminalColorPatchSchema = z.object({
+  colorMode: z.enum(['none', 'custom']).optional(),
+  foreground: z.string().max(64).optional(),
+  background: z.string().max(64).optional(),
+  cursor: z.string().max(64).optional(),
+  selectionBackground: z.string().max(64).optional(),
+  black: z.string().max(64).optional(),
+  red: z.string().max(64).optional(),
+  green: z.string().max(64).optional(),
+  yellow: z.string().max(64).optional(),
+  blue: z.string().max(64).optional(),
+  magenta: z.string().max(64).optional(),
+  cyan: z.string().max(64).optional(),
+  white: z.string().max(64).optional(),
+  brightBlack: z.string().max(64).optional(),
+  brightRed: z.string().max(64).optional(),
+  brightGreen: z.string().max(64).optional(),
+  brightYellow: z.string().max(64).optional(),
+  brightBlue: z.string().max(64).optional(),
+  brightMagenta: z.string().max(64).optional(),
+  brightCyan: z.string().max(64).optional(),
+  brightWhite: z.string().max(64).optional()
+}).strict()
+
+const terminalSettingsPatchSchema = z.object({
+  colors: terminalColorPatchSchema.optional()
+}).strict()
+
 const clawSkillPatchSchema = z.object({
   defaultNames: z.array(trimmedString(128)).max(128).optional(),
   extraDirs: z.array(trimmedString(MAX_PATH_LENGTH)).max(128).optional(),
@@ -533,7 +575,7 @@ const clawSkillPatchSchema = z.object({
 const clawImPatchSchema = z.object({
   enabled: z.boolean().optional(),
   provider: clawImProviderSchema.optional(),
-  port: z.number().int().min(1024).max(65_535).optional(),
+  port: z.number().int().min(MIN_KUN_LOCAL_PORT).max(65_535).optional(),
   path: trimmedString(MAX_PATH_LENGTH).optional(),
   secret: z.string().max(MAX_BODY_BYTES).optional(),
   weixinBridgeUrl: z.string().trim().max(MAX_URL_LENGTH).optional(),
@@ -661,7 +703,7 @@ const scheduleSkillPatchSchema = z.object({
 }).strict()
 
 const scheduleInternalPatchSchema = z.object({
-  port: z.number().int().min(1024).max(65_535).optional(),
+  port: z.number().int().min(MIN_KUN_LOCAL_PORT).max(65_535).optional(),
   secret: z.string().max(MAX_BODY_BYTES).optional()
 }).strict()
 
@@ -1150,7 +1192,7 @@ const workflowSettingsPatchSchema = z
     model: optionalTrimmedString(128),
     mode: clawRunModeSchema.optional(),
     keepAwake: z.boolean().optional(),
-    webhookPort: z.number().int().min(1024).max(65_535).optional(),
+    webhookPort: z.number().int().min(MIN_KUN_LOCAL_PORT).max(65_535).optional(),
     webhookSecret: z.string().max(MAX_BODY_BYTES).optional(),
     workflows: z.array(workflowPatchSchema).max(200).optional(),
     presets: z.array(workflowNodePresetSchema).max(100).optional(),
@@ -1230,6 +1272,7 @@ const settingsPatchObjectSchema = z.object({
   theme: themeSchema.optional(),
   uiFontScale: uiFontScaleSchema.optional(),
   cursorSpotlight: z.boolean().optional(),
+  cursorSpotlightColor: hexColorSchema.optional(),
   provider: modelProviderPatchSchema.optional(),
   agents: z.object({
     kun: kunRuntimePatchSchema.optional()
@@ -1243,6 +1286,7 @@ const settingsPatchObjectSchema = z.object({
   claw: clawSettingsPatchSchema.optional(),
   schedule: scheduleSettingsPatchSchema.optional(),
   workflow: workflowSettingsPatchSchema.optional(),
+  terminal: terminalSettingsPatchSchema.optional(),
   guiUpdate: z.object({
     channel: z.enum(GUI_UPDATE_CHANNELS).optional()
   }).strict().optional(),
@@ -1256,7 +1300,27 @@ export const skillSaveFilePayloadSchema = z
   .object({
     rootPath: trimmedString(MAX_PATH_LENGTH),
     skillName: trimmedString(128),
-    content: z.string().max(MAX_SKILL_FILE_BYTES)
+    content: z.string().max(MAX_SKILL_FILE_BYTES),
+    manifestContent: z.string().max(MAX_SKILL_FILE_BYTES).optional()
+  })
+  .strict()
+
+export const skillGithubImportPayloadSchema = z
+  .object({
+    rootPath: trimmedString(MAX_PATH_LENGTH),
+    // Defense-in-depth: reject any explicit non-https scheme at the IPC
+    // boundary (http/file/javascript/data/etc.). Scheme-less input is allowed
+    // because the importer normalizes it to https before parsing; only the
+    // host-check inside `importSkillsFromGitHub` is authoritative, but barring
+    // dangerous schemes here narrows what ever reaches the importer.
+    url: z
+      .string()
+      .trim()
+      .min(1)
+      .max(MAX_URL_LENGTH)
+      .refine((value) => !/^[a-z][a-z0-9+.-]*:/i.test(value) || /^https:\/\//i.test(value), {
+        message: 'GitHub skill import URL must use https.'
+      })
   })
   .strict()
 
@@ -1575,6 +1639,19 @@ export const speechTranscribePayloadSchema = z
     mimeType: trimmedString(64),
     durationMs: z.number().int().positive().max(SPEECH_TRANSCRIPTION_MAX_DURATION_MS).optional(),
     speechToText: speechToTextSettingsSchema.optional()
+  })
+  .strict()
+
+export const localWhisperModelIdPayloadSchema = localWhisperModelIdSchema.optional()
+export const localWhisperDownloadPayloadSchema = z
+  .object({
+    modelId: localWhisperModelIdSchema.optional(),
+    sourceId: localWhisperDownloadSourceSchema.optional()
+  })
+  .strict()
+export const localWhisperSourceStatusPayloadSchema = z
+  .object({
+    modelId: localWhisperModelIdSchema.optional()
   })
   .strict()
 

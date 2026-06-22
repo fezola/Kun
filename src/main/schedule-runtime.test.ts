@@ -7,6 +7,7 @@ import {
   defaultScheduleSettings,
   defaultWorkflowSettings,
   defaultWriteSettings,
+  defaultTerminalSettings,
   mergeScheduleSettings,
   type AppSettingsPatch,
   type AppSettingsV1,
@@ -98,6 +99,7 @@ function settingsWith(
       ...schedulePatch
     }),
     workflow: defaultWorkflowSettings(),
+    terminal: defaultTerminalSettings(),
     guiUpdate: { channel: 'stable' },
     codePromptPrefix: '',
     disabledSkillIds: []
