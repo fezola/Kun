@@ -1370,6 +1370,7 @@ async function waitForKunStartup(startedChild: ChildProcess, port?: number): Pro
     let stdoutBuffer = ''
     let stderrTail = ''
     let healthProbeInFlight = false
+    let healthConfirmed = false
     const timer = setTimeout(() => {
       if (settled) return
       settled = true
@@ -1379,13 +1380,19 @@ async function waitForKunStartup(startedChild: ChildProcess, port?: number): Pro
     // The stdout ready marker can lag behind the actual server (pipe
     // buffering) or get lost in unusual spawn environments; the HTTP
     // health endpoint is the ground truth, so poll it in parallel.
+    // A passing health probe alone is enough to settle (it proves the
+    // server responds). The stdout marker alone is NOT enough — it only
+    // proves the process started, not that the HTTP server can serve.
     const healthTimer = port
       ? setInterval(() => {
           if (settled || healthProbeInFlight) return
           healthProbeInFlight = true
           void probeKunHealth(port)
             .then((healthy) => {
-              if (healthy) settleReady()
+              if (healthy) {
+                healthConfirmed = true
+                settleReady()
+              }
             })
             .finally(() => {
               healthProbeInFlight = false
@@ -1423,7 +1430,10 @@ async function waitForKunStartup(startedChild: ChildProcess, port?: number): Pro
     }
     const onStdout = (chunk: Buffer | string): void => {
       stdoutBuffer = appendTail(stdoutBuffer, String(chunk), STDERR_TAIL_MAX_CHARS * 2)
-      if (tryParseReady()) settleReady()
+      if (!tryParseReady()) return
+      if (healthConfirmed || !healthTimer) {
+        settleReady()
+      }
     }
     const onStderr = (chunk: Buffer | string): void => {
       stderrTail = appendTail(stderrTail, String(chunk))

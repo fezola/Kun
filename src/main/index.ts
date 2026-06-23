@@ -632,6 +632,7 @@ async function probeThreadApi(settings: AppSettingsV1): Promise<
 async function waitForKunHealth(settings: AppSettingsV1, timeoutMs: number): Promise<boolean> {
   const base = getRuntimeBaseUrlForSettings(settings)
   const deadline = Date.now() + timeoutMs
+  let lastError = ''
 
   while (Date.now() <= deadline) {
     try {
@@ -641,12 +642,18 @@ async function waitForKunHealth(settings: AppSettingsV1, timeoutMs: number): Pro
         signal: AbortSignal.timeout(Math.max(250, Math.min(1_000, remaining)))
       })
       if (res.ok && isKunHealthResponseBody(await res.text())) return true
-    } catch {
-      /* retry until the deadline */
+      lastError = `unexpected status ${res.status}`
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      if (msg !== lastError) {
+        lastError = msg
+        logWarn('health-probe', `${base}/health: ${msg}`)
+      }
     }
     await sleep(150)
   }
 
+  logWarn('health-probe', `gave up after ${timeoutMs}ms, last error: ${lastError}`)
   return false
 }
 
