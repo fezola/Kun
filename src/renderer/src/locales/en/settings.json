@@ -855,6 +855,8 @@
   "firstRunModeLabel": "Access mode",
   "firstRunModeApi": "Pay-as-you-go API",
   "firstRunModeTokenPlan": "Token Plan",
+  "firstRunPermissionLabel": "Default Agent permissions",
+  "firstRunPermissionFullAccessRisk": "\"Full access\" lets the Agent run tools without asking and gives it full local access. Choose it only when you fully trust the current task and input.",
   "firstRunRegionLabel": "Plan region",
   "firstRunRegion_cn": "China",
   "firstRunRegion_global": "Global",

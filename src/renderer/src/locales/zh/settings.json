@@ -855,6 +855,8 @@
   "firstRunModeLabel": "接入方式",
   "firstRunModeApi": "按量 API",
   "firstRunModeTokenPlan": "Token Plan 套餐",
+  "firstRunPermissionLabel": "默认 Agent 权限",
+  "firstRunPermissionFullAccessRisk": "“完全访问”会让 Agent 在不询问的情况下执行工具，并拥有完整本地访问权限。只有在你充分信任当前任务和输入内容时才应选择。",
   "firstRunRegionLabel": "套餐区域",
   "firstRunRegion_cn": "国内",
   "firstRunRegion_global": "海外",
