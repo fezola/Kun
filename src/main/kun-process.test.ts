@@ -113,9 +113,17 @@ describe('startKunChild', () => {
     const script = writeScript(
       'ready-child.js',
       [
-        "setTimeout(() => {",
-        "  process.stdout.write('KUN_READY ' + JSON.stringify({ service: 'kun', mode: 'serve', port: 18899 }) + '\\n')",
-        "}, 50)",
+        "const http = require('node:http')",
+        "const port = 18899",
+        "const server = http.createServer((req, res) => {",
+        "  res.setHeader('content-type', 'application/json')",
+        "  res.end(JSON.stringify({ service: 'kun', mode: 'serve', status: 'ok' }))",
+        "})",
+        "server.listen(port, '127.0.0.1', () => {",
+        "  setTimeout(() => {",
+        "    process.stdout.write('KUN_READY ' + JSON.stringify({ service: 'kun', mode: 'serve', port }) + '\\n')",
+        "  }, 50)",
+        "})",
         "setInterval(() => {}, 1_000)"
       ].join('\n')
     )
@@ -128,19 +136,76 @@ describe('startKunChild', () => {
     expect(logText).toContain('ready marker received on port 18899')
   })
 
+  it('does not settle on the ready marker until the /health endpoint responds', async () => {
+    if (!tempRoot) throw new Error('temp root not initialized')
+    const healthSignalPath = join(tempRoot, 'allow-health')
+    const script = writeScript(
+      'marker-without-health-child.js',
+      [
+        "const http = require('node:http')",
+        "const { existsSync } = require('node:fs')",
+        `const healthSignalPath = ${JSON.stringify(healthSignalPath)}`,
+        "const port = 18899",
+        // Emit the ready marker right away but serve no /health yet: the
+        // marker alone must NOT be enough to settle the launch.
+        "process.stdout.write('KUN_READY ' + JSON.stringify({ service: 'kun', mode: 'serve', port }) + '\\n')",
+        'let served = false',
+        'setInterval(() => {',
+        '  if (served || !existsSync(healthSignalPath)) return',
+        '  served = true',
+        "  const server = http.createServer((req, res) => {",
+        "    res.setHeader('content-type', 'application/json')",
+        "    res.end(JSON.stringify({ service: 'kun', mode: 'serve', status: 'ok' }))",
+        "  })",
+        "  server.listen(port, '127.0.0.1')",
+        '}, 10)',
+        'setInterval(() => {}, 1_000)'
+      ].join('\n')
+    )
+    const module = await import('./kun-process')
+    let resolved = false
+    const start = module.startKunChild(createSettings(script)).then(() => {
+      resolved = true
+    })
+
+    // The marker has been emitted but /health is not up yet. The child is
+    // spawned and alive, yet the launch must stay PENDING for the whole
+    // window (the startup timeout is far larger, so it cannot mask this).
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(resolved).toBe(false)
+
+    // Bring /health online; the parallel probe now settles the launch.
+    writeFileSync(healthSignalPath, 'ok', 'utf8')
+    await start
+    expect(resolved).toBe(true)
+    expect(module.isKunChildRunning()).toBe(true)
+
+    await module.stopKunChildAndWait()
+  })
+
   it('shares the startup promise while Kun is spawned but not ready', async () => {
     if (!tempRoot) throw new Error('temp root not initialized')
     const readySignalPath = join(tempRoot, 'allow-ready')
     const script = writeScript(
       'delayed-ready-child.js',
       [
+        "const http = require('node:http')",
         "const { existsSync } = require('node:fs')",
         `const readySignalPath = ${JSON.stringify(readySignalPath)}`,
+        "const port = 18899",
         'let sentReady = false',
+        // Only stand up the /health server once the signal exists so the
+        // parallel health probe cannot settle the launch before then.
         'setInterval(() => {',
         '  if (sentReady || !existsSync(readySignalPath)) return',
         '  sentReady = true',
-        "  process.stdout.write('KUN_READY ' + JSON.stringify({ service: 'kun', mode: 'serve', port: 18899 }) + '\\n')",
+        "  const server = http.createServer((req, res) => {",
+        "    res.setHeader('content-type', 'application/json')",
+        "    res.end(JSON.stringify({ service: 'kun', mode: 'serve', status: 'ok' }))",
+        "  })",
+        "  server.listen(port, '127.0.0.1', () => {",
+        "    process.stdout.write('KUN_READY ' + JSON.stringify({ service: 'kun', mode: 'serve', port }) + '\\n')",
+        "  })",
         '}, 10)',
         'setInterval(() => {}, 1_000)'
       ].join('\n')
@@ -235,13 +300,23 @@ describe('waitForKunStartupSettled', () => {
     const script = writeScript(
       'settled-delayed-child.js',
       [
+        "const http = require('node:http')",
         "const { existsSync } = require('node:fs')",
         `const readySignalPath = ${JSON.stringify(readySignalPath)}`,
+        "const port = 18899",
         'let sentReady = false',
+        // Only stand up the /health server once the signal exists so the
+        // parallel health probe cannot settle the launch before then.
         'setInterval(() => {',
         '  if (sentReady || !existsSync(readySignalPath)) return',
         '  sentReady = true',
-        "  process.stdout.write('KUN_READY ' + JSON.stringify({ service: 'kun', mode: 'serve', port: 18899 }) + '\\n')",
+        "  const server = http.createServer((req, res) => {",
+        "    res.setHeader('content-type', 'application/json')",
+        "    res.end(JSON.stringify({ service: 'kun', mode: 'serve', status: 'ok' }))",
+        "  })",
+        "  server.listen(port, '127.0.0.1', () => {",
+        "    process.stdout.write('KUN_READY ' + JSON.stringify({ service: 'kun', mode: 'serve', port }) + '\\n')",
+        "  })",
         '}, 10)',
         'setInterval(() => {}, 1_000)'
       ].join('\n')
