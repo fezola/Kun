@@ -155,7 +155,12 @@ export class KunRuntimeProvider implements AgentProvider {
   async createThread(input: {
     workspace?: string
     title?: string
+    titleAuto?: boolean
     mode?: KunThreadMode
+    agentId?: string
+    providerId?: string
+    model?: string
+    systemPrompt?: string
   }): Promise<NormalizedThread> {
     const settings = await rendererRuntimeClient.getSettings()
     const runtime = getKunRuntimeSettings(settings)
@@ -165,10 +170,14 @@ export class KunRuntimeProvider implements AgentProvider {
       JSON.stringify({
         workspace: input.workspace || settings.workspaceRoot || '~',
         title: input.title,
-        model: runtime.model,
+        ...(input.titleAuto !== undefined ? { titleAuto: input.titleAuto } : {}),
+        model: input.model?.trim() || runtime.model,
         mode: normalizeThreadMode(input.mode),
         approvalPolicy: runtime.approvalPolicy,
-        sandboxMode: runtime.sandboxMode
+        sandboxMode: runtime.sandboxMode,
+        ...(input.providerId?.trim() ? { providerId: input.providerId.trim() } : {}),
+        ...(input.agentId?.trim() ? { agentId: input.agentId.trim() } : {}),
+        ...(input.systemPrompt?.trim() ? { systemPrompt: input.systemPrompt.trim() } : {})
       })
     )
     if (!response.ok) {
@@ -366,11 +375,11 @@ export class KunRuntimeProvider implements AgentProvider {
     }
   }
 
-  async renameThread(threadId: string, title: string): Promise<void> {
+  async renameThread(threadId: string, title: string, auto?: boolean): Promise<void> {
     const response = await rendererRuntimeClient.runtimeRequest(
       kunThreadPath(threadId),
       'PATCH',
-      JSON.stringify({ title })
+      JSON.stringify({ title, ...(auto !== undefined ? { titleAuto: auto } : {}) })
     )
     if (!response.ok) {
       throw runtimeErrorToError(readRuntimeError(response.body, 'rename thread failed'))
@@ -385,6 +394,17 @@ export class KunRuntimeProvider implements AgentProvider {
     )
     if (!response.ok) {
       throw runtimeErrorToError(readRuntimeError(response.body, 'update thread workspace failed'))
+    }
+  }
+
+  async updateThreadPinned(threadId: string, pinned: boolean): Promise<void> {
+    const response = await rendererRuntimeClient.runtimeRequest(
+      kunThreadPath(threadId),
+      'PATCH',
+      JSON.stringify({ pinned })
+    )
+    if (!response.ok) {
+      throw runtimeErrorToError(readRuntimeError(response.body, 'update thread pin failed'))
     }
   }
 

@@ -111,6 +111,7 @@ type StoreActionContext = {
 }
 
 let drainingQueuedMessages = false
+const checkpointGitUnavailableWorkspaces = new Set<string>()
 
 function fallbackComposerProviderIdForSend(state: ChatState): string {
   return state.route === 'claw' ? '' : state.composerProviderId.trim()
@@ -259,10 +260,27 @@ export function createThreadActions(
           return
         }
       }
+      // Primary-agent persona snapshot: bind this thread to the picked
+      // subagent profile and freeze its providerId / model / systemPrompt
+      // at create time so later agent edits don't drift the thread.
+      const pickedAgentId = options.agentId?.trim() || get().composerAgentId?.trim() || ''
+      const personaProfile = pickedAgentId
+        ? settings.agents?.kun?.subagents?.profiles?.find(
+            (profile) => profile.id === pickedAgentId &&
+              profile.enabled &&
+              (profile.mode === 'primary' || profile.mode === 'all')
+          )
+        : undefined
       const t = await p.createThread({
         workspace: workspaceRoot,
         title: getDefaultThreadTitle(),
-        mode: 'agent'
+        mode: 'agent',
+        ...(personaProfile ? {
+          agentId: personaProfile.id,
+          ...(personaProfile.providerId ? { providerId: personaProfile.providerId } : {}),
+          ...(personaProfile.model ? { model: personaProfile.model } : {}),
+          ...(personaProfile.systemPrompt ? { systemPrompt: personaProfile.systemPrompt } : {})
+        } : {})
       })
       // Register + activate optimistically before refreshing. A freshly created
       // Kun thread may not be listed until the first message is written.
@@ -761,6 +779,8 @@ export function createThreadActions(
             ? await p.createThread({
                 workspace: workspaceRoot,
                 title: generatedTitle,
+                // Provisional first-message title; let the backend LLM titler upgrade it.
+                titleAuto: true,
                 mode: mode ?? 'agent'
               })
             : null
@@ -826,7 +846,12 @@ export function createThreadActions(
       let workspaceCheckpointId: string | undefined
       const checkpointThread = get().threads.find((thread) => thread.id === activeThreadId)
       const checkpointWorkspaceRoot = normalizeWorkspaceRoot(checkpointThread?.workspace) || normalizeWorkspaceRoot(settings.workspaceRoot)
-      if (checkpointWorkspaceRoot && typeof window.kunGui.createGitCheckpoint === 'function') {
+      const checkpointWorkspaceKey = checkpointWorkspaceRoot.replaceAll('\\', '/').toLowerCase()
+      if (
+        checkpointWorkspaceRoot &&
+        !checkpointGitUnavailableWorkspaces.has(checkpointWorkspaceKey) &&
+        typeof window.kunGui.createGitCheckpoint === 'function'
+      ) {
         const checkpoint = await window.kunGui.createGitCheckpoint({
           workspaceRoot: checkpointWorkspaceRoot,
           threadId: activeThreadId
@@ -838,11 +863,20 @@ export function createThreadActions(
         if (checkpoint.ok) {
           workspaceCheckpointId = checkpoint.checkpointId
         } else if (checkpoint.reason !== 'not_git_repo' && checkpoint.reason !== 'no_workspace') {
-          void window.kunGui.logError('git-checkpoint', 'Failed to create Git checkpoint', {
-            message: checkpoint.message,
-            reason: checkpoint.reason,
-            workspaceRoot: checkpointWorkspaceRoot
-          }).catch(() => undefined)
+          if (checkpoint.reason === 'git_unavailable') {
+            checkpointGitUnavailableWorkspaces.add(checkpointWorkspaceKey)
+          }
+          void window.kunGui.logError(
+            'git-checkpoint',
+            checkpoint.reason === 'git_unavailable'
+              ? 'Git checkpoint disabled for this workspace because Git was not found'
+              : 'Failed to create Git checkpoint',
+            {
+              message: checkpoint.message,
+              reason: checkpoint.reason,
+              workspaceRoot: checkpointWorkspaceRoot
+            }
+          ).catch(() => undefined)
         }
       }
       let runtimeText: string
@@ -936,14 +970,15 @@ export function createThreadActions(
         }
       }
       if (shouldRenameThreadAfterSend) {
-        const renamed = await p.renameThread(activeThreadId, generatedTitle).then(() => true).catch(() => {
+        // Provisional first-message title; let the backend LLM titler upgrade it.
+        const renamed = await p.renameThread(activeThreadId, generatedTitle, true).then(() => true).catch(() => {
           /* keep message delivery successful even if auto-title update fails */
           return false
         })
         if (renamed) {
           set((s) => ({
             threads: s.threads.map((thread) =>
-              thread.id === activeThreadId ? { ...thread, title: generatedTitle } : thread
+              thread.id === activeThreadId ? { ...thread, title: generatedTitle, titleAuto: true } : thread
             )
           }))
         }

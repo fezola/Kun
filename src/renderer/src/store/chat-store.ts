@@ -164,6 +164,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   composerMode: readStoredComposerMode(),
   composerModel: '',
   composerProviderId: '',
+  composerAgentId: '',
   composerPickList: mergeComposerPickList(false, []),
   composerModelGroups: [],
   disabledSkillIds: [],
