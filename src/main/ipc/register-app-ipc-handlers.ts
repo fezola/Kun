@@ -46,6 +46,7 @@ import {
   gitCheckpointRestorePayloadSchema,
   gitWorktreeRemoveSchema,
   guiUpdateChannelSchema,
+  localPdfTextTargetPayloadSchema,
   logErrorPayloadSchema,
   notificationPayloadSchema,
   openEditorPathPayloadSchema,
@@ -188,6 +189,7 @@ import {
   exportWriteDocument
 } from '../services/write-export-service'
 import { importGithubSkillsToRoot } from '../services/github-skill-import-service'
+import { readLocalPdfText } from '../services/write-pdf-text-service'
 import { saveGuiSkillPackage } from '../services/skill-save-service'
 import { listGuiSkillRoots, listGuiSkills } from '../services/skill-service'
 
@@ -1139,6 +1141,22 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       parseIpcPayload('file:read-workspace-pdf', workspaceFileTargetPayloadSchema, payload)
     )
   )
+  ipcMain.handle('file:read-local-pdf-text', async (_, payload: unknown) => {
+    const result = await readLocalPdfText(
+      parseIpcPayload('file:read-local-pdf-text', localPdfTextTargetPayloadSchema, payload)
+    )
+    if (!result.ok) return result
+    return {
+      ok: true,
+      path: result.path,
+      size: result.size,
+      mtimeMs: result.mtimeMs,
+      pageCount: result.pageCount,
+      text: result.pages.map((page) => page.text).join('\n\n'),
+      hasText: result.hasText,
+      truncated: result.truncated
+    }
+  })
   ipcMain.handle('file:save-as', async (_, payload: unknown) =>
     saveWorkspaceFileAs(payload, getMainWindow)
   )

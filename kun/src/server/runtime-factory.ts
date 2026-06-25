@@ -28,7 +28,7 @@ import {
   buildVideoGenToolProviders
 } from '../adapters/tool/media-gen-tool-provider.js'
 import { LocalWorkspaceInspector } from '../adapters/workspace/local-workspace-inspector.js'
-import { createImmutablePrefix, setSystemPrompt } from '../cache/immutable-prefix.js'
+import { createImmutablePrefix } from '../cache/immutable-prefix.js'
 import {
   buildRuntimeCapabilityManifest,
   type KunCapabilitiesConfig
@@ -48,6 +48,7 @@ import {
   DEFAULT_STORAGE_CONFIG,
   expandHomePath,
   type QualityConfig,
+  type RolesConfig,
   type RuntimeTuningConfig,
   type ServeProviderConfig,
   type StorageConfig
@@ -112,6 +113,8 @@ export type KunServeRuntimeOptions = {
   models?: ModelConfig
   contextCompaction?: ContextCompactionConfig
   runtime?: RuntimeTuningConfig
+  /** Internal-LLM role model routing (small-model slot + title/summary/codeReview overrides). */
+  roles?: RolesConfig
   storage?: StorageConfig
   capabilities?: KunCapabilitiesConfig
   /** Command hooks from config.json; resolved and wired into tool hosts and the loop. */
@@ -220,13 +223,6 @@ export async function createKunServeRuntime(
     SkillRuntime.create(options.capabilities?.skills),
     seedUsageCarryover({ threadStore, sessionStore, usageService })
   ])
-  // Fold the available-skills catalog into the stable prefix once per session so
-  // the model knows which skills exist (and where to read them) even when no
-  // trigger fires. Stays byte-stable across turns, preserving prompt-cache reuse.
-  const skillCatalog = skillRuntime.catalogInstruction()
-  if (skillCatalog) {
-    prefix = setSystemPrompt(prefix, `${KUN_SYSTEM_PROMPT}\n\n${skillCatalog}`)
-  }
   const turnService = new TurnService({
     threadStore,
     sessionStore,
@@ -252,7 +248,10 @@ export async function createKunServeRuntime(
     ...(options.models ? { models: options.models } : {}),
     ...(options.contextCompaction ? { contextCompaction: options.contextCompaction } : {}),
     ...(tokenEconomy ? { tokenEconomy } : {}),
-    ...(options.runtime ? { runtime: options.runtime } : {})
+    ...(options.runtime ? { runtime: options.runtime } : {}),
+    ...(options.roles?.codeReviewReasoningEffort
+      ? { reasoningEffort: options.roles.codeReviewReasoningEffort }
+      : {})
   })
   const webProviders = buildWebToolProviders(options.capabilities?.web)
   const attachmentStore = options.capabilities?.attachments.enabled
@@ -328,6 +327,11 @@ export async function createKunServeRuntime(
           modelCapabilities,
           skillRuntime,
           tokenEconomy,
+          // Persist the child as a hidden `side` thread on the shared stores +
+          // event bus so its session is loadable and streams live in the GUI.
+          sessionStore,
+          threadStore,
+          events,
           ...(options.runtime ? { runtime: options.runtime } : {}),
           ...(memoryStore ? { memoryStore } : {}),
           nowIso
@@ -454,6 +458,7 @@ export async function createKunServeRuntime(
     skillRuntime,
     tokenEconomy,
     contextCompaction: options.contextCompaction,
+    ...(options.roles ? { roles: options.roles } : {}),
     ...(options.runtime?.toolStorm ? { toolStorm: options.runtime.toolStorm } : {}),
     ...(options.runtime?.toolArgumentRepair ? { toolArgumentRepair: options.runtime.toolArgumentRepair } : {}),
     ...(resolvedHooks.length ? { hooks: resolvedHooks } : {}),
@@ -484,6 +489,11 @@ export async function createKunServeRuntime(
     toolHost,
     ...(attachmentStore ? { attachmentStore } : {}),
     ...(memoryStore ? { memoryStore } : {}),
+    ...(delegationRuntime ? { delegationRuntime } : {}),
+    modelClient,
+    defaultModel: options.model,
+    ...(options.roles ? { roles: options.roles } : {}),
+    immutablePrefix: prefix,
     runTurn(threadId, turnId) {
       return loop.runTurn(threadId, turnId)
     },

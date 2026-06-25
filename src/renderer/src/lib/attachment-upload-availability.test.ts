@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { isChatAttachmentUploadEnabled } from './attachment-upload-availability'
 
 describe('isChatAttachmentUploadEnabled', () => {
-  it('enables composer attachments in chat when the Kun attachment store is ready', () => {
+  it('enables composer attachments in chat when the runtime is ready', () => {
     expect(isChatAttachmentUploadEnabled({
       runtimeConnection: 'ready',
       route: 'chat',
@@ -19,7 +19,7 @@ describe('isChatAttachmentUploadEnabled', () => {
     })).toBe(true)
   })
 
-  it('enables composer attachments in Write mode assistants when the selected model can read images', () => {
+  it('enables composer attachments in Write mode assistants', () => {
     expect(isChatAttachmentUploadEnabled({
       runtimeConnection: 'ready',
       route: 'write',
@@ -44,6 +44,11 @@ describe('isChatAttachmentUploadEnabled', () => {
       attachmentStoreAvailable: true,
       modelSupportsImageInput: true
     })).toBe(false)
+  })
+
+  it('disables the attachment picker when the model cannot accept images', () => {
+    // The composer gates the picker on model image support; the per-attachment
+    // `composerAttachmentModelUnsupported` error surfaces the reason separately.
     expect(isChatAttachmentUploadEnabled({
       runtimeConnection: 'ready',
       route: 'chat',
@@ -51,5 +56,15 @@ describe('isChatAttachmentUploadEnabled', () => {
       attachmentStoreAvailable: true,
       modelSupportsImageInput: false
     })).toBe(false)
+  })
+
+  it('enables composer attachments in Design mode assistants', () => {
+    expect(isChatAttachmentUploadEnabled({
+      runtimeConnection: 'ready',
+      route: 'design',
+      mode: 'agent',
+      attachmentStoreAvailable: true,
+      modelSupportsImageInput: true
+    })).toBe(true)
   })
 })

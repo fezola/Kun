@@ -30,7 +30,7 @@ function createSettings(patch: Partial<AppSettingsV1['write']['inlineCompletion'
     version: 1,
     locale: 'en',
     theme: 'system',
-    uiFontScale: 'small',
+    uiFontScale: 0.82,
     provider: defaultModelProviderSettings(),
     agents: {
       kun: {
@@ -43,6 +43,7 @@ function createSettings(patch: Partial<AppSettingsV1['write']['inlineCompletion'
       enabled: true,
       retentionDays: 2
     },
+    checkpointCleanup: { enabled: false, intervalDays: 3 },
     notifications: {
       turnComplete: true
     },

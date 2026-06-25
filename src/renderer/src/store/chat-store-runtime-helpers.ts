@@ -178,6 +178,8 @@ export function collectAssistantTextForTurn(
 export function clearedThreadSelection(): Pick<
   ChatState,
   | 'activeThreadId'
+  | 'activeThreadRelation'
+  | 'activeThreadParentId'
   | 'activeThreadGoal'
   | 'activeThreadTodos'
   | 'blocks'
@@ -197,6 +199,8 @@ export function clearedThreadSelection(): Pick<
 > {
   return {
     activeThreadId: null,
+    activeThreadRelation: null,
+    activeThreadParentId: null,
     activeThreadGoal: null,
     activeThreadTodos: null,
     blocks: [],

@@ -97,15 +97,8 @@ function isPlainTextLanguage(language: string): boolean {
   return PLAIN_TEXT_LANGUAGES.has(language.trim().toLowerCase())
 }
 
-function PlainTextBlock({ code }: { code: string }): ReactNode {
-  const trimmedCode = code.replace(TRAILING_NEWLINES_REGEX, '')
-  if (!trimmedCode.trim()) return null
-
-  return (
-    <div className="ds-plain-text-block ds-plain-code-block" data-streamdown="plain-text-block">
-      {trimmedCode}
-    </div>
-  )
+function displayCodeLanguage(language: string): string {
+  return isPlainTextLanguage(language) ? 'plain text' : language
 }
 
 function inlineFileReference(text: string): { text: string; target: FileReferenceTarget } | null {
@@ -186,6 +179,7 @@ function CodeBlock({
   const [expanded, setExpanded] = useState(false)
   const bodyRef = useRef<HTMLDivElement>(null)
   const copyResetRef = useRef<number | null>(null)
+  const displayLanguage = displayCodeLanguage(language)
 
   useEffect(() => {
     let cancelled = false
@@ -242,7 +236,7 @@ function CodeBlock({
   return (
     <div
       className="ds-code-block"
-      data-language={language}
+      data-language={displayLanguage}
       data-streamdown="code-block"
       style={{
         contentVisibility: 'auto',
@@ -250,7 +244,7 @@ function CodeBlock({
       }}
     >
       <div className="ds-code-block-header" data-streamdown="code-block-header">
-        <span className="ds-code-block-language">{language || 'text'}</span>
+        <span className="ds-code-block-language">{displayLanguage}</span>
         <div className="ds-code-block-actions">
           <button
             type="button"
@@ -358,8 +352,8 @@ function CodeComponent({ node, className, children, ...props }: CodeProps) {
     return <ShapeOpsChip code={text} />
   }
 
-  if (isPlainTextLanguage(language)) {
-    return <PlainTextBlock code={text} />
+  if (isPlainTextLanguage(language) && !text.replace(TRAILING_NEWLINES_REGEX, '').trim()) {
+    return null
   }
 
   return <CodeBlock code={text} language={language} />

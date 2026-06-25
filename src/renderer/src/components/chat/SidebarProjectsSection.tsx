@@ -17,11 +17,14 @@ import {
   PinOff,
   Plus,
   RotateCcw,
+  ScrollText,
   Search,
   Trash2,
   X
 } from 'lucide-react'
 import type { NormalizedThread } from '../../agent/types'
+import { rendererRuntimeClient } from '../../agent/runtime-client'
+import { useChatStore } from '../../store/chat-store'
 import { formatRelativeTime } from '../../lib/format-relative-time'
 import { workspaceLabelFromPath } from '../../lib/workspace-label'
 import { deleteSddDraft } from '../../sdd/sdd-draft-actions'
@@ -583,6 +586,34 @@ export function SidebarProjectsSection({
     })
   }
 
+  const handleSummarizeThread = async (thread: NormalizedThread): Promise<void> => {
+    const threadId = thread.id.trim()
+    if (!threadId || deletingThreadIds[threadId]) return
+    setDeletingThreadIds((prev) => ({ ...prev, [threadId]: true }))
+    try {
+      const res = await rendererRuntimeClient.runtimeRequest(
+        `/v1/threads/${encodeURIComponent(threadId)}/summarize`,
+        'POST',
+        '{}'
+      )
+      if (!res.ok) {
+        useChatStore.getState().setError(t('summarizeFailed'))
+        return
+      }
+      // The summary now lives on the thread; refresh the list so the new
+      // subtitle/hover text is picked up from the thread-list projection.
+      await useChatStore.getState().refreshThreads()
+    } catch {
+      useChatStore.getState().setError(t('summarizeFailed'))
+    } finally {
+      setDeletingThreadIds((prev) => {
+        const next = { ...prev }
+        delete next[threadId]
+        return next
+      })
+    }
+  }
+
   const handleRestoreThread = async (thread: NormalizedThread): Promise<void> => {
     const threadId = thread.id.trim()
     if (!threadId || deletingThreadIds[threadId]) return
@@ -993,6 +1024,7 @@ export function SidebarProjectsSection({
           onClose={() => setThreadContextMenu(null)}
           onPin={() => void handlePinThread(threadContextMenu.thread, threadContextMenu.thread.pinned !== true)}
           onRename={() => openRenameThreadDialog(threadContextMenu.thread)}
+          onSummarize={() => void handleSummarizeThread(threadContextMenu.thread)}
           onArchive={() => void handleArchiveThread(threadContextMenu.thread)}
           onDelete={() => void handleDeleteThread(threadContextMenu.thread)}
           onRestore={() => void handleRestoreThread(threadContextMenu.thread)}
@@ -1283,7 +1315,7 @@ export function ThreadRow({
       buttonClassName="items-center gap-2 px-2.5 py-1.5"
       disabled={deleting}
       ariaLabel={ariaLabel}
-      title={[thread.title, worktreeLabel].filter(Boolean).join('\n')}
+      title={[thread.title, thread.summary?.trim(), worktreeLabel].filter(Boolean).join('\n')}
       onClick={onSelect}
       onContextMenu={onContextMenu}
       onMouseEnter={(event) => onPreviewOpen(event, worktreeRecord)}
@@ -1412,6 +1444,7 @@ function ThreadContextMenu({
   onClose,
   onPin,
   onRename,
+  onSummarize,
   onArchive,
   onDelete,
   onRestore,
@@ -1422,6 +1455,7 @@ function ThreadContextMenu({
   onClose: () => void
   onPin: () => void
   onRename: () => void
+  onSummarize: () => void
   onArchive: () => void
   onDelete: () => void
   onRestore: () => void
@@ -1454,6 +1488,12 @@ function ThreadContextMenu({
         label={t('sidebarThreadRename')}
         disabled={busy}
         onClick={() => run(onRename)}
+      />
+      <ThreadContextMenuItem
+        icon={<ScrollText className="h-3.5 w-3.5" strokeWidth={1.9} />}
+        label={t('summarizeSession')}
+        disabled={busy}
+        onClick={() => run(onSummarize)}
       />
       <ThreadContextMenuItem
         icon={
@@ -1545,6 +1585,7 @@ function ThreadPreviewCard({
   )
   const updatedLabel = formatRelativeTime(state.thread.updatedAt, locale)
   const preview = state.thread.preview?.trim()
+  const summary = state.thread.summary?.trim()
 
   return (
     <div
@@ -1573,6 +1614,11 @@ function ThreadPreviewCard({
           <div className="mt-1.5 text-[12px] text-ds-faint">
             {t('sidebarThreadPreviewUpdated', { time: updatedLabel })}
           </div>
+          {summary ? (
+            <p className="mt-2 line-clamp-4 text-[12.5px] leading-5 text-ds-ink/90">
+              {summary}
+            </p>
+          ) : null}
           {preview ? (
             <p className="mt-2 line-clamp-3 text-[12.5px] leading-5 text-ds-muted">
               {preview}

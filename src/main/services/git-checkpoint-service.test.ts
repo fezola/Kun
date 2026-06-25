@@ -1,9 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, normalize } from 'node:path'
-import { createGitCheckpoint, restoreGitCheckpoint, testResolvePathWithinRepository } from './git-checkpoint-service'
+import {
+  cleanupUnusedGitCheckpoints,
+  cleanupUnusedGitCheckpointsIfDue,
+  createGitCheckpoint,
+  restoreGitCheckpoint,
+  testResolvePathWithinRepository
+} from './git-checkpoint-service'
 
 let sandbox = ''
 let repoRoot = ''
@@ -334,5 +340,80 @@ describe('git checkpoint service', () => {
     // post-checkpoint untracked file (git clean -fd).
     expect(await readFile(join(repoRoot, 'tracked.txt'), 'utf-8')).toBe('base\n')
     await expect(stat(join(repoRoot, 'new-after.txt'))).rejects.toThrow()
+  })
+
+  it('deletes checkpoint directories that are not referenced by thread data', async () => {
+    const used = 'gcp_used'
+    const unused = 'gcp_unused'
+    await mkdir(join(dataDir, 'git-checkpoints', used), { recursive: true })
+    await mkdir(join(dataDir, 'git-checkpoints', unused), { recursive: true })
+    await mkdir(join(dataDir, 'threads', 'thr_1'), { recursive: true })
+    await writeFile(
+      join(dataDir, 'threads', 'thr_1', 'items.jsonl'),
+      `${JSON.stringify({ id: 'item_1', workspaceCheckpointId: used })}\n`,
+      'utf-8'
+    )
+
+    const result = await cleanupUnusedGitCheckpoints({ dataDir, graceMs: 0 })
+
+    expect(result.scanned).toBe(2)
+    expect(result.kept).toBe(1)
+    expect(result.deleted).toBe(1)
+    expect(result.deletedIds).toEqual([unused])
+    await expect(stat(join(dataDir, 'git-checkpoints', used))).resolves.toBeTruthy()
+    await expect(stat(join(dataDir, 'git-checkpoints', unused))).rejects.toThrow()
+  })
+
+  it('keeps recently created checkpoints (create-vs-flush grace) and deletes old ones', async () => {
+    const fresh = 'gcp_fresh'
+    const stale = 'gcp_stale'
+    await mkdir(join(dataDir, 'git-checkpoints', fresh), { recursive: true })
+    await mkdir(join(dataDir, 'git-checkpoints', stale), { recursive: true })
+    // Backdate the stale checkpoint beyond the grace window; the fresh one keeps
+    // its just-now mtime and must not be deleted (its referencing item may not
+    // be flushed yet).
+    const old = new Date('2020-01-01T00:00:00.000Z')
+    await utimes(join(dataDir, 'git-checkpoints', stale), old, old)
+
+    const result = await cleanupUnusedGitCheckpoints({ dataDir, graceMs: 10 * 60 * 1000 })
+
+    expect(result.deletedIds).toEqual([stale])
+    expect(result.kept).toBe(1)
+    await expect(stat(join(dataDir, 'git-checkpoints', fresh))).resolves.toBeTruthy()
+    await expect(stat(join(dataDir, 'git-checkpoints', stale))).rejects.toThrow()
+  })
+
+  it('records cleanup state and skips runs before the configured interval elapses', async () => {
+    await mkdir(join(dataDir, 'git-checkpoints', 'gcp_first'), { recursive: true })
+
+    const first = await cleanupUnusedGitCheckpointsIfDue({
+      dataDir,
+      intervalDays: 3,
+      graceMs: 0,
+      now: new Date('2026-01-01T00:00:00.000Z')
+    })
+    expect(first.due).toBe(true)
+    if (!first.due) throw new Error('expected cleanup to run')
+    expect(first.result.deletedIds).toEqual(['gcp_first'])
+
+    await mkdir(join(dataDir, 'git-checkpoints', 'gcp_second'), { recursive: true })
+    const skipped = await cleanupUnusedGitCheckpointsIfDue({
+      dataDir,
+      intervalDays: 3,
+      graceMs: 0,
+      now: new Date('2026-01-03T23:59:59.000Z')
+    })
+    expect(skipped.due).toBe(false)
+    await expect(stat(join(dataDir, 'git-checkpoints', 'gcp_second'))).resolves.toBeTruthy()
+
+    const second = await cleanupUnusedGitCheckpointsIfDue({
+      dataDir,
+      intervalDays: 3,
+      graceMs: 0,
+      now: new Date('2026-01-04T00:00:00.000Z')
+    })
+    expect(second.due).toBe(true)
+    if (!second.due) throw new Error('expected cleanup to run after interval')
+    expect(second.result.deletedIds).toEqual(['gcp_second'])
   })
 })

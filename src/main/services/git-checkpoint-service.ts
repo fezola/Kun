@@ -1,5 +1,6 @@
-import { cp, mkdir, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
-import { dirname, basename, isAbsolute, join, normalize, resolve, sep } from 'node:path'
+import { cp, mkdir, readFile, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises'
+import type { Dirent } from 'node:fs'
+import { dirname, basename, extname, isAbsolute, join, normalize, resolve, sep } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { runGit, resolveGitCwd } from './git-service'
 import type {
@@ -17,6 +18,27 @@ type GitCheckpointMetadata = {
   createdAt: string
   untrackedFiles: string[]
 }
+
+export type GitCheckpointCleanupResult = {
+  scanned: number
+  kept: number
+  deleted: number
+  failed: number
+  deletedIds: string[]
+  failedIds: string[]
+}
+
+export type GitCheckpointCleanupDueResult =
+  | { due: false, lastRunAt: string | null }
+  | { due: true, lastRunAt: string, result: GitCheckpointCleanupResult }
+
+type GitCheckpointCleanupState = {
+  lastRunAt?: string
+}
+
+const DAY_MS = 24 * 60 * 60 * 1_000
+const CHECKPOINT_CLEANUP_STATE_FILE = '.cleanup.json'
+const CHECKPOINT_REFERENCE_FILE_EXTENSIONS = new Set(['.json', '.jsonl'])
 
 function checkpointFailure(error: unknown): Extract<GitCheckpointCreateResult, { ok: false }> {
   const message = error instanceof Error ? error.message : String(error)
@@ -36,6 +58,14 @@ function restoreFailure(error: unknown): Extract<GitCheckpointRestoreResult, { o
 
 function checkpointDir(dataDir: string, checkpointId: string): string {
   return join(resolve(dataDir), 'git-checkpoints', checkpointId)
+}
+
+function checkpointRootDir(dataDir: string): string {
+  return join(resolve(dataDir), 'git-checkpoints')
+}
+
+function checkpointCleanupStatePath(dataDir: string): string {
+  return join(checkpointRootDir(dataDir), CHECKPOINT_CLEANUP_STATE_FILE)
 }
 
 function checkpointHeadBundlePath(dataDir: string, checkpointId: string): string {
@@ -248,6 +278,164 @@ function isValidWithinBase(relativePath: string, baseReal: string): boolean {
   }
   const targetNormalized = normalize(join(baseReal, relativePath))
   return targetNormalized === baseReal || targetNormalized.startsWith(baseReal + sep)
+}
+
+function extractWorkspaceCheckpointIds(text: string): Set<string> {
+  const ids = new Set<string>()
+  const pattern = /"workspaceCheckpointId"\s*:\s*"([^"]+)"/g
+  let match: RegExpExecArray | null = null
+  while ((match = pattern.exec(text)) !== null) {
+    const id = match[1]?.trim()
+    if (id) ids.add(id)
+  }
+  return ids
+}
+
+async function collectReferencedCheckpointIds(dataDir: string): Promise<Set<string>> {
+  const referenced = new Set<string>()
+  const roots = [join(resolve(dataDir), 'threads')]
+  const visit = async (dir: string): Promise<void> => {
+    let entries: Dirent<string>[]
+    try {
+      entries = await readdir(dir, { withFileTypes: true })
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (code === 'ENOENT' || code === 'ENOTDIR') return
+      throw error
+    }
+
+    for (const entry of entries) {
+      const path = join(dir, entry.name)
+      if (entry.isDirectory()) {
+        await visit(path)
+        continue
+      }
+      if (!entry.isFile() || !CHECKPOINT_REFERENCE_FILE_EXTENSIONS.has(extname(entry.name))) continue
+      let text = ''
+      try {
+        text = await readFile(path, 'utf-8')
+      } catch {
+        continue
+      }
+      for (const id of extractWorkspaceCheckpointIds(text)) {
+        referenced.add(id)
+      }
+    }
+  }
+
+  for (const root of roots) {
+    await visit(root)
+  }
+  return referenced
+}
+
+async function readCleanupState(dataDir: string): Promise<GitCheckpointCleanupState> {
+  try {
+    const raw = await readFile(checkpointCleanupStatePath(dataDir), 'utf-8')
+    const parsed = JSON.parse(raw) as GitCheckpointCleanupState
+    return typeof parsed === 'object' && parsed !== null ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+async function writeCleanupState(dataDir: string, state: GitCheckpointCleanupState): Promise<void> {
+  const root = checkpointRootDir(dataDir)
+  await mkdir(root, { recursive: true })
+  await writeFile(checkpointCleanupStatePath(dataDir), JSON.stringify(state, null, 2), 'utf-8')
+}
+
+function isCheckpointCleanupDue(lastRunAt: string | undefined, intervalDays: number, now: Date): boolean {
+  if (!lastRunAt) return true
+  const lastRunMs = Date.parse(lastRunAt)
+  if (!Number.isFinite(lastRunMs)) return true
+  return now.getTime() - lastRunMs >= intervalDays * DAY_MS
+}
+
+// A checkpoint directory is created before its referencing thread item is
+// flushed to disk, so a freshly-created checkpoint can momentarily look
+// unreferenced. Skip directories modified within this window so a cleanup pass
+// landing in that gap can't delete a checkpoint a concurrent turn just created;
+// a genuinely orphaned one is removed on a later pass. Injectable so tests can
+// disable it with graceMs: 0.
+const CHECKPOINT_CLEANUP_GRACE_MS = 10 * 60 * 1_000
+
+export async function cleanupUnusedGitCheckpoints(params: {
+  dataDir: string
+  graceMs?: number
+  now?: Date
+}): Promise<GitCheckpointCleanupResult> {
+  const graceMs = params.graceMs ?? CHECKPOINT_CLEANUP_GRACE_MS
+  const nowMs = (params.now ?? new Date()).getTime()
+  const root = checkpointRootDir(params.dataDir)
+  const referenced = await collectReferencedCheckpointIds(params.dataDir)
+  const result: GitCheckpointCleanupResult = {
+    scanned: 0,
+    kept: 0,
+    deleted: 0,
+    failed: 0,
+    deletedIds: [],
+    failedIds: []
+  }
+
+  let entries: Dirent<string>[]
+  try {
+    entries = await readdir(root, { withFileTypes: true })
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ENOENT' || code === 'ENOTDIR') return result
+    throw error
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    const checkpointId = entry.name
+    result.scanned += 1
+    if (referenced.has(checkpointId)) {
+      result.kept += 1
+      continue
+    }
+    if (graceMs > 0) {
+      try {
+        const dirStat = await stat(join(root, checkpointId))
+        if (nowMs - dirStat.mtimeMs < graceMs) {
+          // Recently touched — may be referenced by an item not yet flushed.
+          result.kept += 1
+          continue
+        }
+      } catch {
+        // Cannot stat (e.g. removed concurrently); fall through to the delete.
+      }
+    }
+    try {
+      await rm(join(root, checkpointId), { recursive: true, force: true })
+      result.deleted += 1
+      result.deletedIds.push(checkpointId)
+    } catch {
+      result.failed += 1
+      result.failedIds.push(checkpointId)
+    }
+  }
+
+  return result
+}
+
+export async function cleanupUnusedGitCheckpointsIfDue(params: {
+  dataDir: string
+  intervalDays: number
+  now?: Date
+  graceMs?: number
+}): Promise<GitCheckpointCleanupDueResult> {
+  const now = params.now ?? new Date()
+  const state = await readCleanupState(params.dataDir)
+  const lastRunAt = typeof state.lastRunAt === 'string' ? state.lastRunAt : undefined
+  if (!isCheckpointCleanupDue(lastRunAt, params.intervalDays, now)) {
+    return { due: false, lastRunAt: lastRunAt ?? null }
+  }
+  const result = await cleanupUnusedGitCheckpoints({ dataDir: params.dataDir, now, graceMs: params.graceMs })
+  const nextLastRunAt = now.toISOString()
+  await writeCleanupState(params.dataDir, { lastRunAt: nextLastRunAt })
+  return { due: true, lastRunAt: nextLastRunAt, result }
 }
 
 export async function createGitCheckpoint(params: {
