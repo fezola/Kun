@@ -12,6 +12,8 @@ const api = {
   platform: process.platform,
   homeDir: homeDirFromArgs,
   getSettings: () => ipcRenderer.invoke('settings:get'),
+  claudeSubscriptionStatus: () => ipcRenderer.invoke('claude-subscription:status'),
+  claudeSubscriptionLogin: () => ipcRenderer.invoke('claude-subscription:login'),
   setSettings: (partial) =>
     ipcRenderer.invoke('settings:set', partial),
   saveSettingsSilent: (partial) =>

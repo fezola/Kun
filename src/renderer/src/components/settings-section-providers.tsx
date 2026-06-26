@@ -65,6 +65,7 @@ import {
 } from './settings-controls'
 import { classifyProviderModelIds, providerModelListEntries } from './provider-model-editor'
 import { ProviderModelsManager } from './settings-section-provider-models'
+import { ClaudeSubscriptionSection } from './claude-subscription-section'
 import {
   ProviderModelImportDialog,
   type ProviderModelImportResult
@@ -139,6 +140,10 @@ function tokenPlanPresetForProfileId(id: string): ModelProviderPreset | null {
 
 // 「套餐订阅」组 = Token Plan 套餐档(<id>-token-plan)或本身就是订阅制的预设(category==='subscription');
 // 其余(默认 / 按量预设 / 自定义)归入「按量 API」组,便于一眼分辨两类计费方式。
+function isAgentSdkProvider(provider: ModelProviderProfileV1): boolean {
+  return provider.kind === 'agent-sdk'
+}
+
 function isSubscriptionProviderId(id: string): boolean {
   if (tokenPlanPresetForProfileId(id)) return true
   return getModelProviderPreset(id)?.category === 'subscription'
@@ -1243,6 +1248,14 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                   </div>
                 </DetailSection>
                 <DetailSection title={t('modelProviderSectionConnection')}>
+                  {isAgentSdkProvider(activeProvider) ? (
+                    <ClaudeSubscriptionSection
+                      provider={activeProvider}
+                      onTokenChange={(token) => updateModelProvider(activeProvider.id, { apiKey: token })}
+                      t={t}
+                    />
+                  ) : (
+                    <>
                   <label className={fieldLabelClass}>
                     {t('modelProviderApiKey')}
                     <SecretInput
@@ -1330,6 +1343,8 @@ export function ProvidersSettingsSection({ ctx }: { ctx: Record<string, any> }):
                       {t('modelEndpointCustomEndpointDesc')}
                     </p>
                   ) : null}
+                    </>
+                  )}
                 </DetailSection>
                 <DetailSection
                   title={`${t('modelProviderModels')} · ${providerModelCount(activeProvider)}`}

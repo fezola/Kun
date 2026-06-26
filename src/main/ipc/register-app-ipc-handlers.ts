@@ -98,6 +98,7 @@ import {
 } from './app-ipc-schemas'
 import { DEFAULT_KUN_DATA_DIR, resolveKunRuntimeSettings } from '../../shared/app-settings'
 import { detectLegacySessions, importLegacySessions } from '../services/legacy-session-import-service'
+import { claudeSubscriptionStatus, runClaudeSetupToken } from '../claude-subscription-auth'
 import type { JsonSettingsStore } from '../settings-store'
 import { probeModelProvider } from '../provider-connection'
 import type { ClawRuntime } from '../claw-runtime'
@@ -486,6 +487,10 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   }
 
   ipcMain.handle('settings:get', async () => store.load())
+  // Claude Pro/Max subscription login (compliant path: official CLI does the
+  // OAuth; we only detect it / capture the setup-token).
+  ipcMain.handle('claude-subscription:status', async () => claudeSubscriptionStatus())
+  ipcMain.handle('claude-subscription:login', async () => runClaudeSetupToken())
   ipcMain.handle('settings:set', async (_, partial: unknown) =>
     applySettingsPatch(
       parseIpcPayload('settings:set', settingsPatchSchema, partial) as AppSettingsPatch

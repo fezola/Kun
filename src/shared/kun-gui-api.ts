@@ -285,10 +285,22 @@ export type ComputerUsePermissions = {
   accessibilityNeedsRestart: boolean
 }
 
+export type ClaudeSubscriptionStatus = {
+  /** A Claude Code credentials file is present (positive signal; macOS Keychain absence is only a hint). */
+  loggedIn: boolean
+}
+export type ClaudeSubscriptionLoginResult =
+  | { ok: true; token: string }
+  | { ok: false; message: string }
+
 export type KunGuiApi = {
   platform: string
   homeDir: string
   getSettings: () => Promise<AppSettingsV1>
+  /** Detect an existing local Claude Code login (subscription auth). */
+  claudeSubscriptionStatus: () => Promise<ClaudeSubscriptionStatus>
+  /** Run `claude setup-token` (opens browser) and capture the OAuth token. */
+  claudeSubscriptionLogin: () => Promise<ClaudeSubscriptionLoginResult>
   setSettings: (partial: AppSettingsPatch) => Promise<AppSettingsV1>
   saveSettingsSilent: (partial: AppSettingsPatch) => Promise<AppSettingsV1>
   runtimeRequest: (path: string, method?: string, body?: string) => Promise<RuntimeRequestResult>
