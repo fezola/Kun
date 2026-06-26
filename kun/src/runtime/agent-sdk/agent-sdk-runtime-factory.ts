@@ -29,6 +29,10 @@ export interface AgentSdkRuntimeFactoryDeps {
   /** Provider ids whose kind is 'agent-sdk' (this runtime owns them). */
   agentSdkProviderIds: ReadonlySet<string>
   defaultApprovalPolicy: ApprovalPolicy
+  /** True when the runtime's own default provider is agent-sdk (Claude sub as main model). */
+  defaultIsAgentSdk?: boolean
+  /** Token for the default provider (used when a turn doesn't target a specific provider). */
+  defaultToken?: string
   pathToClaudeCodeExecutable?: string
 }
 
@@ -59,7 +63,13 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
   })
 
   const runtimeDeps: SdkRuntimeDeps = {
-    handlesProvider: (providerId) => !!providerId && deps.agentSdkProviderIds.has(providerId),
+    handlesProvider: (providerId) => {
+      if (providerId && deps.agentSdkProviderIds.has(providerId)) return true
+      if (!deps.defaultIsAgentSdk) return false
+      // The runtime default is agent-sdk: claim turns that don't target a
+      // specific HTTP provider (absent providerId, or one with no http config).
+      return !providerId || !deps.providerConfigs[providerId]
+    },
 
     async loadTurnContext(threadId, turnId): Promise<SdkTurnContext | null> {
       const thread = await deps.threadStore.get(threadId)
@@ -73,7 +83,7 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       if (!userText.trim()) return null
 
       const providerCfg = thread.providerId ? deps.providerConfigs[thread.providerId] : undefined
-      const token = providerCfg?.apiKey?.trim()
+      const token = providerCfg?.apiKey?.trim() || deps.defaultToken?.trim()
       const ctx = toolContext(threadId, turnId, thread.workspace)
       const bridgeableTools: BridgeableTool[] = deps.registry.listTools(ctx).map((spec) => ({
         name: spec.name,

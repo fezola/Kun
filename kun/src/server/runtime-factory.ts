@@ -439,20 +439,27 @@ export async function createKunServeRuntime(
   })
   // Subscription engine: only constructed when at least one provider is the
   // 'agent-sdk' kind. Owns the delegated turn for those providers' threads.
-  const sdkRuntime = agentSdkProviderIds.size
-    ? createAgentSdkRuntime({
-        registry,
-        turns: turnService,
-        sessionStore,
-        threadStore,
-        events,
-        ids,
-        prefix,
-        providerConfigs: options.providers ?? {},
-        agentSdkProviderIds,
-        defaultApprovalPolicy: options.approvalPolicy
-      })
-    : undefined
+  // The runtime's own default provider can itself be agent-sdk (the Claude
+  // subscription set as the main model). kun-process signals that via env so we
+  // route default-provider turns to the SDK too, not just per-provider ones.
+  const defaultIsAgentSdk = process.env.KUN_RUNTIME_PROVIDER_KIND === 'agent-sdk'
+  const sdkRuntime =
+    agentSdkProviderIds.size > 0 || defaultIsAgentSdk
+      ? createAgentSdkRuntime({
+          registry,
+          turns: turnService,
+          sessionStore,
+          threadStore,
+          events,
+          ids,
+          prefix,
+          providerConfigs: options.providers ?? {},
+          agentSdkProviderIds,
+          defaultApprovalPolicy: options.approvalPolicy,
+          defaultIsAgentSdk,
+          defaultToken: options.apiKey
+        })
+      : undefined
   const loop = new AgentLoop({
     threadStore,
     sessionStore,
