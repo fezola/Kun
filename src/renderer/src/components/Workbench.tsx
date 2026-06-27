@@ -2926,6 +2926,7 @@ export function Workbench(): ReactElement {
         artifactTitle: artifact.title,
         artifactRelativePath: artifact.relativePath,
         designSystemRelativePath,
+        ...(artifact.designMdPath ? { designNotesRelativePath: artifact.designMdPath } : {}),
         stackHint: designState.implementStackHint || undefined,
         referenceDesignSystem: designState.injectIntoCode,
         workspaceRoot: designWorkspaceRoot,
@@ -3417,9 +3418,11 @@ export function Workbench(): ReactElement {
               onOpenAgentSettings={() => openSettings('design')}
               onImplementDesign={implementDesignInCode}
               onUseElementAsContext={useDesignHtmlElementAsContext}
-              onScreenCreated={(shapeId, userPrompt) => {
+              onScreenCreated={(shapeId, userPrompt, brief) => {
                 useCanvasSelectionStore.getState().select([shapeId])
-                setTimeout(() => sendDesignPrompt(userPrompt || 'Design this screen'), 300)
+                // Prefer the agent's expanded screen brief over the raw user prompt.
+                const screenPrompt = brief?.trim() || userPrompt || 'Design this screen'
+                setTimeout(() => sendDesignPrompt(screenPrompt), 300)
               }}
             />
             {designImplementOpen ? (

@@ -15,7 +15,7 @@ type CanvasProps = {
   onToggleLeftSidebar: () => void
   onOpenAgentSettings?: () => void
   onImplementDesign?: (artifact: DesignArtifact) => void
-  onScreenCreated?: (shapeId: string, userPrompt: string) => void
+  onScreenCreated?: (shapeId: string, userPrompt: string, brief?: string) => void
   onUseElementAsContext?: (context: DesignHtmlElementContext | null, promptSeed?: string) => void
 }
 

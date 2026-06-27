@@ -4,6 +4,7 @@ import { collectAssistantTextForTurn } from '../../store/chat-store-runtime-help
 import { applyCanvasOpsSince } from './apply-shape-ops'
 import { useCanvasSelectionStore } from './canvas-selection-store'
 import { useCanvasShapeStore } from './canvas-shape-store'
+import { takeScreenBrief } from './screen-artifact-bridge'
 import { isHtmlFrame } from './canvas-types'
 import { useDesignAssistantStore } from '../design-assistant-store'
 
@@ -29,7 +30,7 @@ const STREAM_THROTTLE_MS = 120
  */
 export function useApplyShapeOpsLive(
   enabled: boolean,
-  onScreenCreated?: (shapeId: string, userPrompt: string) => void
+  onScreenCreated?: (shapeId: string, userPrompt: string, brief?: string) => void
 ): void {
   const onScreenCreatedRef = useRef(onScreenCreated)
   onScreenCreatedRef.current = onScreenCreated
@@ -140,7 +141,7 @@ export function useApplyShapeOpsLive(
           for (const id of all) {
             const shape = doc.objects[id]
             if (shape && isHtmlFrame(shape)) {
-              onScreenCreatedRef.current(id, userPrompt)
+              onScreenCreatedRef.current(id, userPrompt, takeScreenBrief(id) ?? undefined)
               break
             }
           }

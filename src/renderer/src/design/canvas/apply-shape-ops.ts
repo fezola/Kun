@@ -80,7 +80,7 @@ function normalizeDesignCanvasToolCall(value: unknown): unknown[] {
           name: typeof value.name === 'string' && value.name.trim() ? value.name.trim() : 'Screen'
         },
         value,
-        ['x', 'y', 'width', 'height', 'devicePreset']
+        ['brief', 'x', 'y', 'width', 'height', 'devicePreset']
       )
     ]
   }

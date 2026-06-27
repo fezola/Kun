@@ -11,3 +11,23 @@ export function setScreenArtifactFactory(fn: ScreenArtifactFactory): void {
 export function getScreenArtifactFactory(): ScreenArtifactFactory | null {
   return _factory
 }
+
+/**
+ * One-shot store for the `brief` the agent attached to an `add_screen` call,
+ * keyed by the created frame's shape id. The add-screen executor stashes it; the
+ * turn-complete hook takes it (read + clear) and forwards it to the follow-up
+ * HTML-generation turn so that turn designs from the agent's own expanded brief
+ * instead of the raw, often-terse user prompt.
+ */
+const _screenBriefs = new Map<string, string>()
+
+export function setScreenBrief(shapeId: string, brief: string): void {
+  const trimmed = brief.trim()
+  if (trimmed) _screenBriefs.set(shapeId, trimmed)
+}
+
+export function takeScreenBrief(shapeId: string): string | null {
+  const brief = _screenBriefs.get(shapeId) ?? null
+  if (brief !== null) _screenBriefs.delete(shapeId)
+  return brief
+}

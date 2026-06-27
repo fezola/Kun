@@ -18,7 +18,7 @@ import {
   type DistributeAxis
 } from './canvas-align'
 
-import { getScreenArtifactFactory } from './screen-artifact-bridge'
+import { getScreenArtifactFactory, setScreenBrief } from './screen-artifact-bridge'
 
 const ShapeTypeSchema = z.enum([
   'rect',
@@ -141,6 +141,7 @@ export const ShapeOpSchema = z.discriminatedUnion('op', [
   z.object({
     op: z.literal('add-screen'),
     name: z.string(),
+    brief: z.string().optional(),
     x: z.number().optional(),
     y: z.number().optional(),
     width: z.number().positive().optional(),
@@ -446,6 +447,9 @@ function executeOne(op: ShapeOp, affectedIds: Set<string>, errors: OpError[]): v
       if (op.width) shape.width = op.width
       if (op.height) shape.height = op.height
       store.addShape(shape)
+      // Keep the agent's expanded brief so the follow-up HTML-generation turn
+      // designs from it instead of the raw user prompt (see the turn-complete hook).
+      if (op.brief) setScreenBrief(shape.id, op.brief)
       affectedIds.add(shape.id)
       break
     }

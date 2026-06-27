@@ -10,7 +10,7 @@ import { useCanvasShapeStore } from './canvas-shape-store'
 import { useCanvasUndoStore } from './canvas-undo-store'
 import { useCanvasSelectionStore } from './canvas-selection-store'
 import { createEmptyDocument } from './canvas-types'
-import { setScreenArtifactFactory } from './screen-artifact-bridge'
+import { setScreenArtifactFactory, takeScreenBrief } from './screen-artifact-bridge'
 
 beforeEach(() => {
   useCanvasShapeStore.getState().loadDocument(createEmptyDocument())
@@ -69,6 +69,13 @@ describe('extractDesignCanvasToolBlocks', () => {
       }
     ]])
   })
+
+  it('carries the agent brief through add_screen', () => {
+    const blocks = extractDesignCanvasToolBlocks(
+      '```design_canvas\n{ "action": "add_screen", "name": "Login", "brief": "Clean login with email + SSO" }\n```'
+    )
+    expect(blocks[0][0]).toMatchObject({ op: 'add-screen', name: 'Login', brief: 'Clean login with email + SSO' })
+  })
 })
 
 describe('applyShapeOpsFromText', () => {
@@ -113,6 +120,17 @@ describe('applyShapeOpsFromText', () => {
     expect(shape?.htmlArtifactId).toBe('artifact-login')
     expect(shape?.width).toBe(390)
     expect(shape?.height).toBe(844)
+  })
+
+  it('stashes an add_screen brief under the created frame id (one-shot)', () => {
+    setScreenArtifactFactory((name) => `artifact-${name.toLowerCase()}`)
+    const result = applyShapeOpsFromText(
+      '```design_canvas\n{ "action": "add_screen", "name": "Login", "brief": "Clean login with email + SSO" }\n```'
+    )
+    const shapeId = result.affectedIds[0]
+    expect(takeScreenBrief(shapeId)).toBe('Clean login with email + SSO')
+    // one-shot: a second take returns null so a stale brief can't leak into a later screen
+    expect(takeScreenBrief(shapeId)).toBeNull()
   })
 })
 
