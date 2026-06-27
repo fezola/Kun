@@ -94,6 +94,7 @@ import {
 import type { DesignHtmlElementContext } from '../design/design-composer-context'
 import type { ScreenTurnOptions, ScreenManifestEntry } from '../design/design-turn-prompt'
 import { takeLastCanvasOpErrors } from '../design/canvas/apply-shape-ops'
+import { useDesignTokensStore } from '../design/design-tokens-store'
 import { SddAssistantPanel } from './sdd/SddAssistantPanel'
 import { SddDraftEditorView } from './sdd/SddDraftEditorView'
 import { SidebarTitlebarToggleButton } from './sidebar/SidebarPrimitives'
@@ -1924,6 +1925,19 @@ export function Workbench(): ReactElement {
         targets: visibleTargets,
         canvasArtifact: boardArtifact
       })
+      // Reuse the real palette/type scale: the iterated page's own tokens, else
+      // the project's anchor (first sibling that's been extracted) so new pages
+      // stay cohesive instead of re-inventing a palette.
+      const tokensByArtifact = useDesignTokensStore.getState().byArtifact
+      let derivedTokens = basePath ? tokensByArtifact[basePath] : undefined
+      if (!derivedTokens && (target === 'html' || target === 'screen')) {
+        for (const sibling of htmlSiblingManifest) {
+          if (tokensByArtifact[sibling.htmlPath]) {
+            derivedTokens = tokensByArtifact[sibling.htmlPath]
+            break
+          }
+        }
+      }
       const prompt = buildDesignTurnPrompt({
         target,
         mode: attachmentIds.length > 0 ? 'image' : 'text',
@@ -1938,6 +1952,7 @@ export function Workbench(): ReactElement {
         ...(contextLocations.length > 0 ? { contextLocations } : {}),
         ...(canvasSnapshot ? { canvasSnapshot } : {}),
         ...(target === 'canvas' ? { previousOpErrors: takeLastCanvasOpErrors() } : {}),
+        ...(derivedTokens ? { derivedTokens } : {}),
         ...(htmlSiblingManifest.length > 0 ? { screenManifest: htmlSiblingManifest } : {}),
         ...(target === 'screen' && selectedFrame ? {
           screenName: selectedFrame.name,

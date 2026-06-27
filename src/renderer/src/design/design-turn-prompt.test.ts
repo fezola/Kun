@@ -129,6 +129,28 @@ describe('design turn prompt', () => {
     expect(prompt).toContain('Hero [image] → `.deepseekgui-images/hero.png` (directory: `.deepseekgui-images`)')
   })
 
+  it('injects extracted design tokens (palette + type scale) into HTML turns for cohesion', () => {
+    const prompt = buildDesignTurnPrompt({
+      target: 'html',
+      mode: 'text',
+      text: 'a pricing page',
+      artifactRelativePath: '.kun-design/doc/p/v1.html',
+      workspaceRoot: '/ws',
+      derivedTokens: {
+        extracted: { colors: [], fonts: [], radii: [], spacing: [], typeScale: [], sampledColors: [], title: '' },
+        palette: { primary: { base: '#3b82d8', ramp: [] }, neutral: { base: '#6b7280', ramp: [] } },
+        typeRows: [
+          { label: 'H1', sample: '', fontSize: '28px', fontWeight: '700', lineHeight: '1.2', fontFamily: 'Inter, sans-serif', px: 28 },
+          { label: 'Body', sample: '', fontSize: '16px', fontWeight: '400', lineHeight: '1.6', fontFamily: 'Inter, sans-serif', px: 16 }
+        ]
+      }
+    })
+    expect(prompt).toContain('Existing design tokens to REUSE')
+    expect(prompt).toContain('accent #3b82d8')
+    expect(prompt).toContain('H1 28/700')
+    expect(prompt).toContain('font Inter')
+  })
+
   it('canvas turn prompt instructs reference_image_paths when a selected image has imageUrl', () => {
     const doc = createEmptyDocument()
     const root = doc.objects[doc.rootId]

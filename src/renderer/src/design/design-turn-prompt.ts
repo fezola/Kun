@@ -3,7 +3,32 @@ import { DESIGN_CRAFT_LINES, formatDesignContextLines, type DesignContext } from
 import type { CanvasSnapshot } from './canvas/canvas-snapshot'
 import { snapshotToCompactJson } from './canvas/canvas-snapshot'
 import type { OpError } from './canvas/shape-ops'
+import type { DerivedTokens } from './design-token-extract'
 import type { DesignContextLocation, DesignHtmlElementContext } from './design-composer-context'
+
+/**
+ * Render the design tokens already extracted from the live design (palette +
+ * type scale) as a concrete reuse contract. Cohesion across pages was relying on
+ * the model reading sibling HTML; handing it the actual `#hex` accent and type
+ * scale to match is far stronger and stops palettes drifting between iterations.
+ */
+export function formatDerivedTokenLines(tokens: DerivedTokens | undefined): string[] {
+  if (!tokens) return []
+  const colorParts: string[] = []
+  if (tokens.palette.primary?.base) colorParts.push(`accent ${tokens.palette.primary.base}`)
+  if (tokens.palette.secondary?.base) colorParts.push(`secondary ${tokens.palette.secondary.base}`)
+  if (tokens.palette.neutral?.base) colorParts.push(`neutral ${tokens.palette.neutral.base}`)
+  const typeParts = tokens.typeRows.slice(0, 4).map((r) => `${r.label} ${Math.round(r.px)}/${r.fontWeight}`)
+  const fontFamily = tokens.typeRows.find((r) => r.fontFamily)?.fontFamily?.split(',')[0]?.trim()
+  if (colorParts.length === 0 && typeParts.length === 0) return []
+  const lines = ['Existing design tokens to REUSE exactly (keep this cohesive with the rest of the product):']
+  if (colorParts.length > 0) lines.push(`- Palette: ${colorParts.join(', ')}`)
+  if (typeParts.length > 0) {
+    lines.push(`- Type scale: ${typeParts.join(', ')}${fontFamily ? ` — font ${fontFamily}` : ''}`)
+  }
+  lines.push('')
+  return lines
+}
 
 export type DesignTurnTarget = 'html' | 'canvas' | 'screen'
 
@@ -45,6 +70,12 @@ export type DesignTurnOptions = {
    * canvas prompt; the apply hook stashes them and the next canvas turn takes them.
    */
   previousOpErrors?: OpError[]
+  /**
+   * Tokens extracted from the page being iterated (or the project's anchor page)
+   * so an HTML/screen turn reuses the real palette/type scale instead of
+   * re-inventing one and drifting from the rest of the product.
+   */
+  derivedTokens?: DerivedTokens
 }
 
 /**
@@ -172,6 +203,7 @@ export function buildDesignTurnPrompt(options: DesignTurnOptions): string {
   if (htmlElementLines.length > 0) {
     lines.push('', ...htmlElementLines)
   }
+  lines.push(...formatDerivedTokenLines(options.derivedTokens))
   lines.push('', ...DESIGN_CRAFT_LINES)
   if (options.mode === 'image') {
     lines.push(
@@ -247,6 +279,7 @@ function buildScreenTurnPrompt(options: ScreenTurnOptions): string {
   if (htmlElementLines.length > 0) {
     lines.push('', ...htmlElementLines)
   }
+  lines.push(...formatDerivedTokenLines(options.derivedTokens))
   lines.push('', ...DESIGN_CRAFT_LINES)
   if (options.mode === 'image') {
     lines.push(
@@ -500,6 +533,7 @@ export type DesignFromCodeOptions = {
   artifactRelativePath: string
   workspaceRoot: string
   designContext?: DesignContext
+  derivedTokens?: DerivedTokens
 }
 
 /**
@@ -523,6 +557,7 @@ export function buildDesignFromCodePrompt(options: DesignFromCodeOptions): strin
   ]
   const contextLines = formatDesignContextLines(options.designContext)
   if (contextLines.length > 0) lines.push('', ...contextLines)
+  lines.push(...formatDerivedTokenLines(options.derivedTokens))
   lines.push('', ...DESIGN_CRAFT_LINES)
   return lines.join('\n')
 }
