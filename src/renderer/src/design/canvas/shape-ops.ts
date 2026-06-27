@@ -68,8 +68,11 @@ const PartialShapeSchema = z
     fontFamily: z.string().optional(),
     fontWeight: z.number().min(100).max(900).optional(),
     fontColor: z.string().optional(),
+    textAlign: z.enum(['left', 'center', 'right']).optional(),
+    lineHeight: z.number().positive().optional(),
     imageUrl: z.string().optional(),
     aiImageHolder: z.boolean().optional(),
+    clipContent: z.boolean().optional(),
     points: z.array(PointSchema).optional(),
     arrowheadStart: ArrowheadSchema.optional(),
     arrowheadEnd: ArrowheadSchema.optional()
@@ -93,8 +96,11 @@ const PatchSchema = z
     fontFamily: z.string().optional(),
     fontWeight: z.number().min(100).max(900).optional(),
     fontColor: z.string().optional(),
+    textAlign: z.enum(['left', 'center', 'right']).optional(),
+    lineHeight: z.number().positive().optional(),
     imageUrl: z.string().optional(),
     aiImageHolder: z.boolean().optional(),
+    clipContent: z.boolean().optional(),
     points: z.array(PointSchema).optional(),
     arrowheadStart: ArrowheadSchema.optional(),
     arrowheadEnd: ArrowheadSchema.optional(),
@@ -140,6 +146,17 @@ export const ShapeOpSchema = z.discriminatedUnion('op', [
     width: z.number().positive().optional(),
     height: z.number().positive().optional(),
     devicePreset: z.enum(['mobile', 'tablet', 'desktop']).optional()
+  }),
+  z.object({
+    op: z.literal('duplicate'),
+    id: z.string(),
+    count: z.number().int().positive().max(20).optional(),
+    offset: z.object({ dx: z.number(), dy: z.number() }).optional()
+  }),
+  z.object({
+    op: z.literal('reorder'),
+    id: z.string(),
+    action: z.enum(['front', 'back', 'forward', 'backward'])
   })
 ])
 
@@ -215,6 +232,17 @@ function executeOne(op: ShapeOp, affectedIds: Set<string>, errors: OpError[]): v
   const store = useCanvasShapeStore.getState()
   switch (op.op) {
     case 'add': {
+      // Validate an explicit parent up front: addShape silently no-ops when the
+      // parent is missing, so without this the op would report phantom success
+      // (a bogus affected id) and the agent would never learn its frame id was wrong.
+      if (op.parentId && !findShape(op.parentId)) {
+        errors.push({
+          code: 'PARENT_NOT_FOUND',
+          message: `Cannot add shape: parent "${op.parentId}" does not exist`,
+          suggestion: suggestionForMissingId(op.parentId)
+        })
+        return
+      }
       const { type } = op.shape
       const x = op.shape.x ?? 0
       const y = op.shape.y ?? 0
@@ -342,6 +370,68 @@ function executeOne(op: ShapeOp, affectedIds: Set<string>, errors: OpError[]): v
         store.updateShape(id, patch)
         affectedIds.add(id)
       }
+      break
+    }
+    case 'duplicate': {
+      if (!findShape(op.id)) {
+        errors.push({
+          code: 'SHAPE_NOT_FOUND',
+          message: `No shape with id "${op.id}"`,
+          suggestion: suggestionForMissingId(op.id)
+        })
+        return
+      }
+      const count = Math.max(1, Math.min(op.count ?? 1, 20))
+      const dx = op.offset?.dx ?? 24
+      const dy = op.offset?.dy ?? 24
+      for (let i = 0; i < count; i += 1) {
+        const newId = store.duplicateShape(op.id)
+        if (!newId) {
+          errors.push({ code: 'INVALID_OP', message: `Cannot duplicate "${op.id}" (root or detached shapes can't be duplicated)` })
+          break
+        }
+        // Stagger each copy so duplicates don't stack exactly on the original.
+        // Children store ABSOLUTE coords, so the whole clone subtree shifts together.
+        if (dx !== 0 || dy !== 0) {
+          const objects = useCanvasShapeStore.getState().document.objects
+          const step = i + 1
+          for (const cloneId of withDescendants(objects, [newId])) {
+            const cs = objects[cloneId]
+            if (cs) store.updateShape(cloneId, { x: cs.x + dx * step, y: cs.y + dy * step })
+          }
+        }
+        affectedIds.add(newId)
+      }
+      break
+    }
+    case 'reorder': {
+      const shape = findShape(op.id)
+      if (!shape) {
+        errors.push({
+          code: 'SHAPE_NOT_FOUND',
+          message: `No shape with id "${op.id}"`,
+          suggestion: suggestionForMissingId(op.id)
+        })
+        return
+      }
+      const parent = shape.parentId ? findShape(shape.parentId) : null
+      const siblings = parent?.children ?? []
+      const current = siblings.indexOf(op.id)
+      if (!parent || current < 0) {
+        errors.push({ code: 'INVALID_OP', message: `Shape "${op.id}" has no parent layer order to change` })
+        return
+      }
+      const last = siblings.length - 1
+      const target =
+        op.action === 'front'
+          ? last
+          : op.action === 'back'
+            ? 0
+            : op.action === 'forward'
+              ? Math.min(last, current + 1)
+              : Math.max(0, current - 1)
+      if (target !== current) store.reorderShape(op.id, target)
+      affectedIds.add(op.id)
       break
     }
     case 'add-screen': {

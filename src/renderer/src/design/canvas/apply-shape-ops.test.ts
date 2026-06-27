@@ -2,6 +2,8 @@ import { describe, expect, it, beforeEach } from 'vitest'
 import {
   extractDesignCanvasToolBlocks,
   extractShapeOpsBlocks,
+  extractCanvasOpBlocks,
+  applyCanvasOpsSince,
   applyShapeOpsFromText
 } from './apply-shape-ops'
 import { useCanvasShapeStore } from './canvas-shape-store'
@@ -111,6 +113,128 @@ describe('applyShapeOpsFromText', () => {
     expect(shape?.htmlArtifactId).toBe('artifact-login')
     expect(shape?.width).toBe(390)
     expect(shape?.height).toBe(844)
+  })
+})
+
+describe('extractCanvasOpBlocks (source-ordered)', () => {
+  it('returns design_canvas and shapeops blocks in source order', () => {
+    const text = [
+      '```design_canvas',
+      '{ "action": "update_shapes", "ops": [{ "op": "delete", "id": "a" }] }',
+      '```',
+      'mid',
+      '```shapeops',
+      '[{ "op": "delete", "id": "b" }]',
+      '```',
+      '```design_canvas',
+      '{ "action": "update_shapes", "ops": [{ "op": "delete", "id": "c" }] }',
+      '```'
+    ].join('\n')
+    expect(extractCanvasOpBlocks(text)).toEqual([
+      [{ op: 'delete', id: 'a' }],
+      [{ op: 'delete', id: 'b' }],
+      [{ op: 'delete', id: 'c' }]
+    ])
+  })
+
+  it('omits an incomplete (unclosed) block until its fence closes', () => {
+    const partial =
+      '```design_canvas\n{ "action": "update_shapes", "ops": [{ "op": "add", "shape": { "type": "rect" } }] }'
+    expect(extractCanvasOpBlocks(partial)).toEqual([])
+  })
+})
+
+describe('applyCanvasOpsSince (streaming application)', () => {
+  // The canvas document always carries a `__root__` container; count real shapes.
+  const nonRootShapeIds = (): string[] =>
+    Object.keys(useCanvasShapeStore.getState().document.objects).filter((id) => id !== '__root__')
+  const addBlock = (type: string): string =>
+    `\`\`\`design_canvas\n{ "action": "update_shapes", "ops": [{ "op": "add", "shape": { "type": "${type}", "width": 10, "height": 10 } }] }\n\`\`\``
+
+  it('applies only blocks at/after the cursor and never re-runs earlier ones', () => {
+    const first = addBlock('rect')
+    const r1 = applyCanvasOpsSince(first, 0)
+    expect(r1.totalBlocks).toBe(1)
+    expect(r1.affectedIds).toHaveLength(1)
+    expect(useCanvasShapeStore.getState().document.objects[r1.affectedIds[0]]?.type).toBe('rect')
+
+    // The stream grows by one more completed block; advance the cursor.
+    const grown = `${first}\n${addBlock('ellipse')}`
+    const r2 = applyCanvasOpsSince(grown, r1.totalBlocks)
+    expect(r2.totalBlocks).toBe(2)
+    expect(r2.affectedIds).toHaveLength(1)
+    expect(useCanvasShapeStore.getState().document.objects[r2.affectedIds[0]]?.type).toBe('ellipse')
+
+    // Exactly two shapes — the first block was applied once, not twice.
+    expect(nonRootShapeIds()).toHaveLength(2)
+  })
+
+  it('is a no-op when no new block has completed since the cursor', () => {
+    const text = addBlock('rect')
+    const r1 = applyCanvasOpsSince(text, 0)
+    const r2 = applyCanvasOpsSince(text, r1.totalBlocks)
+    expect(r2.totalBlocks).toBe(1)
+    expect(r2.affectedIds).toEqual([])
+    expect(nonRootShapeIds()).toHaveLength(1)
+  })
+})
+
+describe('new ShapeOps (duplicate / reorder / parent validation / text fields)', () => {
+  const nonRootIds = (): string[] => {
+    const doc = useCanvasShapeStore.getState().document
+    return Object.keys(doc.objects).filter((id) => id !== doc.rootId)
+  }
+  const addRect = (): string =>
+    applyShapeOpsFromText(
+      '```shapeops\n[{ "op": "add", "shape": { "type": "rect", "x": 0, "y": 0, "width": 10, "height": 10 } }]\n```'
+    ).affectedIds[0]
+
+  it('rejects add with a non-existent parentId instead of reporting phantom success', () => {
+    const result = applyShapeOpsFromText(
+      '```shapeops\n[{ "op": "add", "shape": { "type": "rect", "width": 10, "height": 10 }, "parentId": "nope" }]\n```'
+    )
+    expect(result.affectedIds).toEqual([])
+    expect(result.errors.some((e) => e.code === 'PARENT_NOT_FOUND')).toBe(true)
+    expect(nonRootIds()).toHaveLength(0)
+  })
+
+  it('accepts textAlign and lineHeight on a text shape (strict schema no longer drops them)', () => {
+    const result = applyShapeOpsFromText(
+      '```shapeops\n[{ "op": "add", "shape": { "type": "text", "textContent": "Hi", "textAlign": "center", "lineHeight": 1.4 } }]\n```'
+    )
+    expect(result.errors).toEqual([])
+    const shape = useCanvasShapeStore.getState().document.objects[result.affectedIds[0]]
+    expect(shape?.textAlign).toBe('center')
+    expect(shape?.lineHeight).toBe(1.4)
+  })
+
+  it('duplicate creates N staggered copies of a shape', () => {
+    const id = addRect()
+    const dup = applyShapeOpsFromText(
+      `\`\`\`shapeops\n[{ "op": "duplicate", "id": "${id}", "count": 2, "offset": { "dx": 20, "dy": 0 } }]\n\`\`\``
+    )
+    expect(dup.errors).toEqual([])
+    expect(dup.affectedIds).toHaveLength(2)
+    const doc = useCanvasShapeStore.getState().document
+    const xs = dup.affectedIds.map((d) => doc.objects[d]?.x).sort((a, b) => (a ?? 0) - (b ?? 0))
+    expect(xs).toEqual([20, 40]) // each copy offset by (i+1)*dx from the original at x=0
+    expect(nonRootIds()).toHaveLength(3) // original + 2 copies
+  })
+
+  it('reorder sends a shape to the front of its sibling order', () => {
+    const a = addRect()
+    const b = addRect()
+    const root0 = useCanvasShapeStore.getState().document
+    const rootChildren0 = root0.objects[root0.rootId].children
+    expect(rootChildren0.indexOf(a)).toBeLessThan(rootChildren0.indexOf(b))
+
+    const result = applyShapeOpsFromText(
+      `\`\`\`shapeops\n[{ "op": "reorder", "id": "${a}", "action": "front" }]\n\`\`\``
+    )
+    expect(result.errors).toEqual([])
+    const root1 = useCanvasShapeStore.getState().document
+    const rootChildren1 = root1.objects[root1.rootId].children
+    expect(rootChildren1.indexOf(a)).toBeGreaterThan(rootChildren1.indexOf(b))
   })
 })
 

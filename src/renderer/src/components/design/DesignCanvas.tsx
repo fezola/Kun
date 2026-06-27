@@ -8,7 +8,7 @@ import { artifactDesignMdPath, artifactDirPath } from '../../design/design-artif
 import { ensureDesignBoardArtifact, findDesignBoardArtifact } from '../../design/design-board'
 import { CanvasViewport } from './canvas/CanvasViewport'
 import { PropertiesPanel } from './canvas/PropertiesPanel'
-import { useApplyShapeOpsOnTurnComplete } from '../../design/canvas/use-apply-shape-ops-on-turn-complete'
+import { useApplyShapeOpsLive } from '../../design/canvas/use-apply-shape-ops-live'
 
 type CanvasProps = {
   leftSidebarCollapsed: boolean
@@ -34,7 +34,7 @@ export function DesignCanvas({
   const boardArtifact = findDesignBoardArtifact(artifacts)
   const baseDir = activeDocumentId ? `.kun-design/${activeDocumentId}` : undefined
 
-  useApplyShapeOpsOnTurnComplete(Boolean(boardArtifact), onScreenCreated)
+  useApplyShapeOpsLive(Boolean(boardArtifact), onScreenCreated)
 
   useEffect(() => {
     if (!workspaceRoot) return

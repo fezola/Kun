@@ -288,6 +288,8 @@ function buildCanvasTurnPrompt(options: DesignTurnOptions): string {
     '- Reply with a short plain-text plan (1-3 sentences) describing what you will do.',
     '- Then emit one or more ` ```design_canvas ` fenced JSON tool-call blocks. Do not ask the user to manually create a canvas first.',
     '- The renderer validates each tool call, applies it atomically (one undo entry per call), and visually highlights the affected shapes for ~1s.',
+    '- RENDER LIVE: each block is executed the INSTANT you close its ``` fence — not at the end of your reply. So emit MANY focused calls progressively as you build (a frame, then its children, then the next section), instead of one giant batch. Keep them flowing so the user watches the design materialize piece by piece. Never bundle the whole design into a single block — stream it.',
+    '- You can drive several parts of the layout in the same turn: fire successive `design_canvas` calls back to back (each lands immediately), so independent sections of the draft fill in one after another without waiting for a round trip.',
     '',
     'FIRST classify the request and commit to ONE lane (do not mix lanes):',
     '- EDIT AN EXISTING IMAGE — the user wants to change/edit/restyle/redo/recolor/fix/transform a picture that is ALREADY on the canvas, and the snapshot has a SELECTED `image` shape carrying an `imageUrl`. Phrasings like "change X into Y", "把这张图改成…", "改成 X", or "改一下这张图" all land here when the selected picture is the thing being changed. → call `generate_image` with `reference_image_paths` set to that `imageUrl`, then `update_shapes` that same shape (full rules under "Editing or restyling an EXISTING image" below). In this lane you MUST NOT use `add_screen` / `add-screen` and MUST NOT write or edit any HTML file.',
@@ -302,9 +304,11 @@ function buildCanvasTurnPrompt(options: DesignTurnOptions): string {
     '- { "action": "update_shapes", "ops": [ ShapeOp, ... ] }  // edits vector layers/images on the active board',
     '',
     'ShapeOp vocabulary for `update_shapes.ops` (each op is a JSON object inside the array):',
-    '- { "op": "add", "shape": { "type": "rect"|"ellipse"|"text"|"frame"|"group"|"image"|"arrow"|"line"|"draw", "name"?, "x"?, "y"?, "width"?, "height"?, "rotation"?, "fills"?, "strokes"?, "cornerRadius"?, "textContent"?, "fontSize"?, "fontFamily"?, "fontColor"?, "imageUrl"?, "points"?, "arrowheadStart"?, "arrowheadEnd"? }, "parentId"? }',
+    '- { "op": "add", "shape": { "type": "rect"|"ellipse"|"text"|"frame"|"group"|"image"|"arrow"|"line"|"draw", "name"?, "x"?, "y"?, "width"?, "height"?, "rotation"?, "fills"?, "strokes"?, "cornerRadius"?, "textContent"?, "fontSize"?, "fontFamily"?, "fontColor"?, "textAlign"?: "left"|"center"|"right", "lineHeight"?, "clipContent"?, "imageUrl"?, "points"?, "arrowheadStart"?, "arrowheadEnd"? }, "parentId"? }',
     '- { "op": "update", "id": "<shape-id>", "patch": { ...same fields as shape (no type)... } }',
     '- { "op": "delete", "id": "<shape-id>" }',
+    '- { "op": "duplicate", "id": "<shape-id>", "count"?: N, "offset"?: { "dx": N, "dy": N } }  // copies the shape (and its children) N times, each staggered by offset (default 24,24)',
+    '- { "op": "reorder", "id": "<shape-id>", "action": "front"|"back"|"forward"|"backward" }  // change layer/z-order among siblings',
     '- { "op": "reparent", "id": "<shape-id>", "newParentId": "<parent-id>", "index"? }',
     '- { "op": "move", "ids": ["<id>",...], "dx": N, "dy": N }',
     '- { "op": "resize", "id": "<shape-id>", "bounds": { "x": N, "y": N, "width": N, "height": N } }',
@@ -321,6 +325,8 @@ function buildCanvasTurnPrompt(options: DesignTurnOptions): string {
     '- Keep batches focused — one batch per logical change so undo granularity stays useful.',
     '- Arrows/lines/freehand: add `"type": "arrow"` (arrowhead at the last point), `"line"`, or `"draw"` and give `"points": [{ "x", "y" }, ...]` in ABSOLUTE canvas coords (≥2 points). The box is derived automatically — do not also set x/y/width/height.',
     '- Line styling: `strokes` carries color/width plus `"dash": "solid"|"dashed"|"dotted"`. Endpoint decorations via `"arrowheadStart"`/`"arrowheadEnd"`: "none"|"arrow"|"triangle"|"circle"|"bar"|"diamond".',
+    '- Fill/stroke fields are STRICT objects — a partial fill like `{ "color": "#fff" }` is rejected and the WHOLE op is dropped. Always use the full shape: `"fills": [{ "type": "solid", "color": "#3b82d8", "opacity": 1 }]` and `"strokes": [{ "color": "#111827", "width": 1, "opacity": 1, "position": "inside" }]`. To reuse an existing color, read it from the snapshot.',
+    '- `duplicate` is the right tool for repeated elements (cards, list rows, nav items): duplicate one well-made shape rather than re-adding it from scratch. Use `reorder` to fix overlap (bring a label to `front`, push a background `back`).',
     '',
     'Placing a generated image on the canvas:',
     '- Call the `generate_image` tool to create the picture (pass an `aspect_ratio` matching the box you want).',
@@ -356,6 +362,9 @@ function buildCanvasTurnPrompt(options: DesignTurnOptions): string {
   if (designContextLines.length > 0) {
     lines.push('', ...designContextLines)
   }
+  // The canvas lane decides screen sizing, layout and shape styling, so it
+  // inherits the same craft floor the HTML/screen lanes already get.
+  lines.push('', ...DESIGN_CRAFT_LINES.slice(0, 5))
   const contextLocationLines = formatContextLocationLines(options.contextLocations)
   if (contextLocationLines.length > 0) {
     lines.push('', ...contextLocationLines)

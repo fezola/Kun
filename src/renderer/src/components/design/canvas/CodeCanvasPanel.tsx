@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { CanvasViewport } from './CanvasViewport'
 import { PropertiesPanel } from './PropertiesPanel'
-import { useApplyShapeOpsOnTurnComplete } from '../../../design/canvas/use-apply-shape-ops-on-turn-complete'
+import { useApplyShapeOpsLive } from '../../../design/canvas/use-apply-shape-ops-live'
 
 /** Workspace subdir for code-mode canvases. Kept out of `.kun-design` so design
  *  mode's artifact lister (which enumerates `.kun-design/*`) never sees them. */
@@ -22,7 +22,7 @@ export function CodeCanvasPanel({ workspaceRoot, activeThreadId, className }: Pr
   const { t } = useTranslation('common')
   const ready = Boolean(workspaceRoot && activeThreadId)
   const artifactId = activeThreadId ? `code-${activeThreadId}` : ''
-  useApplyShapeOpsOnTurnComplete(ready)
+  useApplyShapeOpsLive(ready)
 
   return (
     <div className={`relative flex min-h-0 flex-col bg-ds-sidebar ${className ?? ''}`}>
