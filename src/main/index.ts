@@ -694,26 +694,51 @@ async function waitForKunHealth(settings: AppSettingsV1, timeoutMs: number): Pro
   let lastError = ''
 
   while (Date.now() <= deadline) {
-    try {
-      const remaining = Math.max(1, deadline - Date.now())
-      const res = await fetch(`${base}/health`, {
-        headers: runtimeAuthHeaders(settings),
-        signal: AbortSignal.timeout(Math.max(250, Math.min(1_000, remaining)))
-      })
-      if (res.ok && isKunHealthResponseBody(await res.text())) return true
-      lastError = `unexpected status ${res.status}`
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
-      if (msg !== lastError) {
-        lastError = msg
-        logWarn('health-probe', `${base}/health: ${msg}`)
-      }
+    const remaining = Math.max(1, deadline - Date.now())
+    const result = await probeKunHealthOnce(settings, base, remaining)
+    if (result.healthy) return true
+    if (result.error !== lastError) {
+      lastError = result.error
+      logWarn('health-probe', `${base}/health: ${result.error}`)
     }
     await sleep(150)
   }
 
   logWarn('health-probe', `gave up after ${timeoutMs}ms, last error: ${lastError}`)
   return false
+}
+
+type KunHealthProbeResult = { healthy: boolean; error: string }
+const kunHealthProbeInFlight = new Map<string, Promise<KunHealthProbeResult>>()
+
+function probeKunHealthOnce(
+  settings: AppSettingsV1,
+  base: string,
+  remainingMs: number
+): Promise<KunHealthProbeResult> {
+  const existing = kunHealthProbeInFlight.get(base)
+  if (existing) return existing
+
+  let task: Promise<KunHealthProbeResult>
+  task = (async () => {
+    try {
+      const res = await fetch(`${base}/health`, {
+        headers: runtimeAuthHeaders(settings),
+        signal: AbortSignal.timeout(Math.max(250, Math.min(1_000, remainingMs)))
+      })
+      const healthy = res.ok && isKunHealthResponseBody(await res.text())
+      return { healthy, error: healthy ? '' : `unexpected status ${res.status}` }
+    } catch (error) {
+      return {
+        healthy: false,
+        error: error instanceof Error ? error.message : String(error)
+      }
+    }
+  })().finally(() => {
+    if (kunHealthProbeInFlight.get(base) === task) kunHealthProbeInFlight.delete(base)
+  })
+  kunHealthProbeInFlight.set(base, task)
+  return task
 }
 
 async function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {

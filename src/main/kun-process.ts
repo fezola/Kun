@@ -68,6 +68,7 @@ import {
 } from './services/skill-service'
 
 let child: ChildProcess | null = null
+let childPort: number | null = null
 let childLogCapture: KunChildLogCapture | null = null
 let lastResolvedBinary: string | null = null
 let kunStartPromise: Promise<void> | null = null
@@ -405,6 +406,7 @@ async function startKunChildOnce(
     detached: false
   })
   const startedChild = child
+  childPort = runtime.port
   const startedLogCapture = createKunChildLogCapture(startedChild.pid)
   childLogCapture = startedLogCapture
   childStderrTail = ''
@@ -421,7 +423,10 @@ async function startKunChildOnce(
         : `exited with code ${code ?? 'unknown'}`
     )
     void startedLogCapture.close()
-    if (child === startedChild) child = null
+    if (child === startedChild) {
+      child = null
+      childPort = null
+    }
     if (readyChildren.has(startedChild) && !intentionalStops.has(startedChild)) {
       onUnexpectedKunExit?.({
         code: code ?? null,
@@ -1327,7 +1332,10 @@ export async function stopKunChildAndWait(): Promise<void> {
     }
     await waitForChildExit(stoppingChild, KUN_STOP_FORCE_MS)
   }
-  if (child === stoppingChild) child = null
+  if (child === stoppingChild) {
+    child = null
+    childPort = null
+  }
   if (capture) {
     childLogCapture = null
     await capture.close()
@@ -1369,6 +1377,12 @@ export async function resolveAvailableKunPort(
   preferredPort: number
 ): Promise<{ port: number; changed: boolean; message?: string }> {
   if (preferredPort > 0) {
+    // A temporarily unresponsive managed child still owns its configured
+    // endpoint. Moving settings to another port here strands the live child
+    // and makes every concurrent request launch/probe a port with no server.
+    if (isKunChildRunning() && childPort === preferredPort) {
+      return { port: preferredPort, changed: false }
+    }
     if (await canBindTcpPort(preferredPort, '127.0.0.1')) {
       return { port: preferredPort, changed: false }
     }
