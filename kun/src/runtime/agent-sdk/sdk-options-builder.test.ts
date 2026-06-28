@@ -5,8 +5,28 @@ import {
   buildCanUseTool,
   buildClaudeSystemPrompt,
   buildScopedEnv,
-  mapApprovalPolicyToPermissionMode
+  isAnthropicModel,
+  mapApprovalPolicyToPermissionMode,
+  resolveSdkModel
 } from './sdk-options-builder.js'
+
+describe('resolveSdkModel', () => {
+  test('keeps a Claude thread model as-is', () => {
+    expect(resolveSdkModel('claude-haiku-4-5', 'claude-opus-4-8')).toBe('claude-haiku-4-5')
+    expect(isAnthropicModel('claude-sonnet-4-6')).toBe(true)
+  })
+
+  test('coerces a non-Anthropic thread model to the runtime default Claude model', () => {
+    // the reported bug: an old deepseek thread routed to the subscription engine
+    expect(resolveSdkModel('deepseek-v4-flash', 'claude-haiku-4-5')).toBe('claude-haiku-4-5')
+    expect(isAnthropicModel('deepseek-v4-flash')).toBe(false)
+  })
+
+  test('falls back to undefined when neither model is a Claude id', () => {
+    expect(resolveSdkModel('deepseek-v4-flash', 'gpt-5')).toBeUndefined()
+    expect(resolveSdkModel(undefined, undefined)).toBeUndefined()
+  })
+})
 
 describe('buildScopedEnv', () => {
   test('strips auth overrides and injects the OAuth token', () => {
@@ -67,8 +87,13 @@ describe('buildClaudeSystemPrompt', () => {
 
 describe('buildCanUseTool', () => {
   test('allow passes through, with optional updatedInput', async () => {
+    // updatedInput must always be present (SDK runtime schema requires it);
+    // when kun doesn't rewrite, it echoes the original input through.
     const allow = buildCanUseTool(() => ({ allow: true }))
-    expect(await allow('Bash', { command: 'ls' })).toEqual({ behavior: 'allow' })
+    expect(await allow('Bash', { command: 'ls' })).toEqual({
+      behavior: 'allow',
+      updatedInput: { command: 'ls' }
+    })
 
     const rewrite = buildCanUseTool(() => ({ allow: true, updatedInput: { command: 'ls -la' } }))
     expect(await rewrite('Bash', { command: 'ls' })).toEqual({
@@ -80,6 +105,13 @@ describe('buildCanUseTool', () => {
   test('deny carries the message', async () => {
     const deny = buildCanUseTool(() => ({ allow: false, message: 'blocked by user' }))
     expect(await deny('Bash', {})).toEqual({ behavior: 'deny', message: 'blocked by user' })
+  })
+
+  test('deny without a message gets a default (SDK requires a non-empty message)', async () => {
+    const deny = buildCanUseTool(() => ({ allow: false }))
+    const result = await deny('Bash', {})
+    expect(result.behavior).toBe('deny')
+    expect((result as { message: string }).message).toBeTruthy()
   })
 
   test('a throwing decider denies closed', async () => {

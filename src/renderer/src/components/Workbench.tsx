@@ -56,9 +56,6 @@ import {
 } from './chat/FloatingComposerModelPicker'
 import { SideConversationPanel } from './chat/SideConversationPanel'
 import { SessionHeader } from './SessionHeader'
-import { WriteWorkspaceView } from './write/WriteWorkspaceView'
-import { WriteAssistantPanel } from './write/WriteAssistantPanel'
-import { WriteSidebar } from './write/WriteSidebar'
 import { DesignWorkspaceView } from './design/DesignWorkspaceView'
 import { DesignImplementPanel } from './design/DesignImplementPanel'
 import { DesignAIRail } from './design/DesignAIRail'
@@ -95,8 +92,6 @@ import type { DesignHtmlElementContext } from '../design/design-composer-context
 import type { ScreenTurnOptions, ScreenManifestEntry } from '../design/design-turn-prompt'
 import { takeLastCanvasOpErrors } from '../design/canvas/apply-shape-ops'
 import { useDesignTokensStore } from '../design/design-tokens-store'
-import { SddAssistantPanel } from './sdd/SddAssistantPanel'
-import { SddDraftEditorView } from './sdd/SddDraftEditorView'
 import { SidebarTitlebarToggleButton } from './sidebar/SidebarPrimitives'
 import { composeWritePrompt } from '../write/quoted-selection'
 import { resolveWriteAgentPreset } from '../write/agent-presets'
@@ -147,6 +142,7 @@ import { useUiModeCameosEnabled, useUiPluginStore } from '../store/ui-plugin-sto
 import { readFocusModePreference, writeFocusModePreference } from '../lib/focus-mode'
 import {
   buildComposerFileContextPrompt,
+  composerFileReferenceFromPath,
   isComposerDirectoryReference,
   mergeComposerFileReferences,
   relativeWorkspacePath,
@@ -194,6 +190,25 @@ const SubagentDetailPanel = lazy(() =>
 const WorkflowRunPanel = lazy(() =>
   import('./workflow/WorkflowRunPanel').then((module) => ({ default: module.WorkflowRunPanel }))
 )
+const WriteWorkspaceView = lazy(() =>
+  import('./write/WriteWorkspaceView').then((module) => ({ default: module.WriteWorkspaceView }))
+)
+const WriteAssistantPanel = lazy(() =>
+  import('./write/WriteAssistantPanel').then((module) => ({ default: module.WriteAssistantPanel }))
+)
+const WriteSidebar = lazy(() =>
+  import('./write/WriteSidebar').then((module) => ({ default: module.WriteSidebar }))
+)
+const SddAssistantPanel = lazy(() =>
+  import('./sdd/SddAssistantPanel').then((module) => ({ default: module.SddAssistantPanel }))
+)
+const SddDraftEditorView = lazy(() =>
+  import('./sdd/SddDraftEditorView').then((module) => ({ default: module.SddDraftEditorView }))
+)
+
+function WorkbenchPaneFallback(): ReactElement {
+  return <div className="h-full min-h-0 w-full bg-ds-main" aria-hidden />
+}
 
 type PendingSddPlanTarget = {
   planId: string
@@ -1317,6 +1332,14 @@ export function Workbench(): ReactElement {
 
   const addComposerFileReference = (reference: ComposerFileReference): void => {
     setComposerFileReferences((current) => mergeComposerFileReferences(current, reference))
+  }
+
+  const pickComposerFileReferences = async (): Promise<void> => {
+    const result = await window.kunGui.pickLocalFiles(activeSkillWorkspace || undefined)
+    if (result.canceled) return
+    for (const path of result.paths) {
+      addComposerFileReference(composerFileReferenceFromPath(path, activeSkillWorkspace))
+    }
   }
 
   const removeComposerFileReference = (relativePath: string): void => {
@@ -2620,8 +2643,12 @@ export function Workbench(): ReactElement {
       const key = contextKey(reference.relativePath || reference.path)
       if (seen.has(key)) return
       const result = await window.kunGui.readWorkspaceFile({
-        workspaceRoot: workspace,
-        path: reference.relativePath || reference.path
+        ...(reference.workspaceRoot === null
+          ? {}
+          : { workspaceRoot: reference.workspaceRoot || workspace }),
+        path: reference.workspaceRoot === null
+          ? reference.path
+          : (reference.relativePath || reference.path)
       })
       if (!result.ok) {
         if (!strict) return
@@ -3362,15 +3389,17 @@ export function Workbench(): ReactElement {
                 onToggleTheme={toggleTheme}
               />
             ) : route === 'write' ? (
-              <WriteSidebar
-                activeView="write"
-                connectPhoneSidebarOpen={connectPhoneSidebarOpen}
-                onCodeOpen={openCodeMode}
-                onWriteOpen={openWriteMode}
-                onDesignOpen={openDesignMode}
-                onOpenSettings={(section) => openSettings(section)}
-                onToggleConnectPhone={toggleConnectPhone}
-              />
+              <Suspense fallback={<WorkbenchPaneFallback />}>
+                <WriteSidebar
+                  activeView="write"
+                  connectPhoneSidebarOpen={connectPhoneSidebarOpen}
+                  onCodeOpen={openCodeMode}
+                  onWriteOpen={openWriteMode}
+                  onDesignOpen={openDesignMode}
+                  onOpenSettings={(section) => openSettings(section)}
+                  onToggleConnectPhone={toggleConnectPhone}
+                />
+              </Suspense>
             ) : (
             <Sidebar
               threads={codeThreads}
@@ -3545,7 +3574,7 @@ export function Workbench(): ReactElement {
             )}
           </div>
         ) : route === 'write' ? (
-          <>
+          <Suspense fallback={<WorkbenchPaneFallback />}>
             {writeRuntimeBannerMessage ? renderRuntimeBanner(writeRuntimeBannerMessage, visibleRuntimeErrorDetail) : null}
             <div className="flex min-h-0 flex-1">
               <WriteWorkspaceView
@@ -3558,7 +3587,7 @@ export function Workbench(): ReactElement {
               />
               {renderRightPanel()}
             </div>
-          </>
+          </Suspense>
         ) : (
           <>
         {visibleRuntimeError && !(runtimeConnection !== 'ready' && !activeThreadId)
@@ -3568,18 +3597,20 @@ export function Workbench(): ReactElement {
         <div className="flex min-h-0 flex-1">
           <div className="flex min-h-0 min-w-0 flex-1">
           {activeSddDraft ? (
-            <SddDraftEditorView
-              leftSidebarCollapsed={leftSidebarCollapsed}
-              assistantOpen={rightPanelMode === 'sdd-ai'}
-              onToggleLeftSidebar={toggleLeftSidebar}
-              onToggleAssistant={() => void toggleSddAssistantPanel()}
-              onAssistantQuote={quoteToSddAssistant}
-              onPrototypeTurn={sendSddPrototypeTurn}
-              onExploreInDesign={exploreSddRequirementInDesign}
-              onNext={() => void handleSddNextStep()}
-              onClose={() => dismissActiveSddDraft({ closeAssistant: true })}
-              nextDisabled={busy || runtimeConnection !== 'ready' || sddDraftOperationStatus === 'upgrading'}
-            />
+            <Suspense fallback={<WorkbenchPaneFallback />}>
+              <SddDraftEditorView
+                leftSidebarCollapsed={leftSidebarCollapsed}
+                assistantOpen={rightPanelMode === 'sdd-ai'}
+                onToggleLeftSidebar={toggleLeftSidebar}
+                onToggleAssistant={() => void toggleSddAssistantPanel()}
+                onAssistantQuote={quoteToSddAssistant}
+                onPrototypeTurn={sendSddPrototypeTurn}
+                onExploreInDesign={exploreSddRequirementInDesign}
+                onNext={() => void handleSddNextStep()}
+                onClose={() => dismissActiveSddDraft({ closeAssistant: true })}
+                nextDisabled={busy || runtimeConnection !== 'ready' || sddDraftOperationStatus === 'upgrading'}
+              />
+            </Suspense>
           ) : (
             <section className="ds-chat-stage ds-drag flex min-h-0 min-w-0 flex-1 flex-col">
             <div className={`${stageInsetClass} flex min-h-0 min-w-0 flex-1 flex-col`}>
@@ -3703,6 +3734,7 @@ export function Workbench(): ReactElement {
                 onPasteClipboardImage={(options) => void handlePasteClipboardImage(options)}
                 onRemoveAttachment={removeComposerAttachment}
                 onAddFileReference={addComposerFileReference}
+                onPickFileReferences={() => void pickComposerFileReferences()}
                 onOpenFileReferencePicker={openFileTreeSidePanel}
                 onRemoveFileReference={removeComposerFileReference}
                 queuedMessages={queuedMessages}

@@ -695,26 +695,51 @@ async function waitForKunHealth(settings: AppSettingsV1, timeoutMs: number): Pro
   let lastError = ''
 
   while (Date.now() <= deadline) {
-    try {
-      const remaining = Math.max(1, deadline - Date.now())
-      const res = await fetch(`${base}/health`, {
-        headers: runtimeAuthHeaders(settings),
-        signal: AbortSignal.timeout(Math.max(250, Math.min(1_000, remaining)))
-      })
-      if (res.ok && isKunHealthResponseBody(await res.text())) return true
-      lastError = `unexpected status ${res.status}`
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
-      if (msg !== lastError) {
-        lastError = msg
-        logWarn('health-probe', `${base}/health: ${msg}`)
-      }
+    const remaining = Math.max(1, deadline - Date.now())
+    const result = await probeKunHealthOnce(settings, base, remaining)
+    if (result.healthy) return true
+    if (result.error !== lastError) {
+      lastError = result.error
+      logWarn('health-probe', `${base}/health: ${result.error}`)
     }
     await sleep(150)
   }
 
   logWarn('health-probe', `gave up after ${timeoutMs}ms, last error: ${lastError}`)
   return false
+}
+
+type KunHealthProbeResult = { healthy: boolean; error: string }
+const kunHealthProbeInFlight = new Map<string, Promise<KunHealthProbeResult>>()
+
+function probeKunHealthOnce(
+  settings: AppSettingsV1,
+  base: string,
+  remainingMs: number
+): Promise<KunHealthProbeResult> {
+  const existing = kunHealthProbeInFlight.get(base)
+  if (existing) return existing
+
+  let task: Promise<KunHealthProbeResult>
+  task = (async () => {
+    try {
+      const res = await fetch(`${base}/health`, {
+        headers: runtimeAuthHeaders(settings),
+        signal: AbortSignal.timeout(Math.max(250, Math.min(1_000, remainingMs)))
+      })
+      const healthy = res.ok && isKunHealthResponseBody(await res.text())
+      return { healthy, error: healthy ? '' : `unexpected status ${res.status}` }
+    } catch (error) {
+      return {
+        healthy: false,
+        error: error instanceof Error ? error.message : String(error)
+      }
+    }
+  })().finally(() => {
+    if (kunHealthProbeInFlight.get(base) === task) kunHealthProbeInFlight.delete(base)
+  })
+  kunHealthProbeInFlight.set(base, task)
+  return task
 }
 
 async function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
@@ -741,6 +766,13 @@ let lastAppliedSettings: AppSettingsV1 | null = null
 
 const RUNTIME_WATCHDOG_INTERVAL_MS = 30_000
 const RUNTIME_WATCHDOG_FAILURE_THRESHOLD = 3
+/**
+ * How long a managed child that failed the initial health probe gets to prove
+ * it is merely busy (e.g. a long synchronous step) rather than hung, before the
+ * ensure path force-restarts it in place. Generous on purpose: killing a
+ * slow-but-alive runtime would cost the user their in-flight turn (#621).
+ */
+const RUNTIME_HUNG_CONFIRM_MS = 10_000
 const runtimeRestartBudget = new RestartBudget({ windowMs: 60_000, maxRestarts: 3 })
 let lastRuntimeStatus: KunRuntimeStatus | null = null
 let supervisedRestartInFlight = false
@@ -1067,6 +1099,38 @@ async function ensureKunRuntime(settings: AppSettingsV1): Promise<AppSettingsV1>
       'runtime_offline',
       'Kun is offline. Enable automatic startup in Settings, or start `kun serve` manually.'
     )
+  }
+
+  // A managed child that is alive but failed the probe is hung (blocked event
+  // loop) or merely busy — not absent. The launch path below cannot recover it
+  // on its own: resolveAvailablePort skips our own child when reclaiming the
+  // port (isCurrentKunChildPid) and startKunChild early-returns while
+  // isChildRunning() stays true, so it would pick a fresh port, never spawn,
+  // and fail every request until the ~90s watchdog finally force-restarts
+  // (KunAgent/Kun#621). Stop the hung child here so the relaunch spawns a fresh
+  // process on the SAME port instead.
+  if (kunRuntimeAdapter.isChildRunning()) {
+    // Never tear down a child still inside its (deliberately generous) startup
+    // window — interrupting a slow-but-healthy boot is the #544 restart storm.
+    await waitForKunStartupSettled()
+    if (kunRuntimeAdapter.isChildRunning()) {
+      // Give a merely-busy runtime a real chance to answer before judging it
+      // hung, so one long synchronous step does not cost the user their turn.
+      const recovered = await waitForKunHealth(settings, RUNTIME_HUNG_CONFIRM_MS)
+      if (recovered) {
+        const threadApi = await probeThreadApi(settings)
+        if (threadApi.ok) {
+          noteRuntimeHealthy('ensure')
+          return settings
+        }
+        throw runtimeJsonError(threadApi.error, threadApi.message)
+      }
+      logWarn(
+        'runtime-start',
+        `managed Kun child stopped responding on port ${runtime.port}; restarting it in place`
+      )
+      await kunRuntimeAdapter.stopAndWait()
+    }
   }
 
   const launchSettings = await resolveManagedKunLaunchSettings(settings, 'runtime-start')

@@ -47,6 +47,7 @@ import type { AttachmentReference, ChatBlock, ReviewTarget } from '../../agent/t
 import { useChatStore } from '../../store/chat-store'
 import { normalizeWorkspaceRoot } from '../../lib/workspace-path'
 import {
+  composerFileReferenceFromPath,
   filterWorkspaceFileMentionSuggestions,
   formatComposerFileMentionToken,
   getFileMentionAtCursor,
@@ -188,6 +189,7 @@ type Props = {
   onRemoveAttachment?: (id: string) => void
   onRemoveContextChip?: (id: string) => void
   onAddFileReference?: (reference: ComposerFileReference) => void
+  onPickFileReferences?: () => void
   onOpenFileReferencePicker?: () => void
   onRemoveFileReference?: (relativePath: string) => void
   onSend: () => void
@@ -505,6 +507,7 @@ export function FloatingComposer({
   onRemoveAttachment,
   onRemoveContextChip,
   onAddFileReference,
+  onPickFileReferences,
   onOpenFileReferencePicker,
   onRemoveFileReference,
   onSend,
@@ -627,6 +630,7 @@ export function FloatingComposer({
   )
   const canPickAttachment = canCompose && attachmentUploadEnabled && !attachmentUploadBusy
   const canPickFileReference = canCompose && fileReferenceEnabled && Boolean(effectiveWorkspaceRoot) && Boolean(onOpenFileReferencePicker)
+  const canPickLocalFileReference = canCompose && fileReferenceEnabled && Boolean(onPickFileReferences)
   const showIntentToolbar = !compact && route === 'chat'
   const showComposerMenuButton = showIntentToolbar
   const canTogglePlanMode = canCompose && Boolean(onPlanCommand)
@@ -635,7 +639,7 @@ export function FloatingComposer({
   const canRunReview = canCompose && route !== 'claw' && Boolean(onReviewCommand)
   const canToggleWorktreeMode = canCompose && route !== 'claw' && Boolean(onToggleWorktreeMode)
   const canOpenComposerMenu = showComposerMenuButton
-    && (canPickFileReference || canTogglePlanMode || canCreateNewThread || canOpenGoalPanel || canRunReview || canToggleWorktreeMode)
+    && (canPickFileReference || canPickLocalFileReference || canTogglePlanMode || canCreateNewThread || canOpenGoalPanel || canRunReview || canToggleWorktreeMode)
   const showToolbarStartControls = showComposerMenuButton
   const showExecutionSettingsPicker = showIntentToolbar
     && Boolean(executionSettings)
@@ -1290,6 +1294,13 @@ export function FloatingComposer({
     draft.focusComposer()
   }
 
+  const handleLocalFileReferenceMenuClick = (): void => {
+    if (!canPickLocalFileReference) return
+    setComposerMenuOpen(false)
+    onPickFileReferences?.()
+    draft.focusComposer()
+  }
+
   const handlePlanToolbarClick = (): void => {
     if (!canTogglePlanMode) return
     setComposerMenuOpen(false)
@@ -1570,36 +1581,15 @@ export function FloatingComposer({
     event.dataTransfer.dropEffect = 'copy'
   }
 
-  const insertTextAtComposerCursor = (text: string): void => {
-    if (!text) return
-    const textarea = draft.textareaRef.current
-    const currentValue = input
-    const selectionStart = textarea?.selectionStart ?? composerCursor ?? currentValue.length
-    const selectionEnd = textarea?.selectionEnd ?? selectionStart
-    const before = currentValue.slice(0, selectionStart)
-    const after = currentValue.slice(selectionEnd)
-    const leadingPad = before.length > 0 && !/\s$/.test(before) ? ' ' : ''
-    const trailingPad = after.length > 0 && !/^\s/.test(after) ? ' ' : ''
-    const insertion = `${leadingPad}${text}${trailingPad}`
-    const nextInput = `${before}${insertion}${after}`
-    const nextCursor = before.length + insertion.length - trailingPad.length
-    setInput(nextInput)
-    window.requestAnimationFrame(() => {
-      const el = draft.textareaRef.current
-      if (!el) return
-      el.focus()
-      el.setSelectionRange(nextCursor, nextCursor)
-      setComposerCursor(nextCursor)
-    })
-  }
-
   const handleComposerDrop = (event: ReactDragEvent<HTMLDivElement>): void => {
     const imageFiles = canPickAttachment ? imageFilesFromTransfer(event.dataTransfer) : []
     const rawFiles = Array.from(event.dataTransfer.files ?? [])
     const isImageLike = (file: File): boolean =>
       isImageMimeType(file.type) || Boolean(imageMimeTypeFromFileName(file.name))
     const pdfFiles = canPickAttachment ? rawFiles.filter(isPdfFile) : []
-    const pathFiles = rawFiles.filter((file) => !isImageLike(file) && !isPdfFile(file))
+    const pathFiles = canPickLocalFileReference && onAddFileReference
+      ? rawFiles.filter((file) => !isImageLike(file) && !isPdfFile(file))
+      : []
     if (imageFiles.length === 0 && pdfFiles.length === 0 && pathFiles.length === 0) return
     event.preventDefault()
     if ((imageFiles.length > 0 || pdfFiles.length > 0) && onPickAttachments) {
@@ -1615,7 +1605,9 @@ export function FloatingComposer({
           // ignore files we cannot resolve a filesystem path for
         }
       }
-      if (paths.length > 0) insertTextAtComposerCursor(paths.join(' '))
+      for (const path of paths) {
+        onAddFileReference?.(composerFileReferenceFromPath(path, effectiveWorkspaceRoot))
+      }
     }
     draft.focusComposer()
   }
@@ -1635,7 +1627,7 @@ export function FloatingComposer({
       <div className="relative">
         {showGoalFloater && activeThreadGoal && !pendingUserInputBlock ? (
           <div className="pointer-events-none absolute inset-x-3 bottom-full z-20 mb-2 flex justify-center">
-            <div className="pointer-events-auto flex min-h-11 w-full max-w-[46rem] items-center gap-2 rounded-full border border-ds-border bg-ds-card/95 px-3 py-1.5 text-ds-muted shadow-[0_12px_34px_rgba(20,47,95,0.10)] backdrop-blur-xl dark:bg-ds-card/90">
+            <div className="pointer-events-auto flex min-h-11 w-full max-w-[46rem] items-center gap-2 rounded-full border border-ds-border bg-white px-3 py-1.5 text-ds-muted shadow-[0_12px_34px_rgba(20,47,95,0.10)] backdrop-blur-xl dark:bg-ds-card">
               <Target className="h-3.5 w-3.5 shrink-0 text-ds-faint" strokeWidth={1.9} />
               <div className="flex min-w-0 flex-1 items-center gap-1.5 text-[13px] leading-5">
                 <span className="shrink-0 font-semibold text-ds-ink">
@@ -1700,12 +1692,23 @@ export function FloatingComposer({
             {fileReferenceEnabled ? (
               <button
                 type="button"
+                disabled={!canPickLocalFileReference}
+                onClick={handleLocalFileReferenceMenuClick}
+                className="ds-no-drag flex h-8 w-full items-center gap-2 px-3 text-left transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent disabled:hover:text-ds-muted"
+              >
+                <FileText className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
+                <span className="min-w-0 flex-1 truncate">{t('composerAddLocalFiles')}</span>
+              </button>
+            ) : null}
+            {fileReferenceEnabled ? (
+              <button
+                type="button"
                 disabled={!canPickFileReference}
                 onClick={handleFileReferenceMenuClick}
                 className="ds-no-drag flex h-8 w-full items-center gap-2 px-3 text-left transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent disabled:hover:text-ds-muted"
               >
                 <Paperclip className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
-                <span className="min-w-0 flex-1 truncate">{t('composerAddFilesAndFolders')}</span>
+                <span className="min-w-0 flex-1 truncate">{t('composerBrowseWorkspaceFiles')}</span>
               </button>
             ) : null}
             {attachmentUploadEnabled ? (
@@ -1930,7 +1933,7 @@ export function FloatingComposer({
         {goalPanelOpen && slashQuery == null && !pendingUserInputBlock ? (
           <div
             ref={goalPanelRef}
-            className="absolute inset-x-2 bottom-full z-30 mb-3 overflow-hidden rounded-[26px] border border-ds-border bg-ds-card/95 p-3 shadow-[0_18px_52px_rgba(20,47,95,0.14)] backdrop-blur-xl dark:bg-ds-card/90"
+            className="absolute inset-x-2 bottom-full z-30 mb-3 overflow-hidden rounded-[26px] border border-ds-border bg-white p-3 shadow-[0_18px_52px_rgba(20,47,95,0.14)] backdrop-blur-xl dark:bg-ds-card"
           >
             <div className="flex items-start gap-3">
               <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-ds-border-muted text-ds-muted">
@@ -2027,7 +2030,7 @@ export function FloatingComposer({
           onDrop={handleComposerDrop}
         >
           {showChangeSummary ? (
-            <div className="ds-no-drag mb-1 rounded-2xl border border-ds-border-muted bg-ds-card/78 px-3 py-2 shadow-sm">
+            <div className="ds-no-drag mb-1 rounded-2xl border border-ds-border-muted bg-ds-card px-3 py-2 shadow-sm">
               <div className="flex min-w-0 items-center gap-2">
                 <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-ds-hover text-ds-muted">
                   <FileEdit className="h-4 w-4" strokeWidth={1.8} />
@@ -2149,7 +2152,7 @@ export function FloatingComposer({
                 return (
                   <span
                     key={`${reference.type ?? 'file'}:${reference.relativePath}`}
-                    className="ds-no-drag inline-flex h-7 max-w-full items-center gap-1.5 rounded-lg border border-ds-border-muted bg-ds-card/80 px-2 text-[12px] font-medium text-ds-muted"
+                    className="ds-no-drag inline-flex h-7 max-w-full items-center gap-1.5 rounded-lg border border-ds-border-muted bg-ds-card px-2 text-[12px] font-medium text-ds-muted"
                     title={displayPath}
                   >
                     {isDirectory ? (
@@ -2186,7 +2189,7 @@ export function FloatingComposer({
                 ) : (
                   <span
                     key={attachment.id}
-                    className="ds-no-drag inline-flex h-7 max-w-full items-center gap-1.5 rounded-lg border border-ds-border-muted bg-ds-card/80 px-2 text-[12px] font-medium text-ds-muted"
+                    className="ds-no-drag inline-flex h-7 max-w-full items-center gap-1.5 rounded-lg border border-ds-border-muted bg-ds-card px-2 text-[12px] font-medium text-ds-muted"
                     title={attachment.name || attachment.id}
                   >
                     {attachment.kind === 'document' ? (
@@ -2327,7 +2330,7 @@ export function FloatingComposer({
                   <button
                     type="button"
                     onClick={() => setContextCapacityOpen((open) => !open)}
-                    className="ds-composer-context ds-no-drag relative inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-ds-border-muted bg-ds-card/70 p-0 text-[9px] font-semibold leading-none text-ds-muted transition hover:bg-ds-hover"
+                    className="ds-composer-context ds-no-drag relative inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-ds-border-muted bg-ds-card p-0 text-[9px] font-semibold leading-none text-ds-muted transition hover:bg-ds-hover"
                     aria-label={t('contextCapacityChipAria', {
                       percent: formatPercent(contextCapacity.usedRatio)
                     })}
@@ -2456,7 +2459,7 @@ export function FloatingComposer({
             ) : null}
             <GitBranchPicker workspaceRoot={effectiveWorkspaceRoot} />
             {useWorktreePool && worktreeBranches.length > 0 ? (
-              <label className="ds-no-drag inline-flex min-h-7 max-w-[220px] items-center gap-1.5 rounded-lg border border-ds-border-muted bg-ds-card/72 px-2 py-0.5 text-[12.5px] font-medium text-ds-muted shadow-sm">
+              <label className="ds-no-drag inline-flex min-h-7 max-w-[220px] items-center gap-1.5 rounded-lg border border-ds-border-muted bg-ds-card px-2 py-0.5 text-[12.5px] font-medium text-ds-muted shadow-sm">
                 <GitBranch className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} />
                 <select
                   value={worktreeBranch || worktreeBranches[0]}
@@ -2474,7 +2477,7 @@ export function FloatingComposer({
             ) : null}
             {showThreadUsageFooter ? (
               <div
-                className="ds-composer-usage ds-no-drag inline-flex min-h-7 max-w-full min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 overflow-visible rounded-lg border border-ds-border-muted bg-ds-card/72 px-2.5 py-0.5 text-[12.5px] font-medium leading-5 text-ds-muted shadow-sm"
+                className="ds-composer-usage ds-no-drag inline-flex min-h-7 max-w-full min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 overflow-visible rounded-lg border border-ds-border-muted bg-ds-card px-2.5 py-0.5 text-[12.5px] font-medium leading-5 text-ds-muted shadow-sm"
                 title={
                   threadUsage
                     ? t(

@@ -26,6 +26,7 @@ import {
   type BridgeableTool,
   type KunToolResult
 } from './sdk-tool-bridge.js'
+import { composeSdkPromptText } from './sdk-context-assembler.js'
 import type { SdkApi } from './sdk-protocol.js'
 
 export type TurnStatus = 'completed' | 'failed' | 'aborted'
@@ -48,6 +49,17 @@ export interface SdkTurnContext {
   images?: Array<{ mediaType: string; base64: string }>
   /** kun tool catalog to consider bridging (overlap/excluded are filtered here). */
   bridgeableTools: BridgeableTool[]
+  /**
+   * Prior-conversation transcript replayed each turn so the model has kun's
+   * canonical history (the SDK doesn't see it otherwise). '' / absent => none.
+   */
+  historyTranscript?: string
+  /**
+   * Per-turn instruction blocks injected after the history (skill catalog,
+   * activated skills, memories, goal/todo continuation, plan instruction).
+   * Mirrors the native loop's `contextInstructions`.
+   */
+  contextInstructions?: string[]
 }
 
 /**
@@ -80,12 +92,14 @@ export interface SdkRuntimeDeps {
   handlesProvider(providerId: string | undefined): boolean
   /** Resolve the turn's inputs; null aborts the turn early (e.g. no user text). */
   loadTurnContext(threadId: string, turnId: string): Promise<SdkTurnContext | null>
-  /** Execute a kun tool in-process (raw — permission/hooks handled by the SDK seam). */
+  /** Execute a kun tool in-process (raw — permission/hooks handled by the SDK seam).
+   *  `signal` aborts in-flight interactive work (e.g. a pending user_input). */
   executeKunTool(
     threadId: string,
     turnId: string,
     toolName: string,
-    args: Record<string, unknown>
+    args: Record<string, unknown>,
+    signal?: AbortSignal
   ): Promise<KunToolResult>
   /** kun's per-call permission decision (routes to the GUI approval panel). */
   decideToolApproval(
@@ -148,7 +162,7 @@ export class AgentSdkRuntime {
 
       // Bridge kun-exclusive tools into an in-process MCP server.
       const bridged = buildBridgedToolSpecs(selectBridgeableTools(ctx.bridgeableTools), (name, args) =>
-        this.deps.executeKunTool(threadId, turnId, name, args)
+        this.deps.executeKunTool(threadId, turnId, name, args, abort.signal)
       )
       const mcpServers = bridged.length ? { kun: toSdkMcpServer(sdk, bridged) } : undefined
 
@@ -157,7 +171,11 @@ export class AgentSdkRuntime {
         kunSystemPrompt: this.deps.kunSystemPrompt(),
         threadPersona: ctx.threadPersona,
         approvalPolicy: ctx.approvalPolicy,
-        planMode: ctx.planMode,
+        // Deliberately NOT mapping kun's plan turn to the SDK's 'plan' permission
+        // mode: that mode blocks tool execution, which would also block kun's
+        // bridged create_plan tool (the whole point of a plan turn). kun's plan
+        // behavior comes from advertising create_plan + the injected plan
+        // instruction instead (see resolveTurnPlanContext + contextInstructions).
         bridgedToolModelNames: bridgedToolModelNames(bridged),
         mcpServers,
         canUseTool: buildCanUseTool((name, input) =>
@@ -173,10 +191,19 @@ export class AgentSdkRuntime {
           : {})
       })
 
+      // kun owns canonical history, so each SDK turn is stateless: replay the
+      // prior conversation + per-turn instructions as text and end with the live
+      // request. (Deliberately NOT using the SDK's `resume` — it's lost on a
+      // provider switch or runtime restart; the transcript survives both.)
+      const composedText = composeSdkPromptText({
+        ...(ctx.historyTranscript ? { historyTranscript: ctx.historyTranscript } : {}),
+        userText: ctx.userText,
+        ...(ctx.contextInstructions?.length ? { instructionBlocks: ctx.contextInstructions } : {})
+      })
       const prompt =
         ctx.images && ctx.images.length > 0
-          ? userMessageStream(ctx.userText, ctx.images)
-          : ctx.userText
+          ? userMessageStream(composedText, ctx.images)
+          : composedText
       const stream = sdk.query({ prompt, options })
       for await (const message of stream) {
         if (signal.aborted) {

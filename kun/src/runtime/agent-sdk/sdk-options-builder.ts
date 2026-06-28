@@ -37,6 +37,13 @@ export const DEFAULT_SDK_BUILTIN_TOOLS: readonly string[] = [
 ]
 
 /**
+ * Claude Code built-in tools we suppress on the kun-driven SDK path.
+ * AskUserQuestion has no UI in this embedding (the model would ask and get no
+ * answer); kun's own bridged `user_input` panel handles interactive questions.
+ */
+export const DEFAULT_SDK_DISALLOWED_TOOLS: readonly string[] = ['AskUserQuestion']
+
+/**
  * Env vars that, if present in the spawned Claude Code process, would override
  * the subscription OAuth token (auth precedence: ANTHROPIC_API_KEY >
  * ANTHROPIC_AUTH_TOKEN > apiKeyHelper > CLAUDE_CODE_OAUTH_TOKEN). They MUST be
@@ -86,6 +93,31 @@ export function mapApprovalPolicyToPermissionMode(
   return 'default'
 }
 
+/**
+ * Claude Code (the subscription engine) only accepts Anthropic models. A kun
+ * thread can carry any provider's model id (e.g. `deepseek-v4-flash` from a
+ * thread created while a non-subscription provider was active); passing that to
+ * the SDK fails with "model may not exist / no access". Treat a model as
+ * SDK-compatible only when it is a Claude id.
+ */
+export function isAnthropicModel(model: string | undefined): boolean {
+  return typeof model === 'string' && /^claude/i.test(model.trim())
+}
+
+/**
+ * Pick the model to hand the SDK: the thread's own model when it's a Claude id,
+ * else the runtime's default Claude model, else undefined (let Claude Code use
+ * its built-in default). Guarantees we never send a non-Anthropic id to the SDK.
+ */
+export function resolveSdkModel(
+  threadModel: string | undefined,
+  defaultModel: string | undefined
+): string | undefined {
+  if (isAnthropicModel(threadModel)) return threadModel!.trim()
+  if (isAnthropicModel(defaultModel)) return defaultModel!.trim()
+  return undefined
+}
+
 /** Compose kun's persona append text for the claude_code system-prompt preset. */
 export function buildClaudeSystemPrompt(
   kunSystemPrompt: string,
@@ -114,16 +146,20 @@ export type ToolApprovalDecider = (
  */
 export function buildCanUseTool(decide: ToolApprovalDecider): SdkCanUseTool {
   return async (toolName, input): Promise<SdkPermissionResult> => {
+    const safeInput = input ?? {}
     try {
-      const decision = await decide(toolName, input ?? {})
+      const decision = await decide(toolName, safeInput)
       if (decision.allow) {
-        return decision.updatedInput
-          ? { behavior: 'allow', updatedInput: decision.updatedInput }
-          : { behavior: 'allow' }
+        // The SDK's runtime schema requires `updatedInput` to be a record on an
+        // allow result — its TS type marks it optional, but validation rejects a
+        // missing value (seen as a ZodError when the model calls AskUserQuestion).
+        // Echo the original input through when kun doesn't rewrite it.
+        return { behavior: 'allow', updatedInput: decision.updatedInput ?? safeInput }
       }
+      // The deny variant requires a non-empty `message`.
       return {
         behavior: 'deny',
-        ...(decision.message ? { message: decision.message } : {}),
+        message: decision.message ?? 'Denied by kun permission policy',
         ...(decision.interrupt ? { interrupt: true } : {})
       }
     } catch (err) {
@@ -163,6 +199,7 @@ export function assembleSdkOptions(params: AssembleSdkOptionsParams): SdkQueryOp
     cwd: params.cwd,
     systemPrompt: buildClaudeSystemPrompt(params.kunSystemPrompt, params.threadPersona),
     allowedTools,
+    disallowedTools: [...DEFAULT_SDK_DISALLOWED_TOOLS],
     permissionMode: mapApprovalPolicyToPermissionMode(params.approvalPolicy, params.planMode),
     includePartialMessages: true,
     env: buildScopedEnv(params.baseEnv, params.oauthToken),

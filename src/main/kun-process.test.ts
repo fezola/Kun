@@ -412,7 +412,7 @@ describe('reclaimKunPort', () => {
     }
   })
 
-  it('does not kill the currently managed Kun child while resolving an occupied port', async () => {
+  it('keeps the configured endpoint when the currently managed Kun child owns it', async () => {
     const probe = createServer()
     await new Promise<void>((resolve, reject) => {
       probe.once('error', reject)
@@ -443,8 +443,7 @@ describe('reclaimKunPort', () => {
     await module.startKunChild(settings)
     const resolved = await module.resolveAvailableKunPort(preferredPort)
 
-    expect(resolved.changed).toBe(true)
-    expect(resolved.port).not.toBe(preferredPort)
+    expect(resolved).toEqual({ port: preferredPort, changed: false })
     expect(module.isKunChildRunning()).toBe(true)
     expect(await readKunLog()).not.toContain(`killing stale kun process holding port ${preferredPort}`)
   })

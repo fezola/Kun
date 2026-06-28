@@ -97,13 +97,6 @@ type WorkspaceContextMenuState = {
   y: number
 }
 
-type ThreadPreviewState = {
-  thread: NormalizedThread
-  worktreeRecord?: SidebarThreadWorktreeRecord
-  x: number
-  y: number
-}
-
 type ThreadPreviewAnchorRect = Pick<DOMRect, 'left' | 'right' | 'top' | 'height'>
 
 const THREAD_PREVIEW_WIDTH = 320
@@ -501,7 +494,6 @@ export function SidebarProjectsSection({
   const [searchOpen, setSearchOpen] = useState(false)
   const [threadContextMenu, setThreadContextMenu] = useState<ThreadContextMenuState | null>(null)
   const [workspaceContextMenu, setWorkspaceContextMenu] = useState<WorkspaceContextMenuState | null>(null)
-  const [threadPreview, setThreadPreview] = useState<ThreadPreviewState | null>(null)
   const [actionDialog, setActionDialog] = useState<SidebarActionDialogState | null>(null)
   const [renameThreadDialog, setRenameThreadDialog] = useState<RenameThreadDialogState | null>(null)
   const [draftHistoryByWorkspace, setDraftHistoryByWorkspace] = useState<Record<string, SddDraftHistoryItem[]>>({})
@@ -619,7 +611,6 @@ export function SidebarProjectsSection({
   }
 
   const openActionDialog = (dialog: Omit<SidebarActionDialogState, 'submitting'>): void => {
-    setThreadPreview(null)
     setActionDialog({ ...dialog, submitting: false })
   }
 
@@ -797,7 +788,6 @@ export function SidebarProjectsSection({
     event.preventDefault()
     event.stopPropagation()
     const worktreeRecord = worktreeRecordForSidebarThread(thread, threadWorktrees)
-    setThreadPreview(null)
     setWorkspaceContextMenu(null)
     setThreadContextMenu({
       thread,
@@ -813,7 +803,6 @@ export function SidebarProjectsSection({
   ): void => {
     event.preventDefault()
     event.stopPropagation()
-    setThreadPreview(null)
     setThreadContextMenu(null)
     setWorkspaceContextMenu({
       workspacePath,
@@ -822,27 +811,11 @@ export function SidebarProjectsSection({
     })
   }
 
-  const openThreadPreview = (
-    event: ReactMouseEvent<HTMLDivElement>,
-    thread: NormalizedThread,
-    worktreeRecord?: SidebarThreadWorktreeRecord
-  ): void => {
-    if (threadContextMenu || workspaceContextMenu || actionDialog || renameThreadDialog) return
-    const position = resolveThreadPreviewPosition(event.currentTarget.getBoundingClientRect(), {
-      width: window.innerWidth,
-      height: window.innerHeight
-    })
-    setThreadPreview({
-      thread,
-      ...(worktreeRecord ? { worktreeRecord } : {}),
-      x: position.x,
-      y: position.y
-    })
-  }
+  // Thread hover preview card removed: it showed no useful content. Keep no-op
+  // handlers so row hover wiring stays intact without rendering a popup.
+  const openThreadPreview = (): void => {}
 
-  const closeThreadPreview = (): void => {
-    setThreadPreview(null)
-  }
+  const closeThreadPreview = (): void => {}
 
   const openWorkspaceInSystem = async (workspacePath: string): Promise<void> => {
     if (typeof window === 'undefined' || typeof window.kunGui?.openEditorPath !== 'function') return
@@ -1084,7 +1057,7 @@ export function SidebarProjectsSection({
                         }
                         onSelect={() => onSelectThread(thread.id)}
                         onContextMenu={(event) => openThreadContextMenu(event, thread)}
-                        onPreviewOpen={(event, worktreeRecord) => openThreadPreview(event, thread, worktreeRecord)}
+                        onPreviewOpen={openThreadPreview}
                         onPreviewClose={closeThreadPreview}
                         onPin={() => void handlePinThread(thread, thread.pinned !== true)}
                         onRename={() => openRenameThreadDialog(thread)}
@@ -1142,14 +1115,6 @@ export function SidebarProjectsSection({
           onNewThread={() => onCreateThreadInWorkspace(workspaceContextMenu.workspacePath)}
           onOpenInSystem={() => void openWorkspaceInSystem(workspaceContextMenu.workspacePath)}
           onRemove={() => void handleRemoveWorkspace(workspaceContextMenu.workspacePath)}
-          t={t}
-        />
-      ) : null}
-
-      {threadPreview ? (
-        <ThreadPreviewCard
-          state={threadPreview}
-          locale={locale}
           t={t}
         />
       ) : null}
@@ -1665,71 +1630,6 @@ function WorkspaceContextMenu({
         danger
         onClick={() => run(onRemove)}
       />
-    </div>
-  )
-}
-
-function ThreadPreviewCard({
-  state,
-  locale,
-  t
-}: {
-  state: ThreadPreviewState
-  locale: string
-  t: (k: string, opts?: Record<string, unknown>) => string
-}): ReactElement {
-  const branch = state.worktreeRecord?.branch?.trim() ?? ''
-  const workspace = sidebarWorkspacePathForThread(
-    state.thread,
-    state.worktreeRecord ? { [state.thread.id]: state.worktreeRecord } : {}
-  )
-  const updatedLabel = formatRelativeTime(state.thread.updatedAt, locale)
-  const preview = state.thread.preview?.trim()
-  const summary = state.thread.summary?.trim()
-
-  return (
-    <div
-      role="tooltip"
-      className="ds-no-drag pointer-events-none fixed z-40 max-h-[220px] w-[320px] overflow-hidden rounded-[18px] border border-ds-border bg-ds-card/95 p-3 text-[13px] text-ds-ink shadow-[0_18px_54px_rgba(20,47,95,0.18)] backdrop-blur-xl dark:bg-ds-card/95"
-      style={{ left: state.x, top: state.y }}
-    >
-      <div className="flex items-start gap-2">
-        {state.thread.pinned === true ? (
-          <Pin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent" strokeWidth={1.9} />
-        ) : null}
-        <div className="min-w-0 flex-1">
-          <div className="line-clamp-2 text-[14px] font-semibold leading-5 text-ds-ink">
-            {state.thread.title}
-          </div>
-          <div className="mt-2 flex items-center gap-1.5 text-ds-muted">
-            <Folder className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
-            <span className="min-w-0 truncate">{workspaceLabelFromPath(workspace || state.thread.workspace || '')}</span>
-          </div>
-          {branch ? (
-            <div className="mt-1.5 flex items-center gap-1.5 text-ds-muted">
-              <GitBranch className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
-              <span className="min-w-0 truncate">{branch}</span>
-            </div>
-          ) : null}
-          <div className="mt-1.5 text-[12px] text-ds-faint">
-            {t('sidebarThreadPreviewUpdated', { time: updatedLabel })}
-          </div>
-          {summary ? (
-            <p className="mt-2 line-clamp-4 text-[12.5px] leading-5 text-ds-ink/90">
-              {summary}
-            </p>
-          ) : null}
-          {preview ? (
-            <p className="mt-2 line-clamp-3 text-[12.5px] leading-5 text-ds-muted">
-              {preview}
-            </p>
-          ) : (
-            <p className="mt-2 text-[12.5px] leading-5 text-ds-faint">
-              {t('sidebarThreadPreviewEmpty')}
-            </p>
-          )}
-        </div>
-      </div>
     </div>
   )
 }
