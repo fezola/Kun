@@ -26,8 +26,8 @@ describe('loadKunDiagnostics', () => {
   it('loads all memories by default for global settings diagnostics', async () => {
     const memoryRecords = [{ id: 'mem_1', content: 'remember this' }] as any
     const provider = {
-      getRuntimeInfo: async () => null,
-      getToolDiagnostics: async () => null,
+      getRuntimeInfo: async () => null as any,
+      getToolDiagnostics: async () => null as any,
       listMemories: async (options?: { all?: boolean }) => {
         expect(options).toEqual({ all: true, includeDeleted: false })
         return memoryRecords
@@ -43,8 +43,8 @@ describe('loadKunDiagnostics', () => {
   it('can scope memory loading to the current workspace when explicitly requested', async () => {
     const memoryRecords = [{ id: 'mem_ws', content: 'workspace only' }] as any
     const provider = {
-      getRuntimeInfo: async () => null,
-      getToolDiagnostics: async () => null,
+      getRuntimeInfo: async () => null as any,
+      getToolDiagnostics: async () => null as any,
       listMemories: async (options?: { all?: boolean }) => {
         expect(options).toEqual({ includeDeleted: false })
         return memoryRecords

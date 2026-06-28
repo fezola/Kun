@@ -16,6 +16,7 @@ const applyThemeLibMock = vi.hoisted(() => ({
   applyCursorSpotlightColor: vi.fn(),
   applyTheme: vi.fn(),
   applyUiFontScale: vi.fn(),
+  applyChatContentMaxWidth: vi.fn(),
   applyDocumentLocale: vi.fn()
 }))
 
