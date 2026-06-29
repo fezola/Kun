@@ -7,12 +7,18 @@
  * the agent runs generate → lint → repair without human prompting.
  */
 import type { CanvasDocument, CanvasShape, Fill } from './canvas-types'
+import { isShapeEffectivelyVisible } from './canvas-editability'
 import type { DesignSystem, DesignToken } from './design-system-types'
 
 export type LintFinding = {
   code: 'off-token-color' | 'low-contrast' | 'small-hit-target'
   message: string
   shapeId?: string
+}
+
+export type LintDesignSystemOptions = {
+  /** Limit the audit to these shapes and their descendants. Empty/invalid ids fall back to the whole board. */
+  scopeIds?: Iterable<string>
 }
 
 function hexToRgb(hex: string): [number, number, number] | null {
@@ -57,8 +63,27 @@ function nearestAncestorFill(doc: CanvasDocument, shape: CanvasShape): string | 
   return null
 }
 
-export function lintDesignSystem(doc: CanvasDocument, system: DesignSystem): LintFinding[] {
+function collectLintScope(doc: CanvasDocument, scopeIds: Iterable<string> | undefined): Set<string> | null {
+  if (!scopeIds) return null
+  const scope = new Set<string>()
+  const visit = (id: string): void => {
+    if (id === doc.rootId || scope.has(id)) return
+    const shape = doc.objects[id]
+    if (!shape) return
+    scope.add(id)
+    for (const childId of shape.children) visit(childId)
+  }
+  for (const id of scopeIds) visit(id)
+  return scope.size > 0 ? scope : null
+}
+
+export function lintDesignSystem(
+  doc: CanvasDocument,
+  system: DesignSystem,
+  options?: LintDesignSystemOptions
+): LintFinding[] {
   const findings: LintFinding[] = []
+  const scope = collectLintScope(doc, options?.scopeIds)
   const colorTokens = Object.values(system.tokens).filter(
     (t): t is Extract<DesignToken, { kind: 'color' }> => t.kind === 'color'
   )
@@ -66,6 +91,8 @@ export function lintDesignSystem(doc: CanvasDocument, system: DesignSystem): Lin
 
   for (const shape of Object.values(doc.objects)) {
     if (shape.id === doc.rootId) continue
+    if (scope && !scope.has(shape.id)) continue
+    if (!isShapeEffectivelyVisible(doc.objects, shape.id)) continue
 
     // off-token-color: a hardcoded color equals a token's value but isn't bound to it.
     const fill = solidFill(shape)

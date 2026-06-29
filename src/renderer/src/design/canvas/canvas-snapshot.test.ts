@@ -60,6 +60,24 @@ describe('snapshotCanvas', () => {
     expect(snap.shapes[0].textContent).toBe('hello world')
   })
 
+  it('caps linear shape points in the snapshot while preserving endpoints', () => {
+    const doc = createEmptyDocument()
+    const root = doc.objects[doc.rootId]
+    const draw = createDefaultShape('draw', 10, 20)
+    draw.width = 119
+    draw.height = 0
+    draw.points = Array.from({ length: 120 }, (_, index) => ({ x: index, y: 0 }))
+    doc.objects[draw.id] = { ...draw, parentId: doc.rootId }
+    doc.objects[doc.rootId] = { ...root, children: [draw.id] }
+
+    const shape = snapshotCanvas(doc).shapes[0]
+
+    expect(shape.points).toHaveLength(48)
+    expect(shape.points?.[0]).toEqual({ x: 10, y: 20 })
+    expect(shape.points?.[shape.points.length - 1]).toEqual({ x: 129, y: 20 })
+    expect(shape.pointsOmitted).toBe(72)
+  })
+
   it('flags selected shapes so "this panel" resolves to an id', () => {
     const doc = createEmptyDocument()
     const root = doc.objects[doc.rootId]
@@ -72,6 +90,54 @@ describe('snapshotCanvas', () => {
     const snap = snapshotCanvas(doc, new Set([b.id]))
     expect(snap.shapes[0]).not.toHaveProperty('selected')
     expect(snap.shapes[1].selected).toBe(true)
+  })
+
+  it('marks viewport-visible and near-selection shapes as local canvas context', () => {
+    const doc = createEmptyDocument()
+    const root = doc.objects[doc.rootId]
+    const inView = createDefaultShape('rect', 20, 20)
+    const selected = createDefaultShape('rect', 1000, 1000)
+    const nearby = createDefaultShape('rect', 1120, 1000)
+    doc.objects[inView.id] = { ...inView, parentId: doc.rootId, name: 'Visible' }
+    doc.objects[selected.id] = { ...selected, parentId: doc.rootId, name: 'Selected' }
+    doc.objects[nearby.id] = { ...nearby, parentId: doc.rootId, name: 'Neighbor' }
+    doc.objects[doc.rootId] = { ...root, children: [inView.id, selected.id, nearby.id] }
+
+    const snap = snapshotCanvas(doc, new Set([selected.id]), {
+      viewBox: { x: 0, y: 0, width: 300, height: 300 },
+      selectedNeighborPadding: 160
+    })
+
+    expect(snap.shapes.find((shape) => shape.id === inView.id)?.inView).toBe(true)
+    expect(snap.shapes.find((shape) => shape.id === selected.id)?.selected).toBe(true)
+    expect(snap.shapes.find((shape) => shape.id === nearby.id)?.nearSelection).toBe(true)
+  })
+
+  it('keeps selected, nearby, and viewport-visible shapes when maxShapes truncates', () => {
+    const doc = createEmptyDocument()
+    const root = doc.objects[doc.rootId]
+    const farFirst = createDefaultShape('rect', -1000, -1000)
+    const inView = createDefaultShape('rect', 20, 20)
+    const nearby = createDefaultShape('rect', 1160, 1000)
+    const selected = createDefaultShape('rect', 1000, 1000)
+    const farLast = createDefaultShape('rect', 2000, 2000)
+    for (const shape of [farFirst, inView, nearby, selected, farLast]) {
+      doc.objects[shape.id] = { ...shape, parentId: doc.rootId }
+    }
+    doc.objects[doc.rootId] = {
+      ...root,
+      children: [farFirst.id, inView.id, nearby.id, selected.id, farLast.id]
+    }
+
+    const snap = snapshotCanvas(doc, new Set([selected.id]), {
+      maxShapes: 3,
+      viewBox: { x: 0, y: 0, width: 300, height: 300 },
+      selectedNeighborPadding: 240
+    })
+
+    expect(snap.shapeCount).toBe(5)
+    expect(snap.omitted).toBe(2)
+    expect(snap.shapes.map((shape) => shape.id)).toEqual([selected.id, nearby.id, inView.id])
   })
 
   it('flags AI image holders (only when set)', () => {

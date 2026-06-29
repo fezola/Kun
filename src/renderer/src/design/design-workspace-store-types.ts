@@ -4,6 +4,7 @@ import type {
   DesignArtifactVersion,
   DesignCanvasView,
   DesignDocument,
+  DesignDirectionStatus,
   DesignIntentMode,
   DesignViewport
 } from './design-types'
@@ -110,6 +111,8 @@ export type DesignWorkspaceState = {
   renameArtifact: (artifactId: string, title: string) => void
   /** Overwrite a version's summary with the agent's actual end-of-turn description. */
   setVersionSummary: (artifactId: string, versionId: string, summary: string) => void
+  /** Accept/archive a Stitch-style design direction and persist every screen in it. */
+  setDirectionStatus: (directionId: string, status: DesignDirectionStatus) => void
   updateArtifactNode: (artifactId: string, patch: Partial<DesignArtifactNode>) => void
   duplicateArtifact: (artifactId: string) => Promise<void>
   selectArtifactVersion: (artifactId: string, versionId: string) => void

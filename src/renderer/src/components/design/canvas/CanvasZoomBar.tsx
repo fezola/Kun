@@ -1,11 +1,24 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
-import { Undo2, Redo2, ZoomIn, ZoomOut, Maximize, Focus, ScanSearch } from 'lucide-react'
+import {
+  Check,
+  Focus,
+  Grid3X3,
+  Magnet,
+  Maximize,
+  Redo2,
+  ScanSearch,
+  Undo2,
+  ZoomIn,
+  ZoomOut
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useCanvasViewportStore } from '../../../design/canvas/canvas-viewport-store'
 import { useCanvasShapeStore } from '../../../design/canvas/canvas-shape-store'
-import { useCanvasSelectionStore } from '../../../design/canvas/canvas-selection-store'
 import { useCanvasUndoStore } from '../../../design/canvas/canvas-undo-store'
-import { getSelectionBounds } from '../../../design/canvas/canvas-hit-test'
+import {
+  zoomCanvasToContent,
+  zoomCanvasToEditableSelection
+} from '../../../design/canvas/canvas-focus'
 
 const isMac = navigator.platform.startsWith('Mac')
 const MOD = isMac ? '⌘' : 'Ctrl+'
@@ -14,6 +27,8 @@ function CanvasZoomBarInner() {
   const { t } = useTranslation('common')
   const vbox = useCanvasViewportStore((s) => s.vbox)
   const containerWidth = useCanvasViewportStore((s) => s.containerWidth)
+  const gridVisible = useCanvasViewportStore((s) => s.gridVisible)
+  const snapEnabled = useCanvasViewportStore((s) => s.snapEnabled)
   const undoCount = useCanvasUndoStore((s) => s.undoStack.length)
   const redoCount = useCanvasUndoStore((s) => s.redoStack.length)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -52,19 +67,17 @@ function CanvasZoomBarInner() {
   }, [])
 
   const zoomToFit = useCallback(() => {
-    const doc = useCanvasShapeStore.getState().document
-    const root = doc.objects[doc.rootId]
-    if (!root) return
-    const bounds = getSelectionBounds(doc.objects, new Set(root.children))
-    if (bounds) useCanvasViewportStore.getState().zoomToFit(bounds)
+    zoomCanvasToContent()
   }, [])
 
   const zoomToSelection = useCallback(() => {
-    const doc = useCanvasShapeStore.getState().document
-    const { selectedIds } = useCanvasSelectionStore.getState()
-    if (selectedIds.size === 0) return
-    const bounds = getSelectionBounds(doc.objects, selectedIds)
-    if (bounds) useCanvasViewportStore.getState().zoomToFit(bounds, 60)
+    zoomCanvasToEditableSelection()
+  }, [])
+  const toggleGrid = useCallback(() => {
+    useCanvasViewportStore.getState().toggleGrid()
+  }, [])
+  const toggleSnap = useCallback(() => {
+    useCanvasViewportStore.getState().toggleSnap()
   }, [])
 
   const undo = useCallback(() => useCanvasShapeStore.getState().undo(), [])
@@ -82,6 +95,15 @@ function CanvasZoomBarInner() {
     { labelKey: 'canvasZoomTo100', shortcut: '⇧0', icon: Maximize, action: zoomTo100 },
     { labelKey: 'canvasZoomFit', shortcut: '⇧1', icon: Focus, action: zoomToFit },
     { labelKey: 'canvasZoomToSelection', shortcut: '⇧2', icon: ScanSearch, action: zoomToSelection }
+  ]
+  const toggleItems: {
+    labelKey: string
+    icon: typeof Grid3X3
+    active: boolean
+    action: () => void
+  }[] = [
+    { labelKey: 'canvasGridToggle', icon: Grid3X3, active: gridVisible, action: toggleGrid },
+    { labelKey: 'canvasSnap', icon: Magnet, active: snapEnabled, action: toggleSnap }
   ]
 
   return (
@@ -103,6 +125,31 @@ function CanvasZoomBarInner() {
               <item.icon className="h-4 w-4 shrink-0 text-ds-muted" strokeWidth={1.8} />
               <span className="flex-1 text-left">{t(item.labelKey)}</span>
               <kbd className="shrink-0 text-[11px] text-ds-faint">{item.shortcut}</kbd>
+            </button>
+          ))}
+          <div className="my-1 h-px bg-ds-border-muted/80" />
+          {toggleItems.map((item) => (
+            <button
+              key={item.labelKey}
+              type="button"
+              aria-pressed={item.active}
+              className="flex w-full items-center gap-2 px-3 py-2 text-[13px] text-ds-ink transition-colors hover:bg-ds-hover dark:hover:bg-white/8"
+              onClick={() => {
+                item.action()
+              }}
+            >
+              <item.icon className="h-4 w-4 shrink-0 text-ds-muted" strokeWidth={1.8} />
+              <span className="flex-1 text-left">{t(item.labelKey)}</span>
+              <span
+                className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${
+                  item.active
+                    ? 'border-accent bg-accent text-white'
+                    : 'border-ds-border-muted text-transparent'
+                }`}
+                aria-hidden="true"
+              >
+                <Check className="h-2.5 w-2.5" strokeWidth={2.4} />
+              </span>
             </button>
           ))}
         </div>

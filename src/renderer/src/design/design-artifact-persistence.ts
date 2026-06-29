@@ -10,7 +10,9 @@ import type { WorkspaceEntry } from '@shared/workspace-file'
 import {
   defaultDesignArtifactNode,
   type DesignArtifact,
-  type DesignArtifactNode
+  type DesignDirection,
+  type DesignArtifactNode,
+  type DesignPrototypeLink
 } from './design-types'
 
 const DESIGN_DIR = '.kun-design'
@@ -73,6 +75,46 @@ function parseNode(value: unknown): DesignArtifactNode | undefined {
   }
 }
 
+function parsePrototypeLinks(value: unknown): DesignPrototypeLink[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const links = value
+    .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+    .map((item) => {
+      const targetTitle = isStr(item.targetTitle) ? item.targetTitle.trim() : ''
+      const targetArtifactId = isStr(item.targetArtifactId) ? item.targetArtifactId.trim() : ''
+      const href = isStr(item.href) ? item.href.trim() : ''
+      const label = isStr(item.label) ? item.label.trim() : ''
+      if (!targetTitle && !targetArtifactId) return null
+      return {
+        targetTitle: targetTitle || targetArtifactId,
+        ...(targetArtifactId ? { targetArtifactId } : {}),
+        ...(href ? { href } : {}),
+        ...(label ? { label } : {})
+      }
+    })
+    .filter((item): item is DesignPrototypeLink => item !== null)
+  return links.length > 0 ? links : undefined
+}
+
+function parseDirection(value: unknown): DesignDirection | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const item = value as Record<string, unknown>
+  const id = isStr(item.id) ? item.id.trim() : ''
+  const name = isStr(item.name) ? item.name.trim() : ''
+  if (!id || !name) return undefined
+  const status =
+    item.status === 'active' || item.status === 'accepted' || item.status === 'archived'
+      ? item.status
+      : undefined
+  const createdAt = isStr(item.createdAt) ? item.createdAt : ''
+  return {
+    id,
+    name,
+    ...(status ? { status } : {}),
+    ...(createdAt ? { createdAt } : {})
+  }
+}
+
 /** Parse a persisted meta.json into a DesignArtifact, defaulting from the dir id. */
 export function parseArtifactMeta(raw: string, dirId: string): DesignArtifact | null {
   let o: Record<string, unknown>
@@ -103,6 +145,8 @@ export function parseArtifactMeta(raw: string, dirId: string): DesignArtifact | 
       ? o.previewStatus
       : undefined
   const role = o.role === 'design-system' || o.role === 'logo' ? o.role : undefined
+  const prototypeLinks = parsePrototypeLinks(o.prototypeLinks)
+  const direction = parseDirection(o.direction)
   return {
     id,
     kind,
@@ -114,6 +158,8 @@ export function parseArtifactMeta(raw: string, dirId: string): DesignArtifact | 
     ...(kind === 'html' ? { designMdPath: isStr(o.designMdPath) ? o.designMdPath : artifactDesignMdPathOf(relativePath) } : {}),
     ...(previewStatus ? { previewStatus } : {}),
     ...(parsedNode ? { node: parsedNode } : {}),
+    ...(prototypeLinks ? { prototypeLinks } : {}),
+    ...(direction ? { direction } : {}),
     implementedAt: isStr(o.implementedAt) ? o.implementedAt : undefined,
     implementedThreadId: isStr(o.implementedThreadId) ? o.implementedThreadId : undefined,
     implementedDesignSystemHash: isStr(o.implementedDesignSystemHash) ? o.implementedDesignSystemHash : undefined,

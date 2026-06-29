@@ -1,5 +1,7 @@
-import { memo, useCallback, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { CanvasShape, Rect } from '../../../design/canvas/canvas-types'
+import { ROOT_SHAPE_ID } from '../../../design/canvas/canvas-types'
 import { shapeGeometry } from '../../../design/canvas/canvas-types'
 import { getSelectionBounds } from '../../../design/canvas/canvas-hit-test'
 import {
@@ -9,15 +11,19 @@ import {
   type ShapeBoundsLike
 } from '../../../design/canvas/canvas-resize'
 import { angleFromPivot, computeRotation } from '../../../design/canvas/canvas-rotate'
-import type { SnapGuide } from '../../../design/canvas/canvas-snap'
-import { useCanvasShapeStore } from '../../../design/canvas/canvas-shape-store'
+import { findResizeSnaps, type SnapGuide } from '../../../design/canvas/canvas-snap'
+import { useCanvasShapeStore, withDescendants } from '../../../design/canvas/canvas-shape-store'
 import { useCanvasUndoStore } from '../../../design/canvas/canvas-undo-store'
+import { useCanvasSelectionStore } from '../../../design/canvas/canvas-selection-store'
+import { useCanvasViewportStore } from '../../../design/canvas/canvas-viewport-store'
 import { useDesignAssistantStore } from '../../../design/design-assistant-store'
+import { filterEditableShapeIds } from '../../../design/canvas/canvas-editability'
 import { LinearPointEditor } from './LinearPointEditor'
 
 const HANDLE_SIZE = 8
 const ROTATE_HANDLE_SIZE = 20
 const ROTATE_HANDLE_OFFSET = 16
+const ROTATE_HANDLE_DOT_RADIUS = 5
 const SELECTION_COLOR = '#3b82f6'
 
 type RotateCorner = 'nw' | 'ne' | 'se' | 'sw'
@@ -55,10 +61,12 @@ function SelectionOverlayInner({
   zoom: number
   viewBox: { x: number; y: number; width: number; height: number }
 }) {
+  const { t } = useTranslation('common')
   const sw = Math.max(1, 1 / zoom)
   const hs = HANDLE_SIZE / zoom
   const rs = ROTATE_HANDLE_SIZE / zoom
   const ro = ROTATE_HANDLE_OFFSET / zoom
+  const rr = ROTATE_HANDLE_DOT_RADIUS / zoom
 
   const resizeStateRef = useRef<ResizeDragState | null>(null)
   const rotateStateRef = useRef<RotateDragState | null>(null)
@@ -79,15 +87,19 @@ function SelectionOverlayInner({
   }, [aiActionAt, aiAffectedIds])
 
   const hoverShape = hoverTargetId && !selectedIds.has(hoverTargetId) ? objects[hoverTargetId] : null
-  const bounds = selectedIds.size > 0 ? getSelectionBounds(objects, selectedIds) : null
+  const editableSelectedIds = useMemo(() => {
+    if (!objects[ROOT_SHAPE_ID]) return new Set<string>()
+    return new Set(filterEditableShapeIds({ version: 2, rootId: ROOT_SHAPE_ID, objects }, selectedIds))
+  }, [objects, selectedIds])
+  const bounds = editableSelectedIds.size > 0 ? getSelectionBounds(objects, editableSelectedIds) : null
 
   // Single selected arrow/line → point editing mode (excalidraw-style). We hide
   // the bbox + 8 resize handles + rotate handles entirely; LinearPointEditor
   // draws vertex/midpoint dots instead. Marquee, snap guides, and AI glow still
   // render below.
   const linearEditTarget = (() => {
-    if (selectedIds.size !== 1) return null
-    const onlyId = selectedIds.values().next().value as string | undefined
+    if (editableSelectedIds.size !== 1) return null
+    const onlyId = editableSelectedIds.values().next().value as string | undefined
     if (!onlyId) return null
     const s = objects[onlyId]
     if (!s) return null
@@ -103,11 +115,11 @@ function SelectionOverlayInner({
       e.preventDefault()
 
       const store = useCanvasShapeStore.getState()
-      const selBounds = getSelectionBounds(store.document.objects, selectedIds)
+      const selBounds = getSelectionBounds(store.document.objects, editableSelectedIds)
       if (!selBounds) return
 
       const shapeStarts = new Map<string, ShapeBoundsLike>()
-      for (const id of selectedIds) {
+      for (const id of editableSelectedIds) {
         const s = store.document.objects[id]
         if (s) shapeStarts.set(id, { x: s.x, y: s.y, width: s.width, height: s.height })
       }
@@ -125,13 +137,33 @@ function SelectionOverlayInner({
         if (!state) return
         const dx = (ev.clientX - state.startClientX) / zoom
         const dy = (ev.clientY - state.startClientY) / zoom
-        const endBounds = computeResizedBounds(
+        let endBounds = computeResizedBounds(
           state.handle,
           state.startBounds,
           dx,
           dy,
           ev.shiftKey
         )
+        const viewport = useCanvasViewportStore.getState()
+        if (viewport.snapEnabled) {
+          const doc = useCanvasShapeStore.getState().document
+          const resizingIds = new Set(withDescendants(doc.objects, state.shapeStarts.keys()))
+          const staticShapes: Rect[] = []
+          for (const id of Object.keys(doc.objects)) {
+            if (id === doc.rootId || resizingIds.has(id)) continue
+            const s = doc.objects[id]
+            staticShapes.push({ x: s.x, y: s.y, width: s.width, height: s.height })
+          }
+          const snap = findResizeSnaps(
+            endBounds,
+            state.handle,
+            staticShapes,
+            viewport.getZoom(),
+            viewport.gridVisible ? 10 : null
+          )
+          endBounds = snap.bounds
+          useCanvasSelectionStore.getState().setSnapGuides(snap.guides)
+        }
         const newShapeBounds = scaleShapesToBounds(state.shapeStarts, state.startBounds, endBounds)
         const shapeStore = useCanvasShapeStore.getState()
         for (const [id, b] of newShapeBounds) {
@@ -165,6 +197,7 @@ function SelectionOverlayInner({
           }
         }
         resizeStateRef.current = null
+        useCanvasSelectionStore.getState().setSnapGuides([])
         window.removeEventListener('pointermove', onMove)
         window.removeEventListener('pointerup', onUp)
       }
@@ -172,7 +205,7 @@ function SelectionOverlayInner({
       window.addEventListener('pointermove', onMove)
       window.addEventListener('pointerup', onUp)
     },
-    [selectedIds, zoom]
+    [editableSelectedIds, zoom]
   )
 
   const handleRotatePointerDown = useCallback(
@@ -181,7 +214,7 @@ function SelectionOverlayInner({
       e.preventDefault()
 
       const store = useCanvasShapeStore.getState()
-      const selBounds = getSelectionBounds(store.document.objects, selectedIds)
+      const selBounds = getSelectionBounds(store.document.objects, editableSelectedIds)
       if (!selBounds) return
 
       // Pivot in CLIENT coordinates so atan2 works directly off ev.clientX/Y.
@@ -199,7 +232,7 @@ function SelectionOverlayInner({
           svgRect.height
 
       const shapeStartRotations = new Map<string, number>()
-      for (const id of selectedIds) {
+      for (const id of editableSelectedIds) {
         const s = store.document.objects[id]
         if (s) shapeStartRotations.set(id, s.rotation || 0)
       }
@@ -254,7 +287,7 @@ function SelectionOverlayInner({
       window.addEventListener('pointermove', onMove)
       window.addEventListener('pointerup', onUp)
     },
-    [selectedIds, zoom]
+    [editableSelectedIds]
   )
 
   const resizeHandles: { pos: ResizeHandle; cx: number; cy: number }[] = bounds
@@ -314,18 +347,40 @@ function SelectionOverlayInner({
 
       {showBoxHandles &&
         rotateHandles.map(({ corner, cx, cy }) => (
-          <rect
-            key={`rot-${corner}`}
-            x={cx - rs / 2}
-            y={cy - rs / 2}
-            width={rs}
-            height={rs}
-            fill="transparent"
-            style={{ cursor: 'grab' }}
-            data-rotate={corner}
-            pointerEvents="all"
-            onPointerDown={handleRotatePointerDown}
-          />
+          <g key={`rot-${corner}`}>
+            <circle
+              cx={cx}
+              cy={cy}
+              r={rr}
+              fill="#ffffff"
+              stroke={SELECTION_COLOR}
+              strokeWidth={sw}
+              pointerEvents="none"
+            />
+            <path
+              d={rotateHandleGlyphPath(corner, cx, cy, rr * 1.45)}
+              fill="none"
+              stroke={SELECTION_COLOR}
+              strokeWidth={Math.max(1.25 / zoom, sw)}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              pointerEvents="none"
+            />
+            <rect
+              x={cx - rs / 2}
+              y={cy - rs / 2}
+              width={rs}
+              height={rs}
+              fill="transparent"
+              style={{ cursor: 'grab' }}
+              data-rotate={corner}
+              pointerEvents="all"
+              onPointerDown={handleRotatePointerDown}
+              aria-label={t('canvasRotateHandle')}
+            >
+              <title>{t('canvasRotateHandle')}</title>
+            </rect>
+          </g>
         ))}
 
       {showBoxHandles &&
@@ -446,6 +501,19 @@ function handleCursor(pos: ResizeHandle): string {
     case 'e':
     case 'w':
       return 'ew-resize'
+  }
+}
+
+function rotateHandleGlyphPath(corner: RotateCorner, cx: number, cy: number, r: number): string {
+  switch (corner) {
+    case 'nw':
+      return `M ${cx + r} ${cy} A ${r} ${r} 0 0 0 ${cx} ${cy + r} M ${cx} ${cy + r} L ${cx + r * 0.15} ${cy + r * 0.45} M ${cx} ${cy + r} L ${cx + r * 0.4} ${cy + r * 0.95}`
+    case 'ne':
+      return `M ${cx} ${cy + r} A ${r} ${r} 0 0 0 ${cx - r} ${cy} M ${cx - r} ${cy} L ${cx - r * 0.45} ${cy + r * 0.15} M ${cx - r} ${cy} L ${cx - r * 0.95} ${cy + r * 0.4}`
+    case 'se':
+      return `M ${cx - r} ${cy} A ${r} ${r} 0 0 0 ${cx} ${cy - r} M ${cx} ${cy - r} L ${cx - r * 0.15} ${cy - r * 0.45} M ${cx} ${cy - r} L ${cx - r * 0.4} ${cy - r * 0.95}`
+    case 'sw':
+      return `M ${cx} ${cy - r} A ${r} ${r} 0 0 0 ${cx + r} ${cy} M ${cx + r} ${cy} L ${cx + r * 0.45} ${cy - r * 0.15} M ${cx + r} ${cy} L ${cx + r * 0.95} ${cy - r * 0.4}`
   }
 }
 

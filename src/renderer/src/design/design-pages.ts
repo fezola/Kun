@@ -1,7 +1,7 @@
-import { WRITE_PROTOTYPE_DEFAULT_PROMPT, WRITE_PROTOTYPE_MAX_TEXT_CHARS } from '@shared/write-prototype'
+import { WRITE_PROTOTYPE_MAX_TEXT_CHARS } from '@shared/write-prototype'
 import { DESIGN_CRAFT_LINES, DESIGN_DELIVERY_LINES, formatDesignContextLines, type DesignContext } from './design-context'
-import type { ScreenManifestEntry } from './design-turn-prompt'
-import type { DesignArtifact } from './design-types'
+import { buildPrototypeHref, type ScreenManifestEntry } from './design-turn-prompt'
+import type { DesignArtifact, DesignPrototypeLink } from './design-types'
 
 /** A planned page in a multi-page (Stitch-style) generation run. */
 export type DesignPagePlanEntry = {
@@ -23,6 +23,43 @@ export type DesignPagePlanEntry = {
 
 export const DESIGN_PAGES_MIN = 2
 export const DESIGN_PAGES_MAX = 6
+
+export type PlannedPrototypePage = {
+  title: string
+  artifactId: string
+  relativePath: string
+}
+
+function normalizePlanTitle(title: string): string {
+  return title.trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+export function buildPrototypeLinksForPage(
+  entry: DesignPagePlanEntry,
+  currentRelativePath: string,
+  plannedPages: PlannedPrototypePage[]
+): DesignPrototypeLink[] {
+  const linksTo = entry.linksTo?.map((title) => title.trim()).filter(Boolean) ?? []
+  if (linksTo.length === 0) return []
+  const pagesByTitle = new Map(
+    plannedPages.map((page) => [normalizePlanTitle(page.title), page])
+  )
+  const links: DesignPrototypeLink[] = []
+  const seen = new Set<string>()
+  for (const title of linksTo) {
+    const target = pagesByTitle.get(normalizePlanTitle(title))
+    const key = target?.artifactId ?? normalizePlanTitle(title)
+    if (seen.has(key)) continue
+    seen.add(key)
+    links.push({
+      targetTitle: target?.title ?? title,
+      ...(target ? { targetArtifactId: target.artifactId } : {}),
+      ...(target ? { href: buildPrototypeHref(currentRelativePath, target.relativePath) } : {}),
+      ...(entry.primaryAction && links.length === 0 ? { label: entry.primaryAction.trim() } : {})
+    })
+  }
+  return links
+}
 
 /**
  * Each design turn ends with the agent's one-paragraph summary of what it built

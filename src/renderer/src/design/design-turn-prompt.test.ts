@@ -8,6 +8,7 @@ import {
 import type { ScreenTurnOptions } from './design-turn-prompt'
 import { snapshotCanvas } from './canvas/canvas-snapshot'
 import { createDefaultShape, createEmptyDocument } from './canvas/canvas-types'
+import { setLastLintFindings } from './canvas/design-lint'
 
 describe('design turn prompt', () => {
   it('builds a parallel page fanout prompt with one delegate_task per artifact', () => {
@@ -388,6 +389,60 @@ describe('design turn prompt', () => {
     expect(prompt).toContain('2 shapes selected')
     expect(prompt).toContain('Card A')
     expect(prompt).toContain('Label B')
+  })
+
+  it('explains sampled line points and per-shape omitted vertices in canvas snapshots', () => {
+    const doc = createEmptyDocument()
+    const root = doc.objects[doc.rootId]
+    const draw = createDefaultShape('draw', 10, 20)
+    draw.points = Array.from({ length: 120 }, (_, index) => ({ x: index, y: 0 }))
+    doc.objects[draw.id] = { ...draw, parentId: doc.rootId }
+    doc.objects[doc.rootId] = { ...root, children: [draw.id] }
+    const canvasSnapshot = snapshotCanvas(doc, new Set([draw.id]))
+
+    const prompt = buildDesignTurnPrompt({
+      target: 'canvas',
+      mode: 'text',
+      text: 'smooth this stroke',
+      artifactRelativePath: '.kun-design/board/canvas.json',
+      workspaceRoot: '/ws',
+      canvasSnapshot
+    })
+
+    expect(prompt).toContain('sampled absolute `points` for arrows/lines/freehand')
+    expect(prompt).toContain('`pointsOmitted` when extra vertices were compacted')
+    expect(prompt).toContain('"pointsOmitted": 72')
+  })
+
+  it('injects stashed canvas critique findings into the next canvas prompt once', () => {
+    setLastLintFindings([
+      {
+        code: 'low-contrast',
+        shapeId: 'text_1',
+        message: '"Label" text #94a3b8 on #ffffff is 2.5:1 — below WCAG AA 4.5:1.'
+      }
+    ])
+
+    const prompt = buildDesignTurnPrompt({
+      target: 'canvas',
+      mode: 'text',
+      text: 'fix critique findings',
+      artifactRelativePath: '.kun-design/board/canvas.json',
+      workspaceRoot: '/ws'
+    })
+
+    expect(prompt).toContain('Design-system lint flagged 1 issue(s)')
+    expect(prompt).toContain('[low-contrast] (text_1)')
+    expect(prompt).toContain('below WCAG AA 4.5:1')
+
+    const nextPrompt = buildDesignTurnPrompt({
+      target: 'canvas',
+      mode: 'text',
+      text: 'another turn',
+      artifactRelativePath: '.kun-design/board/canvas.json',
+      workspaceRoot: '/ws'
+    })
+    expect(nextPrompt).not.toContain('Design-system lint flagged')
   })
 
   it('renders previous canvas-op errors so the agent can self-correct', () => {

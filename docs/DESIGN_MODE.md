@@ -85,6 +85,8 @@ versions[], implementedAt?, implementedThreadId?, implementedDesignSystemHash? }
   - HTML artifacts: `v1.html`, `v2.html`, … (the latest is the current document).
   - Graph artifacts: `graph.json` (+ `<nodeId>.html` / `<nodeId>.png` node outputs).
   - `meta.json` — a sidecar mirroring the artifact's metadata.
+  - HTML `meta.json` may include `prototypeLinks[]`, the outgoing planned flow
+    transitions to other screen artifacts.
 - **Durability**: the artifact list used to be in-memory only and was lost on reload.
   Now every mutation (`upsert` / `addVersion` / `markImplemented` / `rename`) writes
   `meta.json`, and on load `rehydrateArtifacts()` rebuilds the list from
@@ -219,14 +221,132 @@ deletion; appears after the next runtime restart.
 | Design system / tokens | presets + structured tokens + `DESIGN_SYSTEM.md` | none | 150 `DESIGN.md` systems | first-class design tokens |
 | Export | HTML / PDF | local save | HTML/PDF/PPTX/MP4 | SVG/CSS/HTML/JSON |
 | Node canvas | prompt/design/image + run engine | mature (7 node types) | automation | none |
-| Collaboration / MCP | — / deferred (§13) | — | parallel sessions | realtime / MCP |
+| Collaboration / MCP | — / deferred (§14) | — | parallel sessions | realtime / MCP |
 
 The deliberate **moat** is design↔code; the deliberate **non-goals** are penpot's
 vector editor and realtime collaboration (heavy, off the agent-native thesis).
 
 ---
 
-## 12. Extension seams
+## 12. Stitch alignment plan
+
+Reference: [Stitch - Design with AI](https://stitch.withgoogle.com/) and Google
+Labs' March 18, 2026 announcement describe Stitch as an AI-native infinite
+software-design canvas for natural-language UI creation, project-wide design
+agent reasoning, images/text/code as canvas context, Agent Manager parallel
+directions, DESIGN.md import/export, instant prototype playback, voice critiques,
+and MCP/developer-tool export.
+
+Kun should align by strengthening the same workflow spine while keeping the
+in-IDE design-to-code advantage:
+
+1. **Canvas maturity first**: selection, lock/visibility, nudge, snap, grouping,
+   resize, rotate, layer order, device frames, and keyboard handling must feel
+   predictable before adding larger agent flows. Locked or hidden layers are
+   non-editable across hit-test, marquee, inspector, delete/duplicate, drag, and
+   keyboard nudge. Keyboard editing now includes group/ungroup, stable block
+   layer ordering, and ancestor-root normalization for duplicate/delete. The
+   inspector exposes multi-selection align and distribute controls backed by the
+   same shape ops the design agent can call. Resize handles now use the same
+   object/grid snap guides as move gestures, while only moving the dragged edge.
+   Move snapping now ignores hidden layers and descendants of hidden parents, so
+   invisible board content cannot create ghost alignment pulls.
+   The layers panel now flattens the board into a predictable top-to-bottom tree,
+   supports collapsing frame/group subtrees, and exposes explicit lock/visibility
+   controls for screen readers and tooltips.
+   Rectangle, ellipse, frame, and screen-frame creation now use the same snap
+   guide system while preserving strict square/circle drawing when Shift is held.
+   Arrow and line endpoints snap to grid/object guide positions during creation,
+   while Shift keeps its independent angle-lock behavior.
+   The zoom menu now exposes explicit grid and object-snap toggles, so users can
+   inspect or draw freely without changing hidden state.
+   The canvas now includes a minimap navigator that shows visible top-level
+   board content, highlights selected layers, and recenters the viewport by
+   click/drag for multi-screen and multi-direction boards.
+   Text creation supports both click-to-edit and drag-to-size snapped note boxes
+   so board text can act as first-class design context.
+   Arrow/line point editing now supports vertex drag, midpoint insertion, and
+   Option/Alt-click or double-click vertex deletion for path cleanup.
+   Drag-created shapes, text boxes, screens, lines, and freehand strokes now
+   record one undo entry using their final bounds/points, so redo restores the
+   object the user actually drew instead of the pointer-down preview.
+   Cmd/Ctrl+D now duplicates the editable selection roots as one selected block
+   with a single undo/redo entry, matching the copy/paste and Alt/Option-drag
+   interaction model; cloned frame subtrees now rewrite internal frame
+   ownership so descendants point at the new frame, not the source.
+   Shape copy/cut/paste now works for editable selection roots, preserves full
+   subtrees, offsets repeat pastes, and keeps cut and paste undo/redo as single
+   canvas changes; image paste remains the fallback when no shape clipboard
+   exists.
+   Freehand strokes are simplified on commit to preserve the drawn contour while
+   keeping render/persistence/AI-snapshot payloads bounded.
+   Rotation now has visible corner handles, undo grouping, and 15°/45° modifier
+   snapping instead of relying on the inspector field alone. Spacebar pan is a
+   true temporary hand tool and restores the previous drawing/editing tool on
+   release; middle-mouse drag also temporarily routes to the hand tool for
+   infinite-board navigation without changing the active drawing/editing tool.
+   Alt/Option-drag duplicates the current editable selection only once the
+   pointer really moves, drags the copy, and records duplicate+move as a single
+   undoable canvas change. Shift-dragging an existing selection now locks
+   movement to the dominant horizontal or vertical axis while preserving
+   same-axis snapping.
+   Shift/Cmd/Ctrl marquee selection adds hits to the existing selection instead
+   of replacing it; Alt/Option marquee subtracts hits from the current
+   selection. Marquee results are normalized to editable root layers so parent
+   and child overlaps do not create mixed selections. Fit-all now frames
+   visible board content, while fit-selection uses the same editable-root
+   selection semantics as marquee/duplicate/delete.
+2. **Infinite board as project memory**: the board is the source of visual
+   context for screens, references, image slots, text notes, tokens, components,
+   and generated variants. Agent snapshots should stay compact but preserve
+   selected layers, nearby screens, and design-system bindings. Canvas snapshots
+   now mark `selected`, `inView`, and `nearSelection` shapes and, when capped,
+   prioritize those local-context layers before older/offscreen board content.
+   Line/freehand vertices are sampled per shape with `pointsOmitted` reported so
+   long annotations do not dominate the prompt.
+3. **Parallel directions**: build on `variant-matrix`, `add-screens`, and
+   multi-page mode to support named exploration branches ("directions") that can
+   be generated, compared, accepted, or archived on the board. Multi-page runs
+   now stamp their generated screens with a shared direction id/name and the
+   design sidebar exposes those direction groups with persisted accept/archive
+   controls. Archived directions move out of the main direction list into a
+   restore-able archived section. The sidebar now exposes a comparison summary
+   for active directions: screen coverage, prototype links, implemented count,
+   shared screens, and per-direction unique screens. It can open a visual
+   side-by-side compare overlay with one live HTML preview column per direction
+   and synchronized switching for shared or partially covered screen names.
+   Remaining work: pixel/style diff overlays plus richer archive filtering.
+4. **DESIGN.md compatibility**: keep `.kun-design/DESIGN_SYSTEM.md` as the local
+   source of truth. Kun now exports a project-level `.kun-design/DESIGN.md`
+   that summarizes the brief, design context, doc-level tokens/components,
+   screens, and prototype flow for Stitch-style/code-agent handoff. The design
+   context popover can import that file back into guidelines, brand/preset, and
+   simple tokens. Remaining work: support arbitrary external file import and
+   richer component/token reconstruction.
+5. **Prototype playback**: HTML screen frames now persist planned
+   `prototypeLinks[]` from the multi-page planner's `linksTo` metadata, render
+   those links as a non-editing flow overlay on the board, and expose a Play
+   overlay for stepping through generated screens from the selected frame.
+   Generated HTML links whose `href` matches the planned flow are captured in
+   Play mode and route to the target screen. Unknown local/relative prototype
+   links are now captured as missing targets instead of letting the webview drift
+   away; the player can seed the design rail with a request to create and wire
+   the missing next screen. Remaining work: deeper stateful interaction capture
+   for non-navigation controls.
+6. **Voice and critique loop**: route voice input into the design rail and let
+   the agent run a critique/repair pass against the selected screen, frame, or
+   whole board. The canvas toolbar now exposes a local critique entry point:
+   it runs the design-system lint pass against the current editable selection
+   subtree (or the whole board when nothing is selected), stashes findings into
+   the next canvas prompt, opens the design rail, and seeds a focused repair
+   request. Voice input remains the next layer on top of that repair loop.
+7. **MCP/developer-tool bridge**: ship the deferred design-artifacts MCP server
+   once packaged-startup verification is available, then expose read-only
+   artifact/design-system resources to coding tools.
+
+---
+
+## 13. Extension seams
 
 The discriminated unions are designed so later phases **add a case**, never rewrite:
 `DesignArtifactKind` (`'html' | 'graph'` — penpot is a future member),
@@ -236,7 +356,7 @@ these.
 
 ---
 
-## 13. Deferred: MCP exposure (the plan)
+## 14. Deferred: MCP exposure (the plan)
 
 Exposing design artifacts to agents over MCP is fully mapped but intentionally not
 shipped — it touches `main/index.ts`'s startup child-process gating in ~6 sites (the
@@ -256,7 +376,7 @@ most startup-critical file) and cannot be verified without a packaged run. The p
 
 ---
 
-## 14. Runtime-only behaviors to verify
+## 15. Runtime-only behaviors to verify
 
 Typecheck/lint/unit tests cover the code shape, not these (need a real `npm run dev`):
 

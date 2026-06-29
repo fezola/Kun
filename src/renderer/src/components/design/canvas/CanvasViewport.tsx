@@ -37,11 +37,15 @@ import {
   setCanvasPasteWorkspaceRoot
 } from '../../../design/canvas/canvas-shortcuts'
 import { hitTest } from '../../../design/canvas/canvas-hit-test'
+import { hasPrototypePlayback } from '../../../design/prototype-player'
 import { ShapeDispatcher } from './shapes/ShapeDispatcher'
 import { CanvasGrid } from './CanvasGrid'
 import { CanvasToolbar } from './CanvasToolbar'
 import { CanvasZoomBar } from './CanvasZoomBar'
+import { CanvasMinimap } from './CanvasMinimap'
 import { SelectionOverlay } from './SelectionOverlay'
+import { PrototypeFlowOverlay } from './PrototypeFlowOverlay'
+import { PrototypePlayerOverlay } from './PrototypePlayerOverlay'
 import { AlignmentToolbar } from './AlignmentToolbar'
 import { HtmlFrameOverlay } from './HtmlFrameOverlay'
 import { SidebarTitlebarToggleButton } from '../../sidebar/SidebarPrimitives'
@@ -90,6 +94,7 @@ export function CanvasViewport({
   const { t } = useTranslation('common')
   const svgRef = useRef<SVGSVGElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+  const activePointerToolRef = useRef<CanvasToolHandler | null>(null)
 
   const document = useCanvasShapeStore((s) => s.document)
   const vbox = useCanvasViewportStore((s) => s.vbox)
@@ -105,10 +110,30 @@ export function CanvasViewport({
   const snapGuides = useCanvasSelectionStore((s) => s.activeSnapGuides)
 
   const [docLoaded, setDocLoaded] = useState(false)
+  const [prototypePlayerOpen, setPrototypePlayerOpen] = useState(false)
+
+  const requestCanvasCritique = useCallback((promptSeed: string): void => {
+    onUseElementAsContext?.(null, promptSeed)
+  }, [onUseElementAsContext])
+  const requestMissingPrototypeScreen = useCallback((promptSeed: string): void => {
+    onUseElementAsContext?.(null, promptSeed)
+  }, [onUseElementAsContext])
 
   const zoom = containerWidth / vbox.width
   const tool = useMemo(() => toolFactories[activeTool](), [activeTool])
+  const middlePanTool = useMemo(() => createHandTool(), [])
   const workspaceValue = useMemo(() => ({ workspaceRoot }), [workspaceRoot])
+  const selectedHtmlArtifactId = useMemo(() => {
+    for (const id of selectedIds) {
+      const shape = document.objects[id]
+      if (shape?.htmlArtifactId) return shape.htmlArtifactId
+    }
+    return null
+  }, [document.objects, selectedIds])
+  const prototypePlayable = useMemo(
+    () => hasPrototypePlayback(designArtifacts),
+    [designArtifacts]
+  )
 
   // Container resize observer
   useEffect(() => {
@@ -281,25 +306,46 @@ export function CanvasViewport({
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
-      if (e.button !== 0) return
+      if (e.button !== 0 && e.button !== 1) return
+      e.preventDefault()
       e.currentTarget.setPointerCapture(e.pointerId)
-      tool.onPointerDown(makePointerEvent(e))
+      const pointerTool = e.button === 1 ? middlePanTool : tool
+      activePointerToolRef.current = pointerTool
+      pointerTool.onPointerDown(makePointerEvent(e))
     },
-    [tool, makePointerEvent]
+    [middlePanTool, tool, makePointerEvent]
   )
 
   const onPointerMove = useCallback(
     (e: React.PointerEvent) => {
-      tool.onPointerMove(makePointerEvent(e))
+      const pointerTool = activePointerToolRef.current ?? tool
+      pointerTool.onPointerMove(makePointerEvent(e))
     },
     [tool, makePointerEvent]
   )
 
   const onPointerUp = useCallback(
     (e: React.PointerEvent) => {
-      tool.onPointerUp(makePointerEvent(e))
+      const pointerTool = activePointerToolRef.current ?? tool
+      pointerTool.onPointerUp(makePointerEvent(e))
+      activePointerToolRef.current = null
+      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+        e.currentTarget.releasePointerCapture(e.pointerId)
+      }
     },
     [tool, makePointerEvent]
+  )
+
+  const onPointerCancel = useCallback(
+    (e: React.PointerEvent) => {
+      const pointerTool = activePointerToolRef.current
+      pointerTool?.onPointerUp(makePointerEvent(e))
+      activePointerToolRef.current = null
+      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+        e.currentTarget.releasePointerCapture(e.pointerId)
+      }
+    },
+    [makePointerEvent]
   )
 
   const onDoubleClick = useCallback(
@@ -391,11 +437,22 @@ export function CanvasViewport({
           </div>
         </div>
         <div className="pointer-events-none absolute right-3 top-1/2 z-40 -translate-y-1/2">
-          <CanvasToolbar workspaceRoot={workspaceRoot} onOpenAgentSettings={onOpenAgentSettings} />
+          <CanvasToolbar
+            workspaceRoot={workspaceRoot}
+            prototypePlayable={prototypePlayable}
+            onOpenPrototypePlayer={() => setPrototypePlayerOpen(true)}
+            onOpenAgentSettings={onOpenAgentSettings}
+            onRequestCanvasCritique={requestCanvasCritique}
+          />
         </div>
         <div className="pointer-events-none absolute bottom-4 right-4 z-40 hidden lg:block">
           <div className="pointer-events-auto">
             <CanvasZoomBar />
+          </div>
+        </div>
+        <div className="pointer-events-none absolute bottom-4 left-4 z-40 hidden md:block">
+          <div className="pointer-events-auto">
+            <CanvasMinimap />
           </div>
         </div>
         <div
@@ -417,6 +474,7 @@ export function CanvasViewport({
               onPointerDown={onPointerDown}
               onPointerMove={onPointerMove}
               onPointerUp={onPointerUp}
+              onPointerCancel={onPointerCancel}
               onDoubleClick={onDoubleClick}
               onWheel={onWheel}
             >
@@ -437,6 +495,11 @@ export function CanvasViewport({
               </g>
 
               <g id="overlay-layer">
+                <PrototypeFlowOverlay
+                  artifacts={designArtifacts}
+                  objects={document.objects}
+                  zoom={zoom}
+                />
                 <SelectionOverlay
                   selectedIds={selectedIds}
                   hoverTargetId={hoverTargetId}
@@ -456,6 +519,14 @@ export function CanvasViewport({
             onRequestQualityRepair={onRequestQualityRepair}
           />
         </div>
+        <PrototypePlayerOverlay
+          open={prototypePlayerOpen}
+          workspaceRoot={workspaceRoot}
+          artifacts={designArtifacts}
+          initialArtifactId={selectedHtmlArtifactId}
+          onClose={() => setPrototypePlayerOpen(false)}
+          onRequestMissingScreen={requestMissingPrototypeScreen}
+        />
       </div>
     </CanvasWorkspaceContext.Provider>
   )

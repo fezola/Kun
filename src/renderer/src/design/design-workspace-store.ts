@@ -558,6 +558,37 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
       persistIndex()
     },
 
+    setDirectionStatus: (directionId, status) => {
+      const id = directionId.trim()
+      if (!id) return
+      const changedIds = new Set<string>()
+      set((state) =>
+        applyToActiveDoc(state, (artifacts) =>
+          artifacts.map((item, index) => {
+            if (item.direction?.id !== id) return item
+            const directionChanged = (item.direction.status ?? 'active') !== status
+            const shouldFavorite = status === 'accepted' && item.node?.favorite !== true
+            if (!directionChanged && !shouldFavorite) return item
+            changedIds.add(item.id)
+            const node = shouldFavorite
+              ? { ...(item.node ?? defaultDesignArtifactNode(index)), favorite: true }
+              : item.node
+            return {
+              ...item,
+              direction: { ...item.direction, status },
+              ...(node ? { node } : {})
+            }
+          })
+        )
+      )
+      if (changedIds.size === 0) return
+      const state = get()
+      for (const item of state.artifacts) {
+        if (changedIds.has(item.id)) persistArtifactMeta(state.workspaceRoot, item)
+      }
+      persistIndex()
+    },
+
     updateArtifactNode: (artifactId, patch) => {
       set((state) =>
         applyToActiveDoc(state, (artifacts) =>

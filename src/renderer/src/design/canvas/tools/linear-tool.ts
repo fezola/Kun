@@ -4,6 +4,13 @@ import { useCanvasViewportStore } from '../canvas-viewport-store'
 import { createDefaultShape } from '../canvas-types'
 import type { Point } from '../canvas-types'
 import type { CanvasPointerEvent, CanvasToolHandler } from './tool-types'
+import { snapCanvasPoint } from './point-snap'
+import {
+  addShapeForCreation,
+  commitCreatedShapeUndo,
+  discardCreatedShape,
+  type CreatedShapeUndo
+} from './creation-undo'
 
 const MIN_LENGTH = 4
 const DRAG_PROMOTE_PX = 3
@@ -24,6 +31,7 @@ function createPolylineTool(shapeType: 'arrow' | 'line'): CanvasToolHandler {
   // *previewed* last point is appended only when we sync to the store, not here.
   let raw: Point[] = []
   let previewId: string | null = null
+  let creationUndo: CreatedShapeUndo | null = null
   let mode: 'idle' | 'drag-pending' | 'dragging' | 'multipoint' = 'idle'
   let lastClickT = 0
   let lastClickX = 0
@@ -58,6 +66,8 @@ function createPolylineTool(shapeType: 'arrow' | 'line'): CanvasToolHandler {
     mode = 'idle'
     raw = []
     previewId = null
+    creationUndo = null
+    useCanvasSelectionStore.getState().setSnapGuides([])
   }
 
   function finish(): void {
@@ -66,15 +76,16 @@ function createPolylineTool(shapeType: 'arrow' | 'line'): CanvasToolHandler {
       return
     }
     if (raw.length < 2) {
-      useCanvasShapeStore.getState().deleteShape(previewId)
+      discardCreatedShape(creationUndo)
     } else {
       // Detect a tiny/degenerate single-segment line (e.g. a single click then
       // immediate dbl) and drop it so we don't leave invisible junk behind.
       const len = Math.hypot(raw[raw.length - 1].x - raw[0].x, raw[raw.length - 1].y - raw[0].y)
       if (raw.length === 2 && len < MIN_LENGTH) {
-        useCanvasShapeStore.getState().deleteShape(previewId)
+        discardCreatedShape(creationUndo)
       } else {
         syncShape(raw)
+        commitCreatedShapeUndo(creationUndo, `create-${shapeType}`)
       }
     }
     useCanvasViewportStore.getState().setActiveTool('select')
@@ -86,7 +97,8 @@ function createPolylineTool(shapeType: 'arrow' | 'line'): CanvasToolHandler {
 
     onPointerDown(e: CanvasPointerEvent) {
       if (mode === 'idle') {
-        const shape = createDefaultShape(shapeType, e.canvasX, e.canvasY)
+        const start = snapCanvasPoint({ x: e.canvasX, y: e.canvasY }, null)
+        const shape = createDefaultShape(shapeType, start.x, start.y)
         shape.width = 0
         shape.height = 0
         shape.points = [
@@ -94,13 +106,13 @@ function createPolylineTool(shapeType: 'arrow' | 'line'): CanvasToolHandler {
           { x: 0, y: 0 }
         ]
         previewId = shape.id
-        useCanvasShapeStore.getState().addShape(shape)
+        creationUndo = addShapeForCreation(shape)
         useCanvasSelectionStore.getState().select([shape.id])
-        raw = [{ x: e.canvasX, y: e.canvasY }]
+        raw = [start]
         mode = 'drag-pending'
         lastClickT = e.timeStamp
-        lastClickX = e.canvasX
-        lastClickY = e.canvasY
+        lastClickX = start.x
+        lastClickY = start.y
         return
       }
       if (mode === 'multipoint') {
@@ -112,11 +124,14 @@ function createPolylineTool(shapeType: 'arrow' | 'line'): CanvasToolHandler {
           return
         }
         // Commit a new vertex; the preview tail will be tracked by pointermove.
-        raw.push({ x: e.canvasX, y: e.canvasY })
+        const point = e.shiftKey
+          ? { x: e.canvasX, y: e.canvasY }
+          : snapCanvasPoint({ x: e.canvasX, y: e.canvasY }, previewId)
+        raw.push(point)
         lastClickT = e.timeStamp
-        lastClickX = e.canvasX
-        lastClickY = e.canvasY
-        syncShape([...raw, { x: e.canvasX, y: e.canvasY }])
+        lastClickX = point.x
+        lastClickY = point.y
+        syncShape([...raw, point])
         return
       }
     },
@@ -128,6 +143,7 @@ function createPolylineTool(shapeType: 'arrow' | 'line'): CanvasToolHandler {
       let endX = e.canvasX
       let endY = e.canvasY
       if (e.shiftKey) {
+        useCanvasSelectionStore.getState().setSnapGuides([])
         const anchor = raw[raw.length - 1]
         const dx = endX - anchor.x
         const dy = endY - anchor.y
@@ -135,6 +151,10 @@ function createPolylineTool(shapeType: 'arrow' | 'line'): CanvasToolHandler {
         const snapped = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4)
         endX = anchor.x + Math.cos(snapped) * len
         endY = anchor.y + Math.sin(snapped) * len
+      } else {
+        const snapped = snapCanvasPoint({ x: endX, y: endY }, previewId)
+        endX = snapped.x
+        endY = snapped.y
       }
 
       if (mode === 'drag-pending') {
@@ -164,12 +184,17 @@ function createPolylineTool(shapeType: 'arrow' | 'line'): CanvasToolHandler {
         let endX = e.canvasX
         let endY = e.canvasY
         if (e.shiftKey) {
+          useCanvasSelectionStore.getState().setSnapGuides([])
           const dx = endX - raw[0].x
           const dy = endY - raw[0].y
           const len = Math.hypot(dx, dy)
           const snapped = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4)
           endX = raw[0].x + Math.cos(snapped) * len
           endY = raw[0].y + Math.sin(snapped) * len
+        } else {
+          const snapped = snapCanvasPoint({ x: endX, y: endY }, previewId)
+          endX = snapped.x
+          endY = snapped.y
         }
         raw.push({ x: endX, y: endY })
         finish()
@@ -179,7 +204,10 @@ function createPolylineTool(shapeType: 'arrow' | 'line'): CanvasToolHandler {
         // It was a click without a real drag — enter multi-point mode.
         // raw already holds the first vertex; the preview tail follows the cursor.
         mode = 'multipoint'
-        syncShape([...raw, { x: e.canvasX, y: e.canvasY }])
+        const point = e.shiftKey
+          ? { x: e.canvasX, y: e.canvasY }
+          : snapCanvasPoint({ x: e.canvasX, y: e.canvasY }, previewId)
+        syncShape([...raw, point])
         return
       }
       // In 'multipoint' onPointerUp is a no-op; new clicks commit vertices.

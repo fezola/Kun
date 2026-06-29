@@ -19,6 +19,7 @@ import {
 import { collectDescendants, useCanvasShapeStore, withDescendants } from './canvas-shape-store'
 import { useCanvasViewportStore } from './canvas-viewport-store'
 import { useCanvasUndoStore } from './canvas-undo-store'
+import { useCanvasSelectionStore } from './canvas-selection-store'
 import { centerRectInViewport, layoutRectsInViewport, placeRectInViewportAvoiding } from './canvas-placement'
 import {
   alignShapes,
@@ -446,6 +447,11 @@ export type ExecuteResult = {
   ok: boolean
   affectedIds: string[]
   errors: OpError[]
+}
+
+export type ExecuteOpsOptions = {
+  /** Select ids before the undo group closes so redo restores the post-op selection. */
+  selectAfter?: (affectedIds: string[]) => string[]
 }
 
 function findShape(id: string): CanvasShape | null {
@@ -1650,7 +1656,11 @@ function executeOne(op: ShapeOp, affectedIds: Set<string>, errors: OpError[]): v
 }
 
 /** Execute a batch of operations atomically. Returns affected ids + structured errors. */
-export function executeOps(rawOps: unknown[], label = 'shape-ops'): ExecuteResult {
+export function executeOps(
+  rawOps: unknown[],
+  label = 'shape-ops',
+  options?: ExecuteOpsOptions
+): ExecuteResult {
   const affectedIds = new Set<string>()
   const errors: OpError[] = []
 
@@ -1675,6 +1685,12 @@ export function executeOps(rawOps: unknown[], label = 'shape-ops'): ExecuteResul
   useCanvasUndoStore.getState().withGroup(label, () => {
     for (const op of validatedOps) {
       executeOne(op, affectedIds, errors)
+    }
+    const selectedAfter = options?.selectAfter?.(Array.from(affectedIds))
+    if (selectedAfter) {
+      useCanvasSelectionStore.getState().select(
+        selectedAfter.filter((id) => Boolean(useCanvasShapeStore.getState().document.objects[id]))
+      )
     }
   })
 

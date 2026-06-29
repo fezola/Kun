@@ -1,9 +1,11 @@
-import { useEffect, useRef, type ReactElement } from 'react'
-import { Settings2, X } from 'lucide-react'
+import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { FileInput, Settings2, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { DESIGN_SYSTEM_PRESETS, type DesignSystemPreset } from '@shared/app-settings'
 import { useDesignWorkspaceStore } from '../../design/design-workspace-store'
 import { DESIGN_SYSTEM_DISPLAY, DESIGN_TONE_OPTIONS } from '../../design/design-context'
+import { importStitchDesignMarkdown, STITCH_DESIGN_MD_PATH } from '../../design/design-md-compat'
+import { useDesignSystemStore } from '../../design/canvas/design-system-store'
 
 type Props = {
   open: boolean
@@ -42,9 +44,12 @@ export function DesignContextPopover({
   titleKey = 'designContextLabel'
 }: Props): ReactElement | null {
   const { t } = useTranslation('common')
+  const workspaceRoot = useDesignWorkspaceStore((s) => s.workspaceRoot)
   const designContext = useDesignWorkspaceStore((s) => s.designContext)
   const updateDesignContext = useDesignWorkspaceStore((s) => s.updateDesignContext)
+  const setFileError = useDesignWorkspaceStore((s) => s.setFileError)
   const rootRef = useRef<HTMLDivElement | null>(null)
+  const [importing, setImporting] = useState(false)
 
   useEffect(() => {
     if (!open) return
@@ -74,6 +79,39 @@ export function DesignContextPopover({
     })
   }
 
+  const importDesignMd = (): void => {
+    if (importing) return
+    if (!workspaceRoot || typeof window.kunGui?.readWorkspaceFile !== 'function') {
+      setFileError(t('designImportDesignMdUnavailable'))
+      return
+    }
+    setImporting(true)
+    setFileError(null)
+    void window.kunGui
+      .readWorkspaceFile({ path: STITCH_DESIGN_MD_PATH, workspaceRoot })
+      .then((res) => {
+        if (!res.ok) {
+          setFileError(res.message || t('designImportDesignMdFailed'))
+          return
+        }
+        const imported = importStitchDesignMarkdown(res.content)
+        if (!imported) {
+          setFileError(t('designImportDesignMdFailed'))
+          return
+        }
+        updateDesignContext(imported.contextPatch)
+        for (const token of imported.tokens) {
+          useDesignSystemStore.getState().setToken(token)
+        }
+        setFileError(null)
+        onClose()
+      })
+      .catch((error: unknown) => {
+        setFileError(error instanceof Error ? error.message : String(error))
+      })
+      .finally(() => setImporting(false))
+  }
+
   return (
     <div
       ref={rootRef}
@@ -84,6 +122,16 @@ export function DesignContextPopover({
       <div className="mb-3 flex items-center justify-between gap-2">
         <span className="text-[13px] font-medium">{t(titleKey)}</span>
         <div className="flex items-center gap-0.5">
+          <button
+            type="button"
+            onClick={importDesignMd}
+            disabled={importing}
+            title={t('designImportDesignMd')}
+            aria-label={t('designImportDesignMd')}
+            className="inline-flex h-6 w-6 items-center justify-center rounded-md text-[#8b95a3] transition-colors hover:text-[#1f2733] disabled:cursor-not-allowed disabled:opacity-45 dark:text-white/45 dark:hover:text-white/85"
+          >
+            <FileInput className="h-3.5 w-3.5" strokeWidth={1.9} />
+          </button>
           {onOpenSettings ? (
             <button
               type="button"

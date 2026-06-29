@@ -4,17 +4,32 @@ import { useCanvasUndoStore } from '../canvas-undo-store'
 import { useCanvasViewportStore } from '../canvas-viewport-store'
 import { hitTest, hitTestAll, getSelectionBounds } from '../canvas-hit-test'
 import { findSnaps } from '../canvas-snap'
-import type { Rect } from '../canvas-types'
+import {
+  filterEditableRootShapeIds,
+  filterEditableShapeIds,
+  isShapeEffectivelyVisible
+} from '../canvas-editability'
+import { shapeGeometry, type CanvasDocument, type CanvasShape, type Rect } from '../canvas-types'
+import type { ShapePatch } from '../canvas-undo-store'
 import type { CanvasPointerEvent, CanvasToolHandler } from './tool-types'
 
 type DragMode = 'none' | 'move' | 'marquee'
+type MarqueeMode = 'replace' | 'add' | 'subtract'
+type DragAxisLock = 'none' | 'x' | 'y'
+const ALT_DUPLICATE_DRAG_THRESHOLD_PX = 3
 
 export function createSelectTool(): CanvasToolHandler {
   let dragMode: DragMode = 'none'
   let dragStartX = 0
   let dragStartY = 0
+  let dragStartClientX = 0
+  let dragStartClientY = 0
   let dragShapeStartPositions: Map<string, { x: number; y: number; width: number; height: number }> = new Map()
   let dragCollectiveStart: Rect | null = null
+  let dragCreatedPatches: ShapePatch[] = []
+  let dragSelectionBefore: string[] | null = null
+  let altDuplicatePending = false
+  let marqueeMode: MarqueeMode = 'replace'
 
   return {
     cursor: 'default',
@@ -34,26 +49,20 @@ export function createSelectTool(): CanvasToolHandler {
         dragMode = 'move'
         dragStartX = e.canvasX
         dragStartY = e.canvasY
+        dragStartClientX = e.clientX
+        dragStartClientY = e.clientY
         dragShapeStartPositions = new Map()
-        const ids = useCanvasSelectionStore.getState().selectedIds
-        // Move the selection AND its descendants: children store absolute coords,
-        // so a frame no longer drags its contents along via the parent transform.
-        for (const id of withDescendants(doc.objects, ids)) {
-          const shape = doc.objects[id]
-          if (shape) {
-            dragShapeStartPositions.set(id, {
-              x: shape.x,
-              y: shape.y,
-              width: shape.width,
-              height: shape.height
-            })
-          }
-        }
-        // Snap against the user-visible selection bbox only (a frame's bbox
-        // already encloses its children), not the expanded descendant set.
-        dragCollectiveStart = getSelectionBounds(doc.objects, ids)
+        dragCreatedPatches = []
+        dragSelectionBefore = null
+        altDuplicatePending = e.altKey
+
+        const currentDoc = useCanvasShapeStore.getState().document
+        const moveState = captureMoveState(currentDoc)
+        dragShapeStartPositions = moveState.shapeStartPositions
+        dragCollectiveStart = moveState.collectiveStart
       } else {
-        if (!e.shiftKey && !e.metaKey && !e.ctrlKey) {
+        marqueeMode = e.altKey ? 'subtract' : e.shiftKey || e.metaKey || e.ctrlKey ? 'add' : 'replace'
+        if (marqueeMode === 'replace') {
           selection.clearSelection()
         }
         dragMode = 'marquee'
@@ -65,8 +74,25 @@ export function createSelectTool(): CanvasToolHandler {
 
     onPointerMove(e: CanvasPointerEvent) {
       if (dragMode === 'move') {
-        let dx = e.canvasX - dragStartX
-        let dy = e.canvasY - dragStartY
+        if (altDuplicatePending) {
+          const movedPx = Math.hypot(e.clientX - dragStartClientX, e.clientY - dragStartClientY)
+          if (movedPx < ALT_DUPLICATE_DRAG_THRESHOLD_PX) return
+          const duplicateResult = duplicateCurrentSelection()
+          altDuplicatePending = false
+          if (duplicateResult.clonedRootIds.length > 0) {
+            dragCreatedPatches = duplicateResult.patches
+            dragSelectionBefore = duplicateResult.selectionBefore
+            useCanvasSelectionStore.getState().select(duplicateResult.clonedRootIds)
+            const clonedDoc = useCanvasShapeStore.getState().document
+            const moveState = captureMoveState(clonedDoc)
+            dragShapeStartPositions = moveState.shapeStartPositions
+            dragCollectiveStart = moveState.collectiveStart
+          }
+        }
+
+        const constrained = constrainDragDelta(e.canvasX - dragStartX, e.canvasY - dragStartY, e.shiftKey)
+        let dx = constrained.dx
+        let dy = constrained.dy
 
         // Apply snap based on the collective bbox if snap is enabled.
         const viewport = useCanvasViewportStore.getState()
@@ -78,18 +104,14 @@ export function createSelectTool(): CanvasToolHandler {
             height: dragCollectiveStart.height
           }
           const doc = useCanvasShapeStore.getState().document
-          const staticShapes: Rect[] = []
-          for (const id of Object.keys(doc.objects)) {
-            if (id === doc.rootId) continue
-            if (dragShapeStartPositions.has(id)) continue
-            const s = doc.objects[id]
-            staticShapes.push({ x: s.x, y: s.y, width: s.width, height: s.height })
-          }
+          const staticShapes = collectVisibleSnapTargets(doc, dragShapeStartPositions)
           const gridSize = viewport.gridVisible ? 10 : null
           const snap = findSnaps(moving, staticShapes, viewport.getZoom(), gridSize)
-          dx += snap.dx
-          dy += snap.dy
-          useCanvasSelectionStore.getState().setSnapGuides(snap.guides)
+          if (constrained.axis !== 'y') dx += snap.dx
+          if (constrained.axis !== 'x') dy += snap.dy
+          useCanvasSelectionStore.getState().setSnapGuides(
+            filterSnapGuidesForAxisLock(snap.guides, constrained.axis)
+          )
         }
 
         const store = useCanvasShapeStore.getState()
@@ -124,8 +146,13 @@ export function createSelectTool(): CanvasToolHandler {
             })
           }
         }
-        if (patches.length > 0) {
-          useCanvasUndoStore.getState().pushChange({ patches, label: 'move' })
+        const allPatches = [...dragCreatedPatches, ...patches]
+        if (allPatches.length > 0) {
+          useCanvasUndoStore.getState().pushChange({
+            patches: allPatches,
+            label: dragCreatedPatches.length > 0 ? 'duplicate-move' : 'move',
+            ...(dragSelectionBefore ? { selectionBefore: dragSelectionBefore } : {})
+          })
         }
         useCanvasSelectionStore.getState().setSnapGuides([])
       } else if (dragMode === 'marquee') {
@@ -133,8 +160,9 @@ export function createSelectTool(): CanvasToolHandler {
         if (marquee && marquee.width > 2 && marquee.height > 2) {
           const doc = useCanvasShapeStore.getState().document
           const hits = hitTestAll(doc, marquee)
-          if (hits.length > 0) {
-            useCanvasSelectionStore.getState().select(hits)
+          const nextSelection = resolveMarqueeSelection(doc, hits, marqueeMode)
+          if (nextSelection) {
+            useCanvasSelectionStore.getState().select(nextSelection)
           }
         }
         useCanvasSelectionStore.getState().setMarquee(null)
@@ -143,6 +171,140 @@ export function createSelectTool(): CanvasToolHandler {
       dragMode = 'none'
       dragShapeStartPositions = new Map()
       dragCollectiveStart = null
+      dragCreatedPatches = []
+      dragSelectionBefore = null
+      altDuplicatePending = false
+      marqueeMode = 'replace'
     }
   }
+}
+
+function collectVisibleSnapTargets(
+  doc: CanvasDocument,
+  movingShapes: ReadonlyMap<string, unknown>
+): Rect[] {
+  const targets: Rect[] = []
+  for (const id of Object.keys(doc.objects)) {
+    if (id === doc.rootId) continue
+    if (movingShapes.has(id)) continue
+    if (!isShapeEffectivelyVisible(doc.objects, id)) continue
+    targets.push(shapeGeometry(doc.objects[id]).selrect)
+  }
+  return targets
+}
+
+function constrainDragDelta(dx: number, dy: number, shiftKey: boolean): { dx: number; dy: number; axis: DragAxisLock } {
+  if (!shiftKey) return { dx, dy, axis: 'none' }
+  if (Math.abs(dx) >= Math.abs(dy)) return { dx, dy: 0, axis: 'x' }
+  return { dx: 0, dy, axis: 'y' }
+}
+
+function filterSnapGuidesForAxisLock<T extends { axis: 'h' | 'v' }>(
+  guides: T[],
+  axis: DragAxisLock
+): T[] {
+  if (axis === 'x') return guides.filter((guide) => guide.axis === 'v')
+  if (axis === 'y') return guides.filter((guide) => guide.axis === 'h')
+  return guides
+}
+
+function resolveMarqueeSelection(
+  doc: CanvasDocument,
+  hits: string[],
+  mode: MarqueeMode
+): string[] | null {
+  if (hits.length === 0) return null
+
+  const current = useCanvasSelectionStore.getState().selectedIds
+  if (mode === 'add') {
+    return filterEditableRootShapeIds(doc, [...current, ...hits])
+  }
+
+  if (mode === 'subtract') {
+    const removing = new Set(hits)
+    return filterEditableRootShapeIds(
+      doc,
+      [...current].filter((id) => !removing.has(id))
+    )
+  }
+
+  return filterEditableRootShapeIds(doc, hits)
+}
+
+function captureMoveState(doc: CanvasDocument): {
+  shapeStartPositions: Map<string, { x: number; y: number; width: number; height: number }>
+  collectiveStart: Rect | null
+} {
+  const shapeStartPositions = new Map<string, { x: number; y: number; width: number; height: number }>()
+  const ids = new Set(filterEditableShapeIds(doc, useCanvasSelectionStore.getState().selectedIds))
+  // Move the selection AND its descendants: children store absolute coords,
+  // so a frame no longer drags its contents along via the parent transform.
+  for (const id of withDescendants(doc.objects, ids)) {
+    const shape = doc.objects[id]
+    if (shape) {
+      shapeStartPositions.set(id, {
+        x: shape.x,
+        y: shape.y,
+        width: shape.width,
+        height: shape.height
+      })
+    }
+  }
+  // Snap against the user-visible selection bbox only (a frame's bbox already
+  // encloses its children), not the expanded descendant set.
+  return { shapeStartPositions, collectiveStart: getSelectionBounds(doc.objects, ids) }
+}
+
+function duplicateCurrentSelection(): {
+  clonedRootIds: string[]
+  patches: ShapePatch[]
+  selectionBefore: string[]
+} {
+  const shapeStore = useCanvasShapeStore.getState()
+  const selection = useCanvasSelectionStore.getState()
+  const docBefore = shapeStore.document
+  const sourceRootIds = filterEditableRootShapeIds(docBefore, selection.selectedIds)
+  const selectionBefore = Array.from(selection.selectedIds)
+  if (sourceRootIds.length === 0) {
+    return { clonedRootIds: [], patches: [], selectionBefore }
+  }
+
+  const parentChildrenBefore = new Map<string, string[]>()
+  for (const id of sourceRootIds) {
+    const parentId = docBefore.objects[id]?.parentId
+    if (parentId && !parentChildrenBefore.has(parentId)) {
+      parentChildrenBefore.set(parentId, [...(docBefore.objects[parentId]?.children ?? [])])
+    }
+  }
+
+  const clonedRootIds: string[] = []
+  for (const id of sourceRootIds) {
+    const cloneId = useCanvasShapeStore.getState().duplicateShape(id, { skipUndo: true })
+    if (cloneId) clonedRootIds.push(cloneId)
+  }
+
+  if (clonedRootIds.length === 0) {
+    return { clonedRootIds: [], patches: [], selectionBefore }
+  }
+
+  const docAfter = useCanvasShapeStore.getState().document
+  const patches: ShapePatch[] = []
+  for (const cloneId of clonedRootIds) {
+    for (const id of withDescendants(docAfter.objects, [cloneId])) {
+      const shape = docAfter.objects[id]
+      if (shape) patches.push({ id, before: {}, after: { ...shape } as Partial<CanvasShape> })
+    }
+  }
+  for (const [parentId, childrenBefore] of parentChildrenBefore) {
+    const parent = docAfter.objects[parentId]
+    if (parent) {
+      patches.push({
+        id: parentId,
+        before: { children: childrenBefore },
+        after: { children: parent.children }
+      })
+    }
+  }
+
+  return { clonedRootIds, patches, selectionBefore }
 }
