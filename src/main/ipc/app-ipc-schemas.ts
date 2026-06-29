@@ -1593,6 +1593,15 @@ export const workspaceImagePickPayloadSchema = z
   })
   .strict()
 
+export const workspaceImageBytesSavePayloadSchema = z
+  .object({
+    workspaceRoot: trimmedString(MAX_PATH_LENGTH),
+    dataBase64: z.string().max(MAX_SAVE_FILE_BASE64_BYTES),
+    mimeType: optionalTrimmedString(255),
+    imageDirectory: optionalTrimmedString(MAX_PATH_LENGTH)
+  })
+  .strict()
+
 export const workspaceEntryRenamePayloadSchema = z
   .object({
     path: trimmedString(MAX_PATH_LENGTH),

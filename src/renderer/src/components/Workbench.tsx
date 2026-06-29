@@ -62,6 +62,7 @@ import { DesignAIRail } from './design/DesignAIRail'
 import { DesignSidebar } from './design/DesignSidebar'
 import { useDesignWorkspaceStore } from '../design/design-workspace-store'
 import {
+  buildPrototypeHref,
   buildCodeCanvasTurnPrompt,
   buildDesignFromCodePrompt,
   buildDesignTurnPrompt
@@ -70,6 +71,15 @@ import { buildDesignArtifactMarkdown } from '../design/design-artifact-markdown'
 import { buildHtmlSiblingManifest } from '../design/design-pages'
 import { runDesignPages } from '../design/design-pages-run'
 import { prepareDesignPreviewFile } from '../design/design-preview-file'
+import {
+  auditDesignHtmlQuality,
+  buildDesignHtmlQualityRepairPrompt,
+  getDesignRuntimeQualityFindings,
+  mergeDesignHtmlQualityFindings,
+  shouldAutoRepairDesignHtmlFinding,
+  type DesignHtmlQualityFinding,
+  type DesignRuntimeQualityPayload
+} from '../design/design-html-quality'
 import { buildImplementDesignPrompt } from '../design/design-implement-prompt'
 import { createDesignArtifactId, type DesignArtifact } from '../design/design-types'
 import { formatDesignSystemMarkdown, hashDesignSystem, mergeDesignContextWithTokens } from '../design/design-context'
@@ -81,6 +91,15 @@ import {
 } from '../design/design-board'
 import { useCanvasShapeStore } from '../design/canvas/canvas-shape-store'
 import { useCanvasSelectionStore } from '../design/canvas/canvas-selection-store'
+import { useImageAnnotationStore } from '../design/canvas/image-annotation-store'
+import {
+  buildImageAnnotationPrompt,
+  imageAnnotationDisplayText
+} from '../design/canvas/image-annotation-prompt'
+import {
+  ImageAnnotationEditor,
+  type ImageAnnotationResult
+} from './design/canvas/ImageAnnotationEditor'
 import { snapshotCanvas } from '../design/canvas/canvas-snapshot'
 import {
   designComposerContextChips,
@@ -222,6 +241,43 @@ const COMPOSER_FILE_CONTEXT_MAX_TOTAL_CHARS = 180_000
 const COMPOSER_DIRECTORY_CONTEXT_MAX_FILES = 60
 const FILE_TREE_SIDEBAR_WIDTH = 320
 const SDD_ASSISTANT_TITLE_SYNC_DELAY_MS = 900
+
+async function readDesignHtmlQualityFindings(options: {
+  workspaceRoot: string
+  htmlPath?: string
+  designNotesPath?: string
+  siblingScreens?: ScreenManifestEntry[]
+}): Promise<DesignHtmlQualityFinding[]> {
+  const htmlPath = options.htmlPath?.trim()
+  if (!htmlPath || typeof window === 'undefined' || typeof window.kunGui?.readWorkspaceFile !== 'function') {
+    return []
+  }
+  const html = await window.kunGui
+    .readWorkspaceFile({ path: htmlPath, workspaceRoot: options.workspaceRoot })
+    .catch(() => null)
+  if (!html?.ok) return []
+
+  let designNotes = ''
+  const designNotesPath = options.designNotesPath?.trim()
+  if (designNotesPath) {
+    const notes = await window.kunGui
+      .readWorkspaceFile({ path: designNotesPath, workspaceRoot: options.workspaceRoot })
+      .catch(() => null)
+    if (notes?.ok) designNotes = notes.content
+  }
+
+  const siblingScreens = (options.siblingScreens ?? []).map((screen) => ({
+    name: screen.name,
+    htmlPath: screen.htmlPath,
+    prototypeHref: buildPrototypeHref(htmlPath, screen.htmlPath)
+  }))
+  const staticFindings = auditDesignHtmlQuality({
+    html: html.content,
+    ...(designNotes ? { designNotes } : {}),
+    ...(siblingScreens.length > 0 ? { siblingScreens } : {})
+  })
+  return mergeDesignHtmlQualityFindings(staticFindings, getDesignRuntimeQualityFindings(htmlPath))
+}
 
 function workspaceFileTargetKey(target: WorkspaceFileTarget | null | undefined): string {
   if (!target?.path) return ''
@@ -593,6 +649,16 @@ export function Workbench(): ReactElement {
   )
   const [designHtmlElementContext, setDesignHtmlElementContext] =
     useState<DesignHtmlElementContext | null>(null)
+  const [annotationBusy, setAnnotationBusy] = useState(false)
+  const annotatingShapeId = useImageAnnotationStore((s) => s.editingShapeId)
+  const closeImageAnnotation = useImageAnnotationStore((s) => s.closeImageAnnotation)
+  const designWorkspaceRoot = useDesignWorkspaceStore((s) => s.workspaceRoot)
+  const designAutoRepairSentRef = useRef<Set<string>>(new Set())
+  const designAutoRepairPendingRef = useRef<Map<string, number>>(new Map())
+  const designQualityRepairLastSentRef = useRef<Map<string, number>>(new Map())
+  const busyRef = useRef(busy)
+  const routeRef = useRef(route)
+  const runtimeConnectionRef = useRef(runtimeConnection)
   const writeAssistantOpen = useWriteWorkspaceStore((s) => s.assistantOpen)
   const setWriteAssistantOpen = useWriteWorkspaceStore((s) => s.setAssistantOpen)
   const designImplementOpen = useDesignWorkspaceStore((s) => s.implementOpen)
@@ -611,6 +677,29 @@ export function Workbench(): ReactElement {
   const sddDraftOperationStatus = useSddDraftStore((s) => s.operationStatus)
   const canvasDocument = useCanvasShapeStore((s) => s.document)
   const canvasSelectedIds = useCanvasSelectionStore((s) => s.selectedIds)
+
+  useEffect(() => {
+    busyRef.current = busy
+  }, [busy])
+
+  useEffect(() => {
+    routeRef.current = route
+  }, [route])
+
+  useEffect(() => {
+    runtimeConnectionRef.current = runtimeConnection
+  }, [runtimeConnection])
+
+  useEffect(
+    () => () => {
+      for (const timer of designAutoRepairPendingRef.current.values()) {
+        window.clearTimeout(timer)
+      }
+      designAutoRepairPendingRef.current.clear()
+    },
+    []
+  )
+
   const rawDesignContextTargets = useMemo(
     () => {
       if (route !== 'design') return []
@@ -1740,7 +1829,7 @@ export function Workbench(): ReactElement {
     })()
   }
 
-  const sendDesignPrompt = (value: string): void => {
+  const sendDesignPrompt = (value: string, options?: { displayText?: string }): void => {
     const text = value.trim()
     const attachments = composerAttachments
     const attachmentIds = attachments.map((attachment) => attachment.id)
@@ -1755,14 +1844,23 @@ export function Workbench(): ReactElement {
       setError(t('workspaceRequiredToCreateThread'))
       return
     }
-    // Route a "generate" brief (nothing targeted) through the multi-page planner
-    // when multi-page mode is on. Iterating an existing page stays single-page.
+    // Route a from-scratch "generate" brief through the foundation-first
+    // multi-page pipeline (design.md → design system → logo → pages) instead of a
+    // single free-form canvas turn. "From scratch" = the board has no pages yet
+    // and nothing is selected, so the user is asking to build the site, not iterate
+    // one frame. The explicit multi-page toggle still forces this even once pages
+    // exist; an incremental "add one more screen" (pages already present) stays on
+    // the single-screen path so we don't re-run the whole foundation each time.
     const activeForGate =
       designState.artifacts.find((artifact) => artifact.id === designState.activeArtifactId) ?? null
+    const notOnHtmlPage = !activeForGate || activeForGate.kind !== 'html'
+    const hasExistingPages = designState.artifacts.some((artifact) => artifact.kind === 'html')
+    const noCanvasSelection = useCanvasSelectionStore.getState().selectedIds.size === 0
     if (
-      designState.multiPageMode &&
       designState.designIntentMode === 'generate' &&
-      (!activeForGate || activeForGate.kind !== 'html') &&
+      notOnHtmlPage &&
+      noCanvasSelection &&
+      (designState.multiPageMode || !hasExistingPages) &&
       text.length > 0 &&
       attachmentIds.length === 0 &&
       !useDesignWorkspaceStore.getState().pagesRun
@@ -1771,9 +1869,9 @@ export function Workbench(): ReactElement {
       generateDesignPages(text)
       return
     }
-    const displayText = text || t('composerImageOnlyDisplay')
+    const displayText = options?.displayText?.trim() || text || t('composerImageOnlyDisplay')
     const promptText = text || t('composerImageOnlyPrompt')
-    setInput('')
+    if (!options?.displayText) setInput('')
     void (async () => {
       const docId = useDesignWorkspaceStore.getState().ensureActiveDocument()
       const threadId = await ensureDesignThreadForWorkspace(designWorkspaceRoot, docId)
@@ -1989,6 +2087,15 @@ export function Workbench(): ReactElement {
           }
         }
       }
+      const qualityFindings =
+        target === 'html' || target === 'screen'
+          ? await readDesignHtmlQualityFindings({
+              workspaceRoot: designWorkspaceRoot,
+              htmlPath: basePath,
+              designNotesPath,
+              siblingScreens: target === 'screen' ? screenManifest : htmlSiblingManifest
+            })
+          : []
       const prompt = buildDesignTurnPrompt({
         target,
         mode: attachmentIds.length > 0 ? 'image' : 'text',
@@ -2006,6 +2113,7 @@ export function Workbench(): ReactElement {
         ...(canvasSnapshot ? { canvasSnapshot } : {}),
         ...(target === 'canvas' ? { previousOpErrors: takeLastCanvasOpErrors() } : {}),
         ...(derivedTokens ? { derivedTokens } : {}),
+        ...(qualityFindings.length > 0 ? { qualityFindings } : {}),
         ...(htmlSiblingManifest.length > 0 ? { screenManifest: htmlSiblingManifest } : {}),
         ...(target === 'screen' && selectedFrame ? {
           screenName: selectedFrame.name,
@@ -2030,6 +2138,134 @@ export function Workbench(): ReactElement {
         if (attachmentIds.length > 0) clearComposerAttachments()
       }
     })()
+  }
+
+  const requestDesignQualityRepair = (
+    payload: DesignRuntimeQualityPayload,
+    findings: DesignHtmlQualityFinding[],
+    mode: 'auto' | 'manual'
+  ): void => {
+    const repairFindings = mergeDesignHtmlQualityFindings(findings)
+    if (repairFindings.length === 0) return
+    const codes = repairFindings.map((finding) => finding.code).sort()
+    const key = `${mode}:${payload.artifactId}|${codes.join(',')}`
+    if (mode === 'auto' && designAutoRepairSentRef.current.has(key)) return
+    if (mode === 'manual') {
+      const lastSentAt = designQualityRepairLastSentRef.current.get(key) ?? 0
+      if (Date.now() - lastSentAt < 3000) return
+    }
+
+    const trigger = (attempt: number): void => {
+      if (mode === 'auto' && designAutoRepairSentRef.current.has(key)) return
+      const canRun =
+        routeRef.current === 'design' &&
+        runtimeConnectionRef.current === 'ready' &&
+        !busyRef.current &&
+        !useDesignWorkspaceStore.getState().pagesRun
+      if (!canRun) {
+        if (attempt >= 24 || designAutoRepairPendingRef.current.has(key)) return
+        const timer = window.setTimeout(() => {
+          designAutoRepairPendingRef.current.delete(key)
+          trigger(attempt + 1)
+        }, 1500)
+        designAutoRepairPendingRef.current.set(key, timer)
+        return
+      }
+
+      if (mode === 'auto') {
+        designAutoRepairSentRef.current.add(key)
+      } else {
+        designQualityRepairLastSentRef.current.set(key, Date.now())
+      }
+      const pending = designAutoRepairPendingRef.current.get(key)
+      if (pending) {
+        window.clearTimeout(pending)
+        designAutoRepairPendingRef.current.delete(key)
+      }
+
+      const store = useDesignWorkspaceStore.getState()
+      const board = findDesignBoardArtifact(store.artifacts)
+      if (board) store.setActiveArtifact(board.id)
+      if (payload.shapeId) {
+        useCanvasSelectionStore.getState().select([payload.shapeId])
+      } else {
+        store.setActiveArtifact(payload.artifactId)
+      }
+      store.setDesignIntentMode('modify')
+
+      const prompt = buildDesignHtmlQualityRepairPrompt(repairFindings, mode)
+      const displayText =
+        mode === 'auto'
+          ? `Auto-repair design quality: ${codes.join(', ')}`
+          : `Repair design quality: ${codes.join(', ')}`
+      window.setTimeout(() => sendDesignPrompt(prompt, { displayText }), 120)
+    }
+
+    trigger(0)
+  }
+
+  const handleDesignRuntimeQualityFindings = (payload: DesignRuntimeQualityPayload): void => {
+    const autoRepairFindings = payload.findings.filter(shouldAutoRepairDesignHtmlFinding)
+    requestDesignQualityRepair(payload, autoRepairFindings, 'auto')
+  }
+
+  const handleDesignQualityRepairRequest = (payload: DesignRuntimeQualityPayload): void => {
+    requestDesignQualityRepair(payload, payload.findings, 'manual')
+  }
+
+  // The annotation editor handed back a flattened PNG (picture + markup). Persist
+  // it, point the shape at it (so the EDIT-IMAGE lane references the marked-up
+  // version and the canvas shows it as "pending"), then fire a canvas turn that
+  // tells the agent to apply the marks and return a clean result.
+  const handleApplyImageAnnotation = async (result: ImageAnnotationResult): Promise<void> => {
+    const shapeId = useImageAnnotationStore.getState().editingShapeId
+    if (!shapeId) return
+    const root = useDesignWorkspaceStore.getState().workspaceRoot || workspaceRoot
+    if (!root) {
+      setError(t('workspaceRequiredToCreateThread'))
+      return
+    }
+    if (typeof window.kunGui?.saveWorkspaceImageBytes !== 'function') {
+      useDesignWorkspaceStore.getState().setFileError('当前环境不支持保存批注图片')
+      return
+    }
+    setAnnotationBusy(true)
+    try {
+      const saved = await window.kunGui.saveWorkspaceImageBytes({
+        workspaceRoot: root,
+        dataBase64: result.dataBase64,
+        mimeType: result.mimeType
+      })
+      if (!saved.ok) {
+        useDesignWorkspaceStore.getState().setFileError(`保存批注图片失败：${saved.message}`)
+        return
+      }
+      const shapeStore = useCanvasShapeStore.getState()
+      const shape = shapeStore.document.objects[shapeId]
+      if (!shape) return
+      // updateShape records its own undo step, so cancelling / a failed turn can
+      // restore the clean original picture.
+      shapeStore.updateShape(shapeId, { imageUrl: saved.workspaceRelativePath })
+      useCanvasSelectionStore.getState().select([shapeId])
+      // Make sure the board (not some HTML page) is the active artifact, so the
+      // turn resolves to the canvas-selection lane and edits this image.
+      const board = findDesignBoardArtifact(useDesignWorkspaceStore.getState().artifacts)
+      if (board) useDesignWorkspaceStore.getState().setActiveArtifact(board.id)
+      closeImageAnnotation()
+      const prompt = buildImageAnnotationPrompt({
+        annotatedRelativePath: saved.workspaceRelativePath,
+        textNotes: result.textNotes,
+        instruction: result.instruction
+      })
+      const displayText = imageAnnotationDisplayText({
+        textNotes: result.textNotes,
+        instruction: result.instruction
+      })
+      // Let the selection/store writes settle before the turn snapshots the canvas.
+      setTimeout(() => sendDesignPrompt(prompt, { displayText }), 60)
+    } finally {
+      setAnnotationBusy(false)
+    }
   }
 
   const createSddAssistantThreadForDraft = async (draft: SddDraft): Promise<string | null> => {
@@ -3500,7 +3736,29 @@ export function Workbench(): ReactElement {
                 const screenPrompt = brief?.trim() || userPrompt || 'Design this screen'
                 setTimeout(() => sendDesignPrompt(screenPrompt), 300)
               }}
+              onRuntimeQualityFindings={handleDesignRuntimeQualityFindings}
+              onRequestQualityRepair={handleDesignQualityRepairRequest}
             />
+            {(() => {
+              const annotatingShape = annotatingShapeId
+                ? canvasDocument.objects[annotatingShapeId]
+                : undefined
+              if (!annotatingShape || annotatingShape.type !== 'image' || !annotatingShape.imageUrl) {
+                return null
+              }
+              return (
+                <ImageAnnotationEditor
+                  imageUrl={annotatingShape.imageUrl}
+                  workspaceRoot={designWorkspaceRoot || workspaceRoot}
+                  title={annotatingShape.name}
+                  busy={annotationBusy}
+                  onCancel={() => {
+                    if (!annotationBusy) closeImageAnnotation()
+                  }}
+                  onApply={(annotationResult) => void handleApplyImageAnnotation(annotationResult)}
+                />
+              )
+            })()}
             {designImplementOpen ? (
               <div className="pointer-events-none absolute bottom-3 right-3 top-3 z-[70] flex w-[min(400px,calc(100%-1.5rem))] max-w-full">
                 <DesignImplementPanel

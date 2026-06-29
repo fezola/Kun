@@ -328,6 +328,7 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
     designIntentMode: 'generate',
     multiPageMode: readPersistedMultiPageMode(),
     pagesRun: null,
+    parallelPageStates: {},
 
     setWorkspaceRoot: (workspaceRoot) => set({ workspaceRoot }),
 
@@ -645,6 +646,32 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
 
     setPagesRun: (state) => set({ pagesRun: state }),
 
+    setParallelPageStates: (states) =>
+      set({
+        parallelPageStates: Object.fromEntries(
+          states.map((state) => [state.artifactId, state])
+        )
+      }),
+
+    updateParallelPageState: (artifactId, patch) => {
+      const id = artifactId.trim()
+      if (!id) return
+      set((state) => ({
+        parallelPageStates: {
+          ...state.parallelPageStates,
+          [id]: {
+            ...state.parallelPageStates[id],
+            ...patch,
+            artifactId: id,
+            status: patch.status ?? state.parallelPageStates[id]?.status ?? 'queued',
+            updatedAt: patch.updatedAt ?? new Date().toISOString()
+          }
+        }
+      }))
+    },
+
+    clearParallelPageStates: () => set({ parallelPageStates: {} }),
+
     setFileError: (error) => set({ fileError: error }),
 
     openImplementPanel: (title) => set({ implementOpen: true, implementTitle: title }),
@@ -917,7 +944,8 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
         fileError: null,
         designSystemHash: '',
         implementOpen: false,
-        pagesRun: null
+        pagesRun: null,
+        parallelPageStates: {}
       })
   }
 })

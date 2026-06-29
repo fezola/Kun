@@ -1,10 +1,53 @@
 import { describe, expect, it } from 'vitest'
-import { buildCodeCanvasTurnPrompt, buildDesignTurnPrompt } from './design-turn-prompt'
+import {
+  buildCodeCanvasTurnPrompt,
+  buildDesignTurnPrompt,
+  buildParallelDesignPagesPrompt,
+  buildPrototypeHref
+} from './design-turn-prompt'
 import type { ScreenTurnOptions } from './design-turn-prompt'
 import { snapshotCanvas } from './canvas/canvas-snapshot'
 import { createDefaultShape, createEmptyDocument } from './canvas/canvas-types'
 
 describe('design turn prompt', () => {
+  it('builds a parallel page fanout prompt with one delegate_task per artifact', () => {
+    const prompt = buildParallelDesignPagesPrompt({
+      workspaceRoot: '/workspace',
+      projectBrief: 'IKUN community site',
+      jobs: [
+        {
+          artifactId: 'landing',
+          title: 'Landing',
+          relativePath: '.kun-design/doc/landing/v1.html',
+          designMdPath: '.kun-design/doc/landing/DESIGN.md',
+          brief: 'Hero, featured movies, footer',
+          screenManifest: []
+        },
+        {
+          artifactId: 'community',
+          title: 'Community',
+          relativePath: '.kun-design/doc/community/v1.html',
+          designMdPath: '.kun-design/doc/community/DESIGN.md',
+          brief: 'Community feed and member stories',
+          screenManifest: [{ name: 'Design system', htmlPath: '.kun-design/doc/system/v1.html', role: 'design-system' }]
+        }
+      ]
+    })
+
+    expect(prompt).toContain('delegate_task')
+    expect(prompt).toContain('SAME assistant message')
+    expect(prompt).toContain('"profile": "general"')
+    expect(prompt).toContain('"detach": false')
+    expect(prompt).toContain('label: page:landing')
+    expect(prompt).toContain('label: page:community')
+    expect(prompt).toContain('Act as the design director for the fanout')
+    expect(prompt).toContain('real content, concrete states, and a clear primary action')
+    expect(prompt).toContain('Modify ONLY `.kun-design/doc/landing/v1.html` and `.kun-design/doc/landing/DESIGN.md`')
+    expect(prompt).toContain('Modify ONLY `.kun-design/doc/community/v1.html` and `.kun-design/doc/community/DESIGN.md`')
+    expect(prompt).toContain('Design delivery checklist')
+    expect(prompt).toContain('Do NOT modify sibling files')
+  })
+
   it('allows only the reserved HTML and companion design notes files for HTML turns', () => {
     const prompt = buildDesignTurnPrompt({
       target: 'html',
@@ -21,6 +64,26 @@ describe('design turn prompt', () => {
     )
     expect(prompt).toContain('it has already been pre-created')
     expect(prompt).toContain('responsive to arbitrary canvas frame sizes')
+    expect(prompt).toContain('Secondary action path')
+    expect(prompt).toContain('Brand navigation')
+    expect(prompt).toContain('Product shell')
+    expect(prompt).toContain('Visual anchor')
+    expect(prompt).toContain('Product preview detail')
+    expect(prompt).toContain('Trust proof')
+    expect(prompt).toContain('Testimonial attribution')
+    expect(prompt).toContain('Feature anatomy')
+    expect(prompt).toContain('Portfolio/case-study anatomy')
+    expect(prompt).toContain('Pricing anatomy')
+    expect(prompt).toContain('Conversion close')
+    expect(prompt).toContain('FAQ anatomy')
+    expect(prompt).toContain('Lead form response')
+    expect(prompt).toContain('Site footer')
+    expect(prompt).toContain('First-screen hierarchy')
+    expect(prompt).toContain('Hero viewport composition')
+    expect(prompt).toContain('Prototype coherence')
+    expect(prompt).toContain('Content realism')
+    expect(prompt).toContain('no dead `href="#"` links or visual-only buttons')
+    expect(prompt).toContain('Handoff notes')
   })
 
   it('passes selected screen frame details and notes file for screen turns', () => {
@@ -68,9 +131,16 @@ describe('design turn prompt', () => {
     })
 
     expect(prompt).toContain('Other pages already in this project')
-    expect(prompt).toContain('"Home" → .kun-design/home/v1.html — Landing page')
-    expect(prompt).toContain('"Chat" (420x720) → .kun-design/chat/v1.html')
+    expect(prompt).toContain('"Home" → .kun-design/home/v1.html (prototype href: ../home/v1.html) — Landing page')
+    expect(prompt).toContain('"Chat" (420x720) → .kun-design/chat/v1.html (prototype href: ../chat/v1.html)')
+    expect(prompt).toContain('real `<a href="...">` links')
     expect(prompt).toContain('Do NOT modify sibling files')
+  })
+
+  it('computes local prototype hrefs between generated HTML artifacts', () => {
+    expect(buildPrototypeHref('.kun-design/doc/settings/v1.html', '.kun-design/doc/home/v1.html')).toBe('../home/v1.html')
+    expect(buildPrototypeHref('.kun-design/doc/a/b/v1.html', '.kun-design/doc/c/v1.html')).toBe('../../c/v1.html')
+    expect(buildPrototypeHref(undefined, '.kun-design/doc/home/v1.html')).toBe('.kun-design/doc/home/v1.html')
   })
 
   it('includes selected HTML element context for focused edits', () => {
@@ -98,6 +168,29 @@ describe('design turn prompt', () => {
     expect(prompt).toContain('Tag: <h1>')
     expect(prompt).toContain('Current text: Hello World')
     expect(prompt).toContain('Treat this selected element as the binding target')
+  })
+
+  it('injects previous HTML quality findings into iteration prompts', () => {
+    const prompt = buildDesignTurnPrompt({
+      target: 'html',
+      mode: 'text',
+      text: 'Polish the page',
+      artifactRelativePath: '.kun-design/screen/v2.html',
+      basePath: '.kun-design/screen/v1.html',
+      workspaceRoot: '/workspace',
+      qualityFindings: [
+        {
+          code: 'placeholder-content',
+          severity: 'warning',
+          message: 'The page still contains placeholders.',
+          suggestion: 'Replace them with realistic domain copy.'
+        }
+      ]
+    })
+
+    expect(prompt).toContain('Previous version quality audit')
+    expect(prompt).toContain('placeholder-content')
+    expect(prompt).toContain('Replace them with realistic domain copy')
   })
 
   it('tells the agent the path + directory of selected design artifacts (no inlined content)', () => {

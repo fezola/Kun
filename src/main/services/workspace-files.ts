@@ -32,6 +32,8 @@ import type {
   WorkspaceFileTarget,
   WorkspaceFileWritePayload,
   WorkspaceFileWriteResult,
+  WorkspaceImageBytesSavePayload,
+  WorkspaceImageBytesSaveResult,
   WorkspaceImagePickPayload,
   WorkspaceImagePickResult,
   WorkspaceImageReadResult,
@@ -290,6 +292,14 @@ function buildPickedImageName(ext: string, now = new Date()): string {
   return `image-${iso}-${randomUUID().slice(0, 8)}${safeExt}`
 }
 
+function buildAnnotatedImageName(now = new Date()): string {
+  const iso = now.toISOString().replace(/[-:]/g, '').replace(/\..+$/, '').replace('T', '-')
+  return `annotated-${iso}-${randomUUID().slice(0, 8)}.png`
+}
+
+/** Directory the design agent's `generate_image` writes to (and reads references from). */
+const GENERATED_IMAGE_DIR = '.deepseekgui-images'
+
 function readUInt24LE(buffer: Buffer, offset: number): number {
   return buffer[offset] + (buffer[offset + 1] << 8) + (buffer[offset + 2] << 16)
 }
@@ -440,6 +450,47 @@ export async function saveWorkspaceClipboardImage(
       ok: true,
       path: targetPath,
       markdownPath: normalizePathSeparators(relative(dirname(currentFilePath), targetPath)),
+      createdAt: new Date().toISOString()
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : String(error)
+    }
+  }
+}
+
+/**
+ * Save raw image bytes (base64) into the workspace's generated-image directory.
+ * The design-canvas annotation editor flattens the picture + the user's markup
+ * into a PNG and calls this; the returned `workspaceRelativePath` is then used
+ * both as the shape's `imageUrl` and as the `generate_image` reference path, so
+ * it must land inside the workspace (where the reference resolver looks).
+ */
+export async function saveWorkspaceImageBytes(
+  payload: WorkspaceImageBytesSavePayload
+): Promise<WorkspaceImageBytesSaveResult> {
+  try {
+    const buffer = Buffer.from(payload.dataBase64, 'base64')
+    if (!buffer.length) {
+      return { ok: false, message: 'Image data is empty.' }
+    }
+
+    const imageDirectory = payload.imageDirectory?.trim() || GENERATED_IMAGE_DIR
+    const imageDir = await resolveTargetPathWithinWorkspace(imageDirectory, payload.workspaceRoot)
+    await mkdir(imageDir, { recursive: true })
+
+    const targetPath = await resolveTargetPathWithinWorkspace(
+      join(imageDir, buildAnnotatedImageName()),
+      payload.workspaceRoot
+    )
+    await writeFile(targetPath, buffer)
+
+    const workspacePath = await canonicalPath(resolve(expandHomePath(payload.workspaceRoot)))
+    return {
+      ok: true,
+      path: targetPath,
+      workspaceRelativePath: normalizePathSeparators(relative(workspacePath, targetPath)),
       createdAt: new Date().toISOString()
     }
   } catch (error) {

@@ -39,6 +39,8 @@ import type {
   LocalPdfTextTarget,
   WorkspaceClipboardImageSavePayload,
   WorkspaceClipboardImageSaveResult,
+  WorkspaceImageBytesSavePayload,
+  WorkspaceImageBytesSaveResult,
   WorkspaceImagePickPayload,
   WorkspaceImagePickResult,
   WorkspaceFileReadResult,
@@ -472,6 +474,9 @@ export type KunGuiApi = {
     payload: WorkspaceClipboardImageSavePayload
   ) => Promise<WorkspaceClipboardImageSaveResult>
   pickWorkspaceImage: (payload: WorkspaceImagePickPayload) => Promise<WorkspaceImagePickResult>
+  saveWorkspaceImageBytes: (
+    payload: WorkspaceImageBytesSavePayload
+  ) => Promise<WorkspaceImageBytesSaveResult>
   readClipboardImage: () => Promise<ClipboardImageReadResult>
   getPathForFile: (file: File) => string
   renameWorkspaceEntry: (

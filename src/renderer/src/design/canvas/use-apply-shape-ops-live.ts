@@ -48,6 +48,14 @@ export function useApplyShapeOpsLive(
     let lastRunAt = 0
     let trailingTimer: ReturnType<typeof setTimeout> | null = null
 
+    // Screens the agent creates via add_screen still need their HTML generated in
+    // a follow-up turn. Several can be created in ONE turn, but those follow-up
+    // turns must run one at a time on the shared chat thread — so queue them and
+    // drain one per turn-completion. `screenGenSeen` guards against ever
+    // re-enqueuing (hence regenerating) a frame across the run's lifetime.
+    const pendingScreens: { shapeId: string; userPrompt: string; brief?: string }[] = []
+    const screenGenSeen = new Set<string>()
+
     const resetTurn = (): void => {
       appliedCount = 0
       affectedThisTurn.clear()
@@ -117,6 +125,17 @@ export function useApplyShapeOpsLive(
       }
     }
 
+    // Kick off the next queued screen's HTML generation — but only while the
+    // thread is idle, so the per-screen turns run strictly one at a time. Called
+    // on every turn-completion; the previous screen's generation turn ending is
+    // what advances the queue.
+    const drainPendingScreens = (): void => {
+      if (useChatStore.getState().currentTurnId) return
+      const next = pendingScreens.shift()
+      if (!next) return
+      onScreenCreatedRef.current?.(next.shapeId, next.userPrompt, next.brief)
+    }
+
     // Final pass once the turn completes: apply any block that finished exactly at
     // the end, then do a single camera fit + kick off screen-HTML generation.
     const finalizeTurn = (): void => {
@@ -144,11 +163,15 @@ export function useApplyShapeOpsLive(
           const doc = useCanvasShapeStore.getState().document
           const userBlock = userId ? s.blocks.find((b) => b.id === userId) : null
           const userPrompt = userBlock?.kind === 'user' ? (userBlock.text ?? '') : ''
+          // Queue EVERY newly created screen frame (not just the first) so a turn
+          // that adds several screens generates HTML for all of them — the drain
+          // below runs them sequentially.
           for (const id of all) {
             const shape = doc.objects[id]
-            if (shape && isHtmlFrame(shape)) {
-              onScreenCreatedRef.current(id, userPrompt, takeScreenBrief(id) ?? undefined)
-              break
+            if (shape && isHtmlFrame(shape) && !screenGenSeen.has(id)) {
+              screenGenSeen.add(id)
+              const brief = takeScreenBrief(id)
+              pendingScreens.push({ shapeId: id, userPrompt, ...(brief ? { brief } : {}) })
             }
           }
         }
@@ -157,6 +180,8 @@ export function useApplyShapeOpsLive(
       // them. Always set (even []) so a clean turn clears stale errors.
       setLastCanvasOpErrors([...errorsThisTurn])
       resetTurn()
+      // Now that the just-finished turn has cleared, start the next queued screen.
+      drainPendingScreens()
     }
 
     const unsubscribe = useChatStore.subscribe((state, prev) => {

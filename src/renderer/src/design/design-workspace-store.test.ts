@@ -123,6 +123,28 @@ describe('design workspace store', () => {
     expect(useDesignWorkspaceStore.getState().artifacts.find((a) => a.id === 'screen')!.versions[0].summary).toBe(before)
   })
 
+  it('tracks parallel page state as transient workspace state', () => {
+    useDesignWorkspaceStore.getState().setParallelPageStates([
+      { artifactId: 'screen', status: 'queued' }
+    ])
+    useDesignWorkspaceStore.getState().updateParallelPageState('screen', {
+      childId: 'child_1',
+      status: 'running',
+      summary: 'Working'
+    })
+
+    expect(useDesignWorkspaceStore.getState().parallelPageStates.screen).toMatchObject({
+      artifactId: 'screen',
+      childId: 'child_1',
+      status: 'running',
+      summary: 'Working'
+    })
+    expect(useDesignWorkspaceStore.getState().artifacts.find((a) => a.id === 'screen')).not.toHaveProperty('childId')
+
+    useDesignWorkspaceStore.getState().clearParallelPageStates()
+    expect(useDesignWorkspaceStore.getState().parallelPageStates).toEqual({})
+  })
+
   it('createDocument adds a new active 设计稿 with an empty projection', () => {
     const id = useDesignWorkspaceStore.getState().createDocument('Second')
     const state = useDesignWorkspaceStore.getState()

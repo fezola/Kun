@@ -83,6 +83,34 @@ export type WorkspaceImagePickPayload = {
   imageDirectory?: string
 }
 
+/**
+ * Persist raw image bytes (base64-encoded) into the workspace — used by the
+ * design-canvas annotation editor to save a flattened PNG (original picture +
+ * the user's markup) that the agent then feeds to `generate_image` as a
+ * reference. Mirrors the clipboard/picker save flows but takes the bytes
+ * directly instead of reading the clipboard or opening a dialog.
+ */
+export type WorkspaceImageBytesSavePayload = {
+  workspaceRoot: string
+  /** Base64-encoded image bytes (no `data:` prefix). */
+  dataBase64: string
+  /** MIME type of the bytes; only `image/png` is currently emitted. */
+  mimeType?: string
+  /** Target directory under the workspace; defaults to `.deepseekgui-images`. */
+  imageDirectory?: string
+}
+
+export type WorkspaceImageBytesSaveResult =
+  | {
+      ok: true
+      /** Absolute on-disk path of the saved file. */
+      path: string
+      /** Path relative to the workspace root, for use as a shape `imageUrl`. */
+      workspaceRelativePath: string
+      createdAt: string
+    }
+  | { ok: false; message: string }
+
 export type WorkspaceImagePickResult =
   | {
       ok: true

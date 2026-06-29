@@ -1,5 +1,5 @@
 import { WRITE_PROTOTYPE_MAX_TEXT_CHARS } from '@shared/write-prototype'
-import { DESIGN_CRAFT_LINES, formatDesignContextLines, type DesignContext } from './design-context'
+import { DESIGN_CRAFT_LINES, DESIGN_DELIVERY_LINES, formatDesignContextLines, type DesignContext } from './design-context'
 import { DESIGN_PAGES_MAX, DESIGN_PAGES_MIN } from './design-pages'
 import type { ScreenManifestEntry } from './design-turn-prompt'
 import type { DesignArtifact } from './design-types'
@@ -48,6 +48,12 @@ export function buildDesignSpecStub(brief: string): string {
     '',
     '## Information architecture (pages)',
     '_TBD_',
+    '',
+    '## State & responsiveness plan',
+    '_TBD_',
+    '',
+    '## Implementation notes',
+    '_TBD_',
     ''
   ].join('\n')
 }
@@ -76,12 +82,13 @@ export function buildDesignSpecPrompt(options: {
     `Design brief file (already created — fill it in): ${options.designMdPath}`,
     '',
     'Do TWO things this turn, in order:',
-    `1) Write \`${options.designMdPath}\` as the project's design brief — the single source of truth the later steps follow. Cover: the product concept and who it is for; the visual direction (mood, the palette intent around the brand color, typography intent, layout & motion personality); and an "Information architecture" section listing the ${DESIGN_PAGES_MIN}-${maxPages} distinct pages with one line each. Make real decisions — no placeholders.`,
+    `1) Write \`${options.designMdPath}\` as the project's design brief — the single source of truth the later steps follow. Cover: the product concept and who it is for; the visual direction (mood, the palette intent around the brand color, typography intent, layout & motion personality); an "Information architecture" section listing the ${DESIGN_PAGES_MIN}-${maxPages} distinct pages with one line each; a "State & responsiveness plan"; and implementation notes. Make real decisions — no placeholders.`,
     `2) AFTER writing the file, end your reply with EXACTLY ONE fenced \`\`\`pages JSON array of those same pages. This is REQUIRED — the app parses it to scaffold the screens.`,
     '',
     'Rules:',
     `- Modify ONLY \`${options.designMdPath}\` this turn. Do NOT create HTML or any other file, and do NOT design screens yet.`,
     '- Each pages item is an object: { "title": "<short screen name ≤ 4 words>", "brief": "<self-contained paragraph: purpose, key sections, components, states>" }.',
+    '- Each page brief must name the page goal, primary action, key content/modules, relevant states, and responsive behavior.',
     '- Order by importance (primary screen first). Cover only genuinely distinct screens; if it is truly one screen, return one.'
   ]
   if (options.existingPages && options.existingPages.length > 0) {
@@ -95,8 +102,8 @@ export function buildDesignSpecPrompt(options: {
   }
   const contextLines = formatDesignContextLines(options.designContext)
   if (contextLines.length > 0) lines.push('', ...contextLines)
-  // A trimmed craft reminder so the brief already biases toward quality.
-  lines.push('', ...DESIGN_CRAFT_LINES.slice(0, 4))
+  // A trimmed delivery + craft reminder so the brief already biases toward quality.
+  lines.push('', ...DESIGN_DELIVERY_LINES.slice(0, 5), '', ...DESIGN_CRAFT_LINES.slice(0, 4))
   const brief = options.brief.trim()
   if (brief) lines.push('', 'App idea:', brief.slice(0, WRITE_PROTOTYPE_MAX_TEXT_CHARS))
   lines.push(
@@ -149,7 +156,7 @@ export function buildDesignSystemBoardPrompt(options: {
   ]
   const contextLines = formatDesignContextLines(options.designContext)
   if (contextLines.length > 0) lines.push('', ...contextLines)
-  lines.push('', ...DESIGN_CRAFT_LINES)
+  lines.push('', ...DESIGN_DELIVERY_LINES, '', ...DESIGN_CRAFT_LINES)
   const brief = options.brief.trim()
   if (brief) lines.push('', 'Product:', brief.slice(0, WRITE_PROTOTYPE_MAX_TEXT_CHARS))
   return lines.join('\n')

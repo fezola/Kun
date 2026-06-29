@@ -36,6 +36,8 @@ describe('buildDesignSpecStub', () => {
     expect(stub).toContain('# Design brief')
     expect(stub).toContain('A fan site for IKUN')
     expect(stub).toContain('Information architecture')
+    expect(stub).toContain('State & responsiveness plan')
+    expect(stub).toContain('Implementation notes')
   })
 })
 
@@ -51,6 +53,8 @@ describe('buildDesignSpecPrompt', () => {
     expect(prompt).toContain('.kun-design/doc/design.md')
     expect(prompt).toContain('```pages')
     expect(prompt).toContain('REQUIRED')
+    expect(prompt).toContain('State & responsiveness plan')
+    expect(prompt).toContain('primary action')
   })
 
   it('restricts edits to design.md and forbids designing screens yet', () => {
@@ -77,6 +81,7 @@ describe('buildDesignSystemBoardPrompt', () => {
     expect(prompt).toContain('.kun-design/doc/sys/v1.html')
     expect(prompt).toContain(`Also WRITE \`${DESIGN_SYSTEM_MD_PATH}\``)
     expect(prompt).toContain('#hex')
+    expect(prompt).toContain('Design delivery checklist')
   })
 
   it('limits the writable files to the board and the token file', () => {

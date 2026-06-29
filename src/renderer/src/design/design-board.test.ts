@@ -6,11 +6,11 @@ import {
 } from './design-board'
 import { useCanvasSelectionStore } from './canvas/canvas-selection-store'
 import { useCanvasShapeStore } from './canvas/canvas-shape-store'
-import { createEmptyDocument, isHtmlFrame } from './canvas/canvas-types'
+import { createEmptyDocument, createHtmlFrameShape, isHtmlFrame } from './canvas/canvas-types'
 import { useCanvasUndoStore } from './canvas/canvas-undo-store'
 import { useCanvasViewportStore } from './canvas/canvas-viewport-store'
 import { useDesignWorkspaceStore } from './design-workspace-store'
-import type { DesignArtifact, DesignDocument } from './design-types'
+import { defaultDesignArtifactNode, type DesignArtifact, type DesignDocument } from './design-types'
 
 const createdAt = '2026-06-20T00:00:00.000Z'
 
@@ -62,6 +62,7 @@ beforeEach(() => {
   useCanvasShapeStore.getState().loadDocument(createEmptyDocument())
   useCanvasUndoStore.getState().clear()
   useCanvasSelectionStore.getState().clearSelection()
+  useCanvasViewportStore.getState().setContainerSize(1200, 800)
   useCanvasViewportStore.getState().setVbox({ x: -600, y: -400, width: 1200, height: 800 })
 })
 
@@ -99,6 +100,49 @@ describe('design board helpers', () => {
 
     const second = syncHtmlArtifactsToBoardDocument(first.document, [screen])
     expect(second.addedFrameIds).toEqual([])
+    expect(second.updatedFrameIds).toEqual([])
+  })
+
+  it('uses real screen dimensions and current viewport placement for implicit default artifact nodes', () => {
+    useCanvasViewportStore.getState().setVbox({ x: 1000, y: 500, width: 1600, height: 1000 })
+    const screen = artifact('home', 'html', { node: defaultDesignArtifactNode(5) })
+
+    const synced = syncHtmlArtifactsToBoardDocument(createEmptyDocument(), [screen])
+
+    expect(synced.addedFrameIds).toHaveLength(1)
+    const frame = synced.document.objects[synced.addedFrameIds[0]]
+    expect(frame).toMatchObject({
+      htmlArtifactId: 'home',
+      x: 1160,
+      y: 600,
+      width: 1280,
+      height: 800
+    })
+  })
+
+  it('updates an existing linked frame only from a custom artifact node', () => {
+    const doc = createEmptyDocument()
+    const root = doc.objects[doc.rootId]
+    const existing = createHtmlFrameShape('Old', 10, 20, 'custom', 'desktop')
+    doc.objects[existing.id] = { ...existing, parentId: doc.rootId }
+    doc.objects[doc.rootId] = { ...root, children: [existing.id] }
+
+    const synced = syncHtmlArtifactsToBoardDocument(doc, [
+      artifact('custom', 'html', {
+        title: 'Renamed',
+        node: { x: 300, y: 400, width: 700, height: 500, sizeMode: 'manual' }
+      })
+    ])
+
+    expect(synced.addedFrameIds).toEqual([])
+    expect(synced.updatedFrameIds).toEqual([existing.id])
+    expect(synced.document.objects[existing.id]).toMatchObject({
+      name: 'Renamed',
+      x: 300,
+      y: 400,
+      width: 700,
+      height: 500
+    })
   })
 
   it('creates a centered screen frame without stealing the active board', () => {

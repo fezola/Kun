@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { useCanvasSelectionStore } from '../../../design/canvas/canvas-selection-store'
 import { useCanvasShapeStore } from '../../../design/canvas/canvas-shape-store'
 import { useCanvasUndoStore } from '../../../design/canvas/canvas-undo-store'
+import { useImageAnnotationStore } from '../../../design/canvas/image-annotation-store'
 import {
   DEFAULT_FILL,
   fillColor as resolveFillColor,
@@ -460,6 +461,11 @@ function PropertiesPanelInner({ onImplementDesign }: Props): ReactElement | null
   const linkedArtifact = singleHtmlFrame
     ? useDesignWorkspaceStore.getState().artifacts.find((a) => a.id === singleHtmlFrame.htmlArtifactId)
     : null
+  // A single filled picture can be annotated → the agent re-edits it (image-to-image).
+  const singleFilledImage =
+    shapes.length === 1 && shapes[0].type === 'image' && Boolean(shapes[0].imageUrl)
+      ? shapes[0]
+      : null
 
   const requestScreenModify = (): void => {
     setDesignIntentMode('modify')
@@ -565,6 +571,26 @@ function PropertiesPanelInner({ onImplementDesign }: Props): ReactElement | null
               {t('designImplement')}
             </button>
           </div>
+        </Section>
+      )}
+
+      {/* Annotate-to-edit — draw markup on a filled picture, agent applies it. */}
+      {singleFilledImage && (
+        <Section title={t('canvasInspectorAnnotate', 'AI 修改图片')}>
+          <button
+            type="button"
+            onClick={() => useImageAnnotationStore.getState().openImageAnnotation(singleFilledImage.id)}
+            className="flex h-8 w-full items-center justify-center gap-1.5 rounded-[8px] bg-accent-soft text-[11.5px] font-medium text-accent shadow-[inset_0_0_0_1px_var(--ds-sidebar-row-ring)] transition hover:opacity-90"
+          >
+            <PenLine className="h-3.5 w-3.5" strokeWidth={1.9} />
+            {t('canvasInspectorAnnotateOpen', '在图片上标注修改')}
+          </button>
+          <p className="mt-1 text-[10.5px] leading-4 text-ds-faint">
+            {t(
+              'canvasInspectorAnnotateHint',
+              '画箭头/框选/写文字标出要改的地方，AI 按标注重画这张图（也可双击图片打开）。'
+            )}
+          </p>
         </Section>
       )}
 

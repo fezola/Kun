@@ -1,5 +1,6 @@
 import { useChatStore } from '../store/chat-store'
 import { collectAssistantTextForTurn } from '../store/chat-store-runtime-helpers'
+import type { ChatBlock, ToolBlock } from '../agent/types'
 import type { SendMessageOverrides } from '../store/chat-store-types'
 import { formatDesignSystemMarkdown, type DesignContext } from './design-context'
 import {
@@ -23,8 +24,14 @@ import {
   type DesignPagePlanEntry
 } from './design-pages'
 import { prepareDesignPreviewFile } from './design-preview-file'
-import { buildDesignTurnPrompt } from './design-turn-prompt'
+import {
+  buildDesignTurnPrompt,
+  buildParallelDesignPagesPrompt,
+  buildPrototypeHref,
+  type ParallelDesignPageJob
+} from './design-turn-prompt'
 import { createDesignArtifactId, defaultDesignArtifactNode } from './design-types'
+import type { ParallelDesignPageState } from './design-workspace-store-types'
 import { useDesignWorkspaceStore } from './design-workspace-store'
 
 type SendMessageFn = (
@@ -69,6 +76,7 @@ export type RunDesignPagesDeps = {
 
 const PLAN_TIMEOUT_MS = 180_000
 const PAGE_TIMEOUT_MS = 300_000
+const PARALLEL_PAGES_TIMEOUT_MS = 420_000
 
 let activeRun: { cancelled: boolean } | null = null
 
@@ -84,6 +92,56 @@ export function cancelDesignPagesRun(): void {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function normalizePlanTitle(title: string): string {
+  return title.trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+function formatPageFlowLines(
+  entry: DesignPagePlanEntry,
+  currentRelativePath: string,
+  plannedPages: Array<{ title: string; relativePath: string }>
+): string[] {
+  const lines: string[] = []
+  if (entry.primaryAction?.trim()) {
+    lines.push(`Primary prototype action for this page: ${entry.primaryAction.trim()}`)
+  }
+  const linksTo = entry.linksTo?.map((title) => title.trim()).filter(Boolean) ?? []
+  if (linksTo.length > 0) {
+    lines.push('Planned outgoing prototype links from this page:')
+    for (const title of linksTo) {
+      const target = plannedPages.find((page) => normalizePlanTitle(page.title) === normalizePlanTitle(title))
+      if (target) {
+        lines.push(`- "${target.title}" -> href \`${buildPrototypeHref(currentRelativePath, target.relativePath)}\``)
+      } else {
+        lines.push(`- "${title}" -> no matching pre-created page; do not invent a file path.`)
+      }
+    }
+    lines.push('Use these exact href values for matching targets. If a target is missing, make the control local/stateful instead of linking to a non-existent file.')
+  }
+  return lines
+}
+
+function formatPageProductBriefLines(entry: DesignPagePlanEntry): string[] {
+  const lines: string[] = []
+  if (entry.userGoal?.trim()) {
+    lines.push(`User goal for this page: ${entry.userGoal.trim()}`)
+  }
+  const dataExamples = entry.dataExamples?.map((item) => item.trim()).filter(Boolean) ?? []
+  if (dataExamples.length > 0) {
+    lines.push('Required realistic content/data to visibly include:')
+    for (const item of dataExamples) lines.push(`- ${item}`)
+  }
+  const states = entry.states?.map((item) => item.trim()).filter(Boolean) ?? []
+  if (states.length > 0) {
+    lines.push('Key UI states to represent or document in the screen:')
+    for (const state of states) lines.push(`- ${state}`)
+  }
+  if (lines.length > 0) {
+    lines.push('Use the goal, data examples, and states as actual UI content or DESIGN.md handoff notes; do not leave them as invisible planning text.')
+  }
+  return lines
 }
 
 /** Best-effort write of a plain workspace file (the design.md stub, DESIGN_SYSTEM.md baseline). */
@@ -135,6 +193,148 @@ function assistantTextForLastTurn(): string {
   }
   if (!userId) return s.liveAssistant.trim()
   return collectAssistantTextForTurn(s.blocks, userId, s.liveAssistant)
+}
+
+function blocksForLastTurn(): ChatBlock[] {
+  const s = useChatStore.getState()
+  let userIndex = -1
+  for (let i = s.blocks.length - 1; i >= 0; i -= 1) {
+    if (s.blocks[i].kind === 'user') {
+      userIndex = i
+      break
+    }
+  }
+  if (userIndex < 0) return []
+  const out: ChatBlock[] = []
+  for (let i = userIndex + 1; i < s.blocks.length; i += 1) {
+    if (s.blocks[i].kind === 'user') break
+    out.push(s.blocks[i])
+  }
+  return out
+}
+
+function parseJsonObject(text: string | undefined): Record<string, unknown> | null {
+  if (!text?.trim()) return null
+  try {
+    const parsed = JSON.parse(text)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null
+  } catch {
+    return null
+  }
+}
+
+function stringField(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function artifactIdFromLabel(label: string | undefined): string | undefined {
+  const trimmed = label?.trim()
+  if (!trimmed?.startsWith('page:')) return undefined
+  return trimmed.slice('page:'.length).trim() || undefined
+}
+
+function artifactIdFromPrompt(prompt: string | undefined, jobs: ParallelDesignPageJob[]): string | undefined {
+  if (!prompt) return undefined
+  for (const job of jobs) {
+    if (prompt.includes(job.artifactId) || prompt.includes(job.relativePath)) return job.artifactId
+  }
+  return undefined
+}
+
+function childMetaFromBlock(block: ToolBlock): Record<string, unknown> | null {
+  const child = block.meta?.child
+  return child && typeof child === 'object' && !Array.isArray(child)
+    ? child as Record<string, unknown>
+    : null
+}
+
+function delegateArtifactIdFromBlock(
+  block: ToolBlock,
+  jobs: ParallelDesignPageJob[],
+  toolArtifactIds: Map<string, string>
+): string | undefined {
+  const known = toolArtifactIds.get(block.id)
+  if (known) return known
+  const detail = parseJsonObject(block.detail)
+  const child = childMetaFromBlock(block)
+  const id =
+    artifactIdFromLabel(stringField(detail?.label)) ??
+    artifactIdFromLabel(stringField(child?.childLabel)) ??
+    artifactIdFromPrompt(stringField(detail?.prompt), jobs)
+  if (id) toolArtifactIds.set(block.id, id)
+  return id
+}
+
+function statusFromDelegateBlock(block: ToolBlock, detail: Record<string, unknown> | null): ParallelDesignPageState['status'] {
+  const rawStatus = stringField(detail?.status)
+  if (rawStatus === 'completed') return 'done'
+  if (rawStatus === 'failed' || rawStatus === 'aborted') return 'failed'
+  if (rawStatus === 'queued') return 'queued'
+  if (rawStatus === 'running') return 'running'
+  if (block.status === 'success') return 'done'
+  if (block.status === 'error') return 'failed'
+  return 'running'
+}
+
+export function deriveParallelDesignPageStatesFromBlocks(
+  blocks: ChatBlock[],
+  jobs: ParallelDesignPageJob[],
+  previous: Record<string, ParallelDesignPageState> = {},
+  toolArtifactIds: Map<string, string> = new Map()
+): ParallelDesignPageState[] {
+  const jobIds = new Set(jobs.map((job) => job.artifactId))
+  const next = new Map<string, ParallelDesignPageState>()
+  for (const job of jobs) {
+    next.set(job.artifactId, previous[job.artifactId] ?? { artifactId: job.artifactId, status: 'queued' })
+  }
+  for (const block of blocks) {
+    if (block.kind !== 'tool') continue
+    const toolName = typeof block.meta?.toolName === 'string' ? block.meta.toolName : ''
+    if (toolName && toolName !== 'delegate_task') continue
+    if (!toolName && !/delegate_task/i.test(block.summary)) continue
+    const artifactId = delegateArtifactIdFromBlock(block, jobs, toolArtifactIds)
+    if (!artifactId || !jobIds.has(artifactId)) continue
+    const detail = parseJsonObject(block.detail)
+    const child = childMetaFromBlock(block)
+    const state: ParallelDesignPageState = {
+      ...(next.get(artifactId) ?? { artifactId, status: 'queued' as const }),
+      artifactId,
+      status: statusFromDelegateBlock(block, detail),
+      ...(stringField(detail?.childId) ?? stringField(child?.childId)
+        ? { childId: stringField(detail?.childId) ?? stringField(child?.childId) }
+        : {}),
+      ...(stringField(detail?.summary) ? { summary: stringField(detail?.summary) } : {}),
+      ...(stringField(detail?.error) ? { error: stringField(detail?.error) } : {}),
+      updatedAt: new Date().toISOString()
+    }
+    next.set(artifactId, state)
+  }
+  return jobs.map((job) => next.get(job.artifactId) ?? { artifactId: job.artifactId, status: 'queued' })
+}
+
+function syncParallelPageStates(
+  jobs: ParallelDesignPageJob[],
+  toolArtifactIds: Map<string, string>
+): ParallelDesignPageState[] {
+  const states = deriveParallelDesignPageStatesFromBlocks(
+    blocksForLastTurn(),
+    jobs,
+    useDesignWorkspaceStore.getState().parallelPageStates,
+    toolArtifactIds
+  )
+  useDesignWorkspaceStore.getState().setParallelPageStates(states)
+  const done = states.filter((state) => state.status === 'done' || state.status === 'failed').length
+  const active = states.find((state) => state.status === 'running') ?? states.find((state) => state.status === 'queued')
+  const activeJob = active ? jobs.find((job) => job.artifactId === active.artifactId) : undefined
+  useDesignWorkspaceStore.getState().setPagesRun({
+    phase: 'generating',
+    total: jobs.length,
+    done,
+    title: activeJob?.title ?? (done >= jobs.length ? 'Finalizing pages' : 'Parallel pages')
+  })
+  return states
 }
 
 /**
@@ -417,12 +617,13 @@ export async function runDesignPages(deps: RunDesignPagesDeps): Promise<void> {
     // baseIndex already accounts for any foundation cards added above.
     const baseIndex = useDesignWorkspaceStore.getState().artifacts.length
     const planTitles = plan.map((p) => `"${p.title}"`).join(', ')
-    const created: { id: string; relativePath: string; entry: DesignPagePlanEntry }[] = []
+    const created: Array<ParallelDesignPageJob & { entry: DesignPagePlanEntry }> = []
     for (let i = 0; i < plan.length; i += 1) {
       if (signal.cancelled) return
       const entry = plan[i]
       const id = createDesignArtifactId()
       const relativePath = `.kun-design/${docId}/${id}/v1.html`
+      const designMdPath = `.kun-design/${docId}/${id}/DESIGN.md`
       const createdAt = new Date().toISOString()
       useDesignWorkspaceStore.getState().upsertArtifact({
         id,
@@ -432,6 +633,7 @@ export async function runDesignPages(deps: RunDesignPagesDeps): Promise<void> {
         createdAt,
         updatedAt: createdAt,
         versions: [{ id: `${id}-v1`, relativePath, createdAt, summary: entry.brief }],
+        designMdPath,
         previewStatus: 'pending',
         node: defaultDesignArtifactNode(baseIndex + i)
       })
@@ -440,75 +642,110 @@ export async function runDesignPages(deps: RunDesignPagesDeps): Promise<void> {
         store.setFileError(`Design preview setup failed: ${prep.message}`)
         return
       }
-      created.push({ id, relativePath, entry })
+      created.push({
+        artifactId: id,
+        title: entry.title,
+        relativePath,
+        designMdPath,
+        brief: entry.brief,
+        screenManifest: [],
+        entry
+      })
     }
 
-    // 4) Generate each page on its own turn, following the foundation and aware of
-    // the full plan + already-built siblings (the design-system board + logo +
-    // prior pages all read as siblings for cohesion).
+    // 4) Generate pages in parallel. The parent design agent only delegates:
+    // every child gets one pre-created artifact path and may edit ONLY that
+    // page's HTML + DESIGN.md. `delegate_task` calls from one assistant message
+    // run in a parallel batch in Kun's AgentLoop.
     const foundationLines = buildFoundationFollowLines({
       ...(designMdRef ? { designMdPath: designMdRef } : {}),
       ...(designSystemRef ? { designSystemMdPath: designSystemRef } : {})
     })
     const foundationBlock = foundationLines.length > 0 ? `${foundationLines.join('\n')}\n\n` : ''
-    const builtIds = new Set<string>(foundationBuiltIds)
-    for (let i = 0; i < created.length; i += 1) {
-      if (signal.cancelled) return
-      const page = created[i]
-      useDesignWorkspaceStore.getState().setPagesRun({
-        phase: 'generating',
-        total: created.length,
-        done: i,
-        title: page.entry.title
-      })
-      useDesignWorkspaceStore.getState().setActiveArtifact(page.id)
-
-      // Only already-built artifacts are readable; mention the rest as upcoming so
-      // the agent designs cohesively without trying to read empty skeleton files.
-      const readable = useDesignWorkspaceStore
-        .getState()
-        .artifacts.filter((a) => builtIds.has(a.id))
-      const manifest = buildHtmlSiblingManifest(readable, page.id)
+    const createdIds = new Set(created.map((page) => page.artifactId))
+    const readable = useDesignWorkspaceStore
+      .getState()
+      .artifacts.filter((a) => foundationBuiltIds.has(a.id) || createdIds.has(a.id))
+    const plannedPages = created.map((page) => ({ title: page.title, relativePath: page.relativePath }))
+    const jobs: ParallelDesignPageJob[] = created.map((page, i) => {
       const projectContext =
         created.length > 1
           ? `This is page ${i + 1} of ${created.length} in one app. All pages: ${planTitles}. Keep ONE cohesive design system across them; design ONLY this page now.\n\n`
           : ''
-      const prompt = buildDesignTurnPrompt({
-        target: 'html',
-        mode: 'text',
-        text: `${foundationBlock}${projectContext}${page.entry.brief}`,
-        artifactRelativePath: page.relativePath,
+      const productBriefLines = formatPageProductBriefLines(page.entry)
+      const productBriefContext = productBriefLines.length > 0 ? `${productBriefLines.join('\n')}\n\n` : ''
+      const flowLines = formatPageFlowLines(page.entry, page.relativePath, plannedPages)
+      const flowContext = flowLines.length > 0 ? `${flowLines.join('\n')}\n\n` : ''
+      return {
+        artifactId: page.artifactId,
+        title: page.title,
+        relativePath: page.relativePath,
+        designMdPath: page.designMdPath,
+        brief: `${foundationBlock}${projectContext}${productBriefContext}${flowContext}${page.entry.brief}`,
+        screenManifest: buildHtmlSiblingManifest(readable, page.artifactId)
+      }
+    })
+
+    if (jobs.length > 0) {
+      useDesignWorkspaceStore.getState().setParallelPageStates(
+        jobs.map((job) => ({ artifactId: job.artifactId, status: 'queued' }))
+      )
+      useDesignWorkspaceStore.getState().setPagesRun({
+        phase: 'generating',
+        total: jobs.length,
+        done: 0,
+        title: jobs[0]?.title ?? 'Parallel pages'
+      })
+      useDesignWorkspaceStore.getState().setActiveArtifact(jobs[0].artifactId)
+
+      const toolArtifactIds = new Map<string, string>()
+      const unsubscribe = useChatStore.subscribe(() => {
+        syncParallelPageStates(jobs, toolArtifactIds)
+      })
+      const prompt = buildParallelDesignPagesPrompt({
         workspaceRoot: deps.workspaceRoot,
+        jobs,
+        projectBrief: deps.brief,
         ...(deps.generationPrompt ? { customPrompt: deps.generationPrompt } : {}),
-        ...(deps.designContext ? { designContext: deps.designContext } : {}),
-        ...(manifest.length > 0 ? { screenManifest: manifest } : {})
+        ...(deps.designContext ? { designContext: deps.designContext } : {})
       })
-      const pageDisplay =
-        deps.labels?.page?.(page.entry.title, i + 1, created.length) ??
-        `Design page ${i + 1}/${created.length}: ${page.entry.title}`
-      const status = await runTurn({
-        sendMessage: deps.sendMessage,
-        prompt,
-        overrides: overrides(pageDisplay),
-        signal,
-        timeoutMs: PAGE_TIMEOUT_MS,
-        artifactId: page.id
-      })
+      let sent = false
+      let status: 'complete' | 'timeout' | 'cancelled' = 'complete'
+      try {
+        sent = await deps.sendMessage(prompt, 'agent', overrides(`Design ${jobs.length} pages in parallel`))
+        if (sent) status = await waitForTurnComplete(signal, PARALLEL_PAGES_TIMEOUT_MS)
+      } finally {
+        unsubscribe()
+      }
+      if (!sent) {
+        store.setFileError('Could not start the parallel page generation turn.')
+        return
+      }
+      const finalStates = syncParallelPageStates(jobs, toolArtifactIds)
       if (status === 'cancelled') return
-      if (status === 'send-failed') {
-        store.setFileError(`Could not start generating "${page.entry.title}".`)
-        return
-      }
       if (status === 'timeout') {
-        store.setFileError(`Generating "${page.entry.title}" timed out.`)
+        store.setFileError('Parallel page generation timed out.')
         return
       }
-      builtIds.add(page.id)
+      for (const job of jobs) {
+        const state = finalStates.find((item) => item.artifactId === job.artifactId)
+        const summary = extractAgentDesignSummary(state?.summary ?? '') || state?.summary?.trim()
+        if (summary) {
+          useDesignWorkspaceStore.getState().setVersionSummary(job.artifactId, `${job.artifactId}-v1`, summary)
+        }
+      }
+      const failed = finalStates.filter((state) => state.status === 'failed')
+      if (failed.length > 0) {
+        const names = failed
+          .map((state) => jobs.find((job) => job.artifactId === state.artifactId)?.title ?? state.artifactId)
+          .join(', ')
+        store.setFileError(`Parallel page generation failed for: ${names}`)
+      }
     }
 
     // Land on the primary (first) page so the canvas focuses something finished.
     if (created.length > 0) {
-      useDesignWorkspaceStore.getState().setActiveArtifact(created[0].id)
+      useDesignWorkspaceStore.getState().setActiveArtifact(created[0].artifactId)
     }
   } catch (error) {
     store.setFileError(error instanceof Error ? error.message : String(error))

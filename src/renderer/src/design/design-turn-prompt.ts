@@ -1,5 +1,5 @@
 import { WRITE_PROTOTYPE_DEFAULT_PROMPT, WRITE_PROTOTYPE_MAX_TEXT_CHARS } from '@shared/write-prototype'
-import { DESIGN_CRAFT_LINES, formatDesignContextLines, type DesignContext } from './design-context'
+import { DESIGN_CRAFT_LINES, DESIGN_DELIVERY_LINES, formatDesignContextLines, type DesignContext } from './design-context'
 import type { CanvasSnapshot } from './canvas/canvas-snapshot'
 import { snapshotToCompactJson } from './canvas/canvas-snapshot'
 import type { OpError } from './canvas/shape-ops'
@@ -8,6 +8,7 @@ import type { DesignToken } from './canvas/design-system-types'
 import { takeLastLintFindings } from './canvas/design-lint'
 import type { DerivedTokens } from './design-token-extract'
 import type { DesignContextLocation, DesignHtmlElementContext } from './design-composer-context'
+import { formatDesignHtmlQualityFindings, type DesignHtmlQualityFinding } from './design-html-quality'
 
 /**
  * Render the design tokens already extracted from the live design (palette +
@@ -79,6 +80,11 @@ export type DesignTurnOptions = {
    * re-inventing one and drifting from the rest of the product.
    */
   derivedTokens?: DerivedTokens
+  /**
+   * Static audit findings from the prior HTML version. These are injected only
+   * into HTML/screen turns so the agent fixes quality issues during iteration.
+   */
+  qualityFindings?: DesignHtmlQualityFinding[]
 }
 
 /**
@@ -130,14 +136,122 @@ export type ScreenManifestEntry = {
   role?: 'design-system' | 'logo'
 }
 
+function normalizePrototypePath(path: string): string {
+  return path.trim().replaceAll('\\', '/').replace(/^\/+/, '')
+}
+
+export function buildPrototypeHref(fromHtmlPath: string | undefined, toHtmlPath: string): string {
+  const target = normalizePrototypePath(toHtmlPath)
+  const from = normalizePrototypePath(fromHtmlPath ?? '')
+  if (!from || !target) return target
+  const fromParts = from.split('/').filter(Boolean)
+  const targetParts = target.split('/').filter(Boolean)
+  fromParts.pop()
+  let shared = 0
+  while (
+    shared < fromParts.length &&
+    shared < targetParts.length &&
+    fromParts[shared] === targetParts[shared]
+  ) {
+    shared += 1
+  }
+  const up = fromParts.slice(shared).map(() => '..')
+  const down = targetParts.slice(shared)
+  return [...up, ...down].join('/') || './'
+}
+
+export type ParallelDesignPageJob = {
+  artifactId: string
+  title: string
+  relativePath: string
+  designMdPath: string
+  brief: string
+  screenManifest: ScreenManifestEntry[]
+}
+
+export type ParallelDesignPagesPromptOptions = {
+  workspaceRoot: string
+  jobs: ParallelDesignPageJob[]
+  designContext?: DesignContext
+  customPrompt?: string
+  projectBrief?: string
+}
+
+export function buildParallelDesignPagesPrompt(options: ParallelDesignPagesPromptOptions): string {
+  const jobs = options.jobs.filter((job) => job.artifactId.trim() && job.relativePath.trim())
+  const lines = [
+    'Kun is asking you to fan out a multi-page design build to subagents.',
+    `Workspace: ${options.workspaceRoot}`,
+    '',
+    'Your job in THIS parent turn:',
+    '- Do NOT write or edit files directly in the parent turn.',
+    '- Call the `delegate_task` tool exactly once for every page job below.',
+    '- IMPORTANT: issue all `delegate_task` calls in the SAME assistant message before waiting for results. Do not run them one-by-one; this is what makes the page generation parallel.',
+    '- Use `profile: "general"` and `detach: false` for every call.',
+    '- Use the exact label shown for each job (`page:<artifactId>`) so the design canvas can map child status back to that page.',
+    '- Pass the child prompt for that job as the `prompt` argument. Each child prompt already restricts the child to its own HTML and DESIGN.md files.',
+    '- After every child returns, summarize each page by artifact id and mention any failed child.',
+    '',
+    'Act as the design director for the fanout:',
+    '- Every child page must feel like part of one product, not a gallery of unrelated mockups.',
+    '- Reject generic page briefs in your child prompt mentally: push each child toward real content, concrete states, and a clear primary action.',
+    '- Do not add extra pages, files, or follow-up tasks from the parent; the only parent output is the delegate_task batch plus the final status summary.',
+    '',
+    `Page jobs: ${jobs.length}`
+  ]
+  const projectBrief = options.projectBrief?.trim()
+  if (projectBrief) {
+    lines.push('', 'Overall project brief:', projectBrief.slice(0, WRITE_PROTOTYPE_MAX_TEXT_CHARS))
+  }
+  jobs.forEach((job, index) => {
+    const childPrompt = buildDesignTurnPrompt({
+      target: 'html',
+      mode: 'text',
+      text: job.brief,
+      artifactRelativePath: job.relativePath,
+      designNotesPath: job.designMdPath,
+      workspaceRoot: options.workspaceRoot,
+      ...(options.customPrompt ? { customPrompt: options.customPrompt } : {}),
+      ...(options.designContext ? { designContext: options.designContext } : {}),
+      ...(job.screenManifest.length > 0 ? { screenManifest: job.screenManifest } : {})
+    })
+    lines.push(
+      '',
+      `Job ${index + 1}: ${job.title}`,
+      `- artifactId: ${job.artifactId}`,
+      `- label: page:${job.artifactId}`,
+      `- HTML file: ${job.relativePath}`,
+      `- Design notes file: ${job.designMdPath}`,
+      '- delegate_task arguments to use:',
+      '```json',
+      JSON.stringify(
+        {
+          label: `page:${job.artifactId}`,
+          profile: 'general',
+          detach: false,
+          workspace: options.workspaceRoot,
+          prompt: childPrompt
+        },
+        null,
+        2
+      ),
+      '```'
+    )
+  })
+  return lines.join('\n')
+}
+
 /**
  * Render the "other pages in this project" block shared by the HTML and screen
  * turn prompts. Lets a generated/iterated page align with its siblings.
  */
-function formatScreenManifestLines(manifest: ScreenManifestEntry[] | undefined): string[] {
+function formatScreenManifestLines(
+  manifest: ScreenManifestEntry[] | undefined,
+  currentHtmlPath?: string
+): string[] {
   if (!manifest || manifest.length === 0) return []
   return [
-    'Other pages already in this project (keep ONE cohesive design system across them — shared palette, typography, spacing, components):',
+    'Other pages already in this project (keep ONE cohesive design system across them — shared palette, typography, spacing, components, and prototype navigation):',
     ...manifest.map((s) => {
       const dims = typeof s.width === 'number' && typeof s.height === 'number'
         ? ` (${Math.round(s.width)}x${Math.round(s.height)})`
@@ -154,8 +268,10 @@ function formatScreenManifestLines(manifest: ScreenManifestEntry[] | undefined):
             ? ' [logo]'
             : ''
       const summary = s.summary?.trim() ? ` — ${s.summary.trim().slice(0, 160)}` : ''
-      return `- "${s.name}"${dims}${tokens}${roleTag} → ${s.htmlPath}${summary}`
+      const prototypeHref = currentHtmlPath ? ` (prototype href: ${buildPrototypeHref(currentHtmlPath, s.htmlPath)})` : ''
+      return `- "${s.name}"${dims}${tokens}${roleTag} → ${s.htmlPath}${prototypeHref}${summary}`
     }),
+    'Prototype navigation: turn relevant nav items, cards, tabs, and primary/secondary actions into real `<a href="...">` links using the listed prototype hrefs; keep same-page controls as buttons and avoid dead `#` links.',
     'Read a relevant sibling page if you need to match its exact styling. Do NOT modify sibling files — only the reserved file for this turn.'
   ]
 }
@@ -207,7 +323,7 @@ export function buildDesignTurnPrompt(options: DesignTurnOptions): string {
     '- The file content must be raw HTML — no markdown fences, no commentary inside the file.',
     '- Finish with the document ending in `</html>`, then reply with a one-paragraph summary of what you designed and the interactions you implemented.'
   ]
-  const manifestLines = formatScreenManifestLines(options.screenManifest)
+  const manifestLines = formatScreenManifestLines(options.screenManifest, options.artifactRelativePath)
   if (manifestLines.length > 0) {
     lines.push('', ...manifestLines)
   }
@@ -223,8 +339,12 @@ export function buildDesignTurnPrompt(options: DesignTurnOptions): string {
   if (htmlElementLines.length > 0) {
     lines.push('', ...htmlElementLines)
   }
+  const qualityLines = formatDesignHtmlQualityFindings(options.qualityFindings)
+  if (qualityLines.length > 0) {
+    lines.push('', ...qualityLines)
+  }
   lines.push(...formatDerivedTokenLines(options.derivedTokens))
-  lines.push('', ...DESIGN_CRAFT_LINES)
+  lines.push('', ...DESIGN_DELIVERY_LINES, '', ...DESIGN_CRAFT_LINES)
   if (options.mode === 'image') {
     lines.push(
       '',
@@ -283,7 +403,7 @@ function buildScreenTurnPrompt(options: ScreenTurnOptions): string {
     '- Finish with the document ending in `</html>`, then reply with a one-paragraph summary of what you designed.'
   ]
 
-  const manifestLines = formatScreenManifestLines(options.screenManifest)
+  const manifestLines = formatScreenManifestLines(options.screenManifest, options.artifactRelativePath)
   if (manifestLines.length > 0) {
     lines.push('', ...manifestLines)
   }
@@ -300,8 +420,12 @@ function buildScreenTurnPrompt(options: ScreenTurnOptions): string {
   if (htmlElementLines.length > 0) {
     lines.push('', ...htmlElementLines)
   }
+  const qualityLines = formatDesignHtmlQualityFindings(options.qualityFindings)
+  if (qualityLines.length > 0) {
+    lines.push('', ...qualityLines)
+  }
   lines.push(...formatDerivedTokenLines(options.derivedTokens))
-  lines.push('', ...DESIGN_CRAFT_LINES)
+  lines.push('', ...DESIGN_DELIVERY_LINES, '', ...DESIGN_CRAFT_LINES)
   if (options.mode === 'image') {
     lines.push(
       '',
@@ -499,7 +623,7 @@ function buildCanvasTurnPrompt(options: DesignTurnOptions): string {
     '',
     '`design_canvas` tool-call schema:',
     '- { "action": "create_board", "title"? }  // optional; the app keeps one active board per design document',
-    '- { "action": "add_screen", "name": "Screen Name", "brief"?, "x"?, "y"?, "width"?, "height"?, "devicePreset"?: "mobile"|"tablet"|"desktop" }  // creates a screen frame; the system auto-generates its HTML content afterwards',
+    '- { "action": "add_screen", "name": "Screen Name", "brief"?, "x"?, "y"?, "width"?, "height"?, "devicePreset"?: "mobile"|"tablet"|"desktop" }  // creates a screen frame; omitted x/y are placed in the user\'s current viewport; the system auto-generates its HTML content afterwards',
     '- { "action": "update_shapes", "ops": [ ShapeOp, ... ] }  // edits vector layers/images on the active board',
     '',
     'ShapeOp vocabulary for `update_shapes.ops` (each op is a JSON object inside the array):',
@@ -527,7 +651,7 @@ function buildCanvasTurnPrompt(options: DesignTurnOptions): string {
     '- { "op": "instantiate-many", "name": "ProductCard", "data": [ { "<slot>": <value> }, ... ], "layout": { "kind": "grid"|"row"|"column", "cols"?: N, "gap"?: N }, "at"?: { "x": N, "y": N }, "parentId"? }  // BATCH: one instance per data row, auto-placed on a grid. Use this for card walls / lists / repeated rows instead of N add ops.',
     '- { "op": "update-component", "name": "ProductCard", "fromId": "<edited shape-id>" }  // re-snapshot the master from an edited instance/subtree; every other instance re-flows, keeping its own overrides.',
     '- { "op": "detach", "id": "<instance root id>" }  // cut an instance loose from its component so it can diverge freely.',
-    '- { "op": "add-screens", "specs": [ { "name": "Home", "brief"?, "devicePreset"?, "x"?, "y"? }, ... ] }  // BATCH: create several screen frames in one call (auto-arranged in a row); each gets its HTML generated afterwards.',
+    '- { "op": "add-screens", "specs": [ { "name": "Home", "brief"?, "devicePreset"?, "x"?, "y"? }, ... ] }  // BATCH: create several screen frames in one call (auto-arranged around the user\'s current viewport, wrapping when needed); each gets its HTML generated afterwards.',
     '- { "op": "bulk-edit", "filter": { "type"?, "nameContains"?, "boundToken"?, "component"?, "inFrame"? }, "set": { ...style fields... } }  // restyle every shape matching the filter in one call (e.g. round all buttons, recolor every ProductCard).',
     '- { "op": "grid", "id": "<frame/group id>", "cols": N, "rowGap"?, "colGap"? }  // arrange a container’s existing children on a grid (cell = largest child).',
     '- { "op": "stack", "ids": ["<id>",...], "direction": "horizontal"|"vertical", "gap"?, "name"?, "asFrame"?: true }  // wrap loose shapes into one auto-layout container (group + auto-layout in a single step).',
@@ -545,7 +669,7 @@ function buildCanvasTurnPrompt(options: DesignTurnOptions): string {
     'Rules:',
     '- Use `add_screen` ONLY when the user actually wants a new page / screen (the BUILD OR REDESIGN A SCREEN lane). If a filled `image` is selected and the user asked to change / edit / restyle it, do NOT `add_screen` / `add-screen` — edit that image instead. `add_screen` only creates the frame placeholder; the system will AUTOMATICALLY generate the HTML content for the screen in a follow-up step. Do NOT call write/edit tools to create HTML files in this turn.',
     '- Coordinates are in CANVAS pixels (not screen pixels); 1 unit ≈ 1px at 100% zoom.',
-    '- ALL coordinates are ABSOLUTE — including shapes inside a frame or group. `parentId` sets logical grouping only; it does NOT offset coordinates. To place a child at the top-left of a frame at (200, 100), give the child x≈200, y≈100 (not 0, 0). The snapshot positions below are likewise absolute.',
+    '- ALL coordinates are ABSOLUTE — including shapes inside a frame or group. `parentId` sets logical grouping only; it does NOT offset coordinates. To place a child at the top-left of a frame at (200, 100), give the child x≈200, y≈100 (not 0, 0). The snapshot positions below are likewise absolute. For new screen frames, omit x/y unless the user asked for a precise placement; the app will place them in the user\'s current viewport.',
     '- Refer to shapes by their `id` from the snapshot below. New shapes you add get auto-named uniquely per parent.',
     '- Prefer composing larger features as a frame containing children (use add for the frame, then add children with `parentId`); position each child within the frame’s absolute bounds.',
     '- Keep batches focused — one batch per logical change so undo granularity stays useful.',
@@ -698,6 +822,6 @@ export function buildDesignFromCodePrompt(options: DesignFromCodeOptions): strin
   const contextLines = formatDesignContextLines(options.designContext)
   if (contextLines.length > 0) lines.push('', ...contextLines)
   lines.push(...formatDerivedTokenLines(options.derivedTokens))
-  lines.push('', ...DESIGN_CRAFT_LINES)
+  lines.push('', ...DESIGN_DELIVERY_LINES, '', ...DESIGN_CRAFT_LINES)
   return lines.join('\n')
 }

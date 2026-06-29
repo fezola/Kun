@@ -76,6 +76,7 @@ import {
   uiPluginIdPayloadSchema,
   workspaceDirectoryCreatePayloadSchema,
   workspaceClipboardImageSavePayloadSchema,
+  workspaceImageBytesSavePayloadSchema,
   workspaceImagePickPayloadSchema,
   workspaceDirectoryTargetPayloadSchema,
   workspaceEntryDeletePayloadSchema,
@@ -172,6 +173,7 @@ import {
   resolveWorkspaceFile,
   pickAndSaveWorkspaceImage,
   saveWorkspaceClipboardImage,
+  saveWorkspaceImageBytes,
   writeWorkspaceFile
 } from '../services/workspace-service'
 import {
@@ -1298,6 +1300,11 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     pickAndSaveWorkspaceImage(
       parseIpcPayload('file:pick-workspace-image', workspaceImagePickPayloadSchema, payload),
       { parentWindow: getMainWindow() }
+    )
+  )
+  ipcMain.handle('file:save-workspace-image-bytes', async (_, payload: unknown) =>
+    saveWorkspaceImageBytes(
+      parseIpcPayload('file:save-workspace-image-bytes', workspaceImageBytesSavePayloadSchema, payload)
     )
   )
   ipcMain.handle('clipboard:read-image', async () => readClipboardImage())

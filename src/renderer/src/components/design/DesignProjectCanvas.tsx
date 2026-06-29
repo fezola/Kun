@@ -46,6 +46,11 @@ import type { DesignHtmlElementContext } from '../../design/design-composer-cont
 import { rgbToHex, type DesignElementMetrics } from '../../design/design-element-metrics'
 import { resizeDesignArtifactNode, type DesignNodeResizeHandle } from '../../design/design-node-resize'
 import { startDesignHtmlPreviewWatch } from '../../design/design-preview-file'
+import {
+  buildDesignRuntimeQualityAuditScript,
+  normalizeRuntimeQualityFindings,
+  setDesignRuntimeQualityFindings
+} from '../../design/design-html-quality'
 import { useDesignWorkspaceStore } from '../../design/design-workspace-store'
 import {
   createDesignArtifactId,
@@ -399,6 +404,41 @@ function HtmlScreenPreview({
       webview.removeEventListener('did-finish-load', queueExtract)
     }
   }, [artifact.relativePath, editable, tokensExtractFor, viewMode, webviewUrl])
+
+  // Runtime-quality audit: inspect the rendered DOM for issues static HTML
+  // cannot prove (overflow, low contrast, tiny tap targets, overlapping text).
+  useEffect(() => {
+    if (!webviewUrl || viewMode !== 'preview') return
+    const webview = webviewRef.current
+    if (!webview || typeof webview.executeJavaScript !== 'function') return
+    const executeJavaScript = webview.executeJavaScript.bind(webview)
+    let cancelled = false
+    let timer = 0
+    const queueAudit = (): void => {
+      window.clearTimeout(timer)
+      timer = window.setTimeout(() => {
+        if (cancelled) return
+        void executeJavaScript(buildDesignRuntimeQualityAuditScript())
+          .then((value) => {
+            if (cancelled) return
+            setDesignRuntimeQualityFindings(
+              artifact.relativePath,
+              normalizeRuntimeQualityFindings(value)
+            )
+          })
+          .catch(() => undefined)
+      }, 650)
+    }
+    webview.addEventListener('did-finish-load', queueAudit)
+    webview.addEventListener('dom-ready', queueAudit)
+    queueAudit()
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+      webview.removeEventListener('did-finish-load', queueAudit)
+      webview.removeEventListener('dom-ready', queueAudit)
+    }
+  }, [artifact.relativePath, viewMode, webviewUrl])
 
   useEffect(() => {
     const frame = frameRef.current

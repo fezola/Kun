@@ -23,6 +23,15 @@ export type DesignPagesRunState = {
   step?: 'spec' | 'system' | 'logo'
 }
 
+export type ParallelDesignPageState = {
+  artifactId: string
+  childId?: string
+  status: 'queued' | 'running' | 'done' | 'failed'
+  summary?: string
+  error?: string
+  updatedAt?: string
+}
+
 export type DesignWorkspaceState = {
   /** Workspace root design artifacts live under; '' = none chosen yet. */
   workspaceRoot: string
@@ -71,6 +80,8 @@ export type DesignWorkspaceState = {
   multiPageMode: boolean
   /** Progress of an in-flight multi-page run; null = idle. */
   pagesRun: DesignPagesRunState | null
+  /** Transient status for pages currently delegated to design subagents. */
+  parallelPageStates: Record<string, ParallelDesignPageState>
 
   setWorkspaceRoot: (workspaceRoot: string) => void
   setCanvasView: (view: DesignCanvasView) => void
@@ -106,6 +117,9 @@ export type DesignWorkspaceState = {
   setMultiPageMode: (on: boolean) => void
   /** Update or clear (null) the multi-page run progress. */
   setPagesRun: (state: DesignPagesRunState | null) => void
+  setParallelPageStates: (states: ParallelDesignPageState[]) => void
+  updateParallelPageState: (artifactId: string, patch: Partial<Omit<ParallelDesignPageState, 'artifactId'>>) => void
+  clearParallelPageStates: () => void
   /** Set or clear the design-mode error banner. */
   setFileError: (error: string | null) => void
   /** Open the in-page "implement in code" assistant for an artifact. */

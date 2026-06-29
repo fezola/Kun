@@ -1,5 +1,5 @@
 import { WRITE_PROTOTYPE_DEFAULT_PROMPT, WRITE_PROTOTYPE_MAX_TEXT_CHARS } from '@shared/write-prototype'
-import { DESIGN_CRAFT_LINES, formatDesignContextLines, type DesignContext } from './design-context'
+import { DESIGN_CRAFT_LINES, DESIGN_DELIVERY_LINES, formatDesignContextLines, type DesignContext } from './design-context'
 import type { ScreenManifestEntry } from './design-turn-prompt'
 import type { DesignArtifact } from './design-types'
 
@@ -9,6 +9,16 @@ export type DesignPagePlanEntry = {
   title: string
   /** Self-contained brief used to generate this page's HTML. */
   brief: string
+  /** The user outcome this screen should support, not just the layout type. */
+  userGoal?: string
+  /** Concrete data/content examples the screen should render to avoid template output. */
+  dataExamples?: string[]
+  /** Important UI states this page should visibly cover. */
+  states?: string[]
+  /** The main action this screen should make available in the prototype flow. */
+  primaryAction?: string
+  /** Other planned screen titles this page should link to when relevant. */
+  linksTo?: string[]
 }
 
 export const DESIGN_PAGES_MIN = 2
@@ -85,7 +95,11 @@ export function buildDesignPlanPrompt(options: {
     '- Do NOT write or edit any file this turn, and do NOT produce HTML.',
     '- Think about the core user journey, then list the distinct screens it requires.',
     `- Reply with a short one-sentence plan, then EXACTLY ONE fenced \`\`\`pages code block containing a JSON array of ${DESIGN_PAGES_MIN}-${maxPages} pages.`,
-    '- Each array item is an object: { "title": "<short screen name>", "brief": "<a self-contained one-paragraph description of this screen: its purpose, key sections, components, and states>" }.',
+    '- Each array item is an object: { "title": "<short screen name>", "brief": "<a self-contained one-paragraph description of this screen: its purpose, key sections, components, and states>", "userGoal": "<what the user is trying to accomplish>", "dataExamples": ["<realistic names, metrics, dates, prices, statuses, records>", ...], "states": ["<empty/loading/error/permission/offline/disabled/etc>", ...], "primaryAction": "<main CTA/action>", "linksTo": ["<other planned screen title>", ...] }.',
+    '- Each brief must include the page goal, primary action, core sections, important states, and mobile/desktop behavior; avoid generic "dashboard with cards" briefs.',
+    '- Fill dataExamples with concrete content the child page should visibly render, not vague categories. Prefer realistic domain nouns over template phrases.',
+    '- Fill states with the 2-4 states that matter most for this page; each child page must show or clearly account for them in the UI.',
+    '- Use linksTo to describe the clickable prototype flow: nav, cards, tabs, CTAs, or secondary actions that should move to another planned screen.',
     '- Order pages by importance (primary screen first). Keep titles short (≤ 4 words). Make each brief detailed enough to design that screen on its own.',
     '- Cover only genuinely distinct screens — do not pad the list. If the idea is truly a single screen, return one page.'
   ]
@@ -98,8 +112,8 @@ export function buildDesignPlanPrompt(options: {
   }
   const contextLines = formatDesignContextLines(options.designContext)
   if (contextLines.length > 0) lines.push('', ...contextLines)
-  // A trimmed craft reminder so the planner already biases pages toward quality.
-  lines.push('', ...DESIGN_CRAFT_LINES.slice(0, 4))
+  // A trimmed delivery + craft reminder so the planner already biases pages toward quality.
+  lines.push('', ...DESIGN_DELIVERY_LINES.slice(0, 5), '', ...DESIGN_CRAFT_LINES.slice(0, 4))
   const brief = options.brief.trim()
   if (brief) lines.push('', 'App idea:', brief.slice(0, WRITE_PROTOTYPE_MAX_TEXT_CHARS))
   lines.push(
@@ -109,8 +123,8 @@ export function buildDesignPlanPrompt(options: {
     'A help center needs a browsing surface, a conversation, and an empty state.',
     '```pages',
     '[',
-    '  { "title": "Help Home", "brief": "Landing screen with a search bar, popular topics grid, and a prominent \'ask AI\' entry point..." },',
-    '  { "title": "Chat", "brief": "Conversational help thread with the assistant: message bubbles, suggested replies, an input bar..." }',
+    '  { "title": "Help Home", "brief": "Landing screen with a search bar, popular topics grid, and a prominent \'ask AI\' entry point...", "userGoal": "Find the fastest support path before filing a ticket", "dataExamples": ["Refund status", "API rate limit", "Invoice INV-2048", "12 min median response"], "states": ["empty search", "loading suggestions", "no results"], "primaryAction": "Ask AI", "linksTo": ["Chat"] },',
+    '  { "title": "Chat", "brief": "Conversational help thread with the assistant: message bubbles, suggested replies, an input bar...", "userGoal": "Resolve one support question with source-backed guidance", "dataExamples": ["Order #88421", "3 suggested replies", "source cards"], "states": ["assistant thinking", "error retry", "disabled send"], "primaryAction": "Send message", "linksTo": ["Help Home"] }',
     ']',
     '```',
     '```'
@@ -143,14 +157,51 @@ export function parsePagesPlan(text: string, opts?: { max?: number }): DesignPag
     const title = typeof record.title === 'string' ? record.title.trim() : ''
     const briefRaw = typeof record.brief === 'string' ? record.brief.trim() : ''
     const brief = briefRaw || title
+    const userGoal = typeof record.userGoal === 'string' ? record.userGoal.trim() : ''
+    const dataExamples = stringArrayField(record.dataExamples ?? record.data ?? record.realData, 8)
+    const states = stringArrayField(record.states ?? record.keyStates ?? record.uiStates, 6)
+    const primaryAction = typeof record.primaryAction === 'string' ? record.primaryAction.trim() : ''
+    const linksTo = Array.isArray(record.linksTo)
+      ? record.linksTo
+          .filter((value): value is string => typeof value === 'string')
+          .map((value) => value.trim())
+          .filter(Boolean)
+          .slice(0, 6)
+      : []
     if (!title && !brief) continue
     const key = (title || brief).toLowerCase()
     if (seen.has(key)) continue
     seen.add(key)
-    pages.push({ title: title || brief.slice(0, 40), brief })
+    pages.push({
+      title: title || brief.slice(0, 40),
+      brief,
+      ...(userGoal ? { userGoal } : {}),
+      ...(dataExamples.length > 0 ? { dataExamples } : {}),
+      ...(states.length > 0 ? { states } : {}),
+      ...(primaryAction ? { primaryAction } : {}),
+      ...(linksTo.length > 0 ? { linksTo } : {})
+    })
     if (pages.length >= max) break
   }
   return pages
+}
+
+function stringArrayField(value: unknown, limit: number): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .filter((item): item is string => typeof item === 'string')
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .slice(0, limit)
+  }
+  if (typeof value === 'string') {
+    return value
+      .split(/\n|;|\|/g)
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .slice(0, limit)
+  }
+  return []
 }
 
 /** Find the JSON-array source: ```pages / ```json / any fence, else a bare [ … ]. */

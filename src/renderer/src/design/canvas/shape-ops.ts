@@ -10,7 +10,9 @@ import { z } from 'zod'
 import type { AutoLayout, CanvasShape, Point, Rect, ShapeType } from './canvas-types'
 import { createDefaultShape, createHtmlFrameShape, createShapeId, type DevicePreset } from './canvas-types'
 import { collectDescendants, useCanvasShapeStore, withDescendants } from './canvas-shape-store'
+import { useCanvasViewportStore } from './canvas-viewport-store'
 import { useCanvasUndoStore } from './canvas-undo-store'
+import { centerRectInViewport, layoutRectsInViewport } from './canvas-placement'
 import {
   alignShapes,
   collectiveBounds,
@@ -1046,7 +1048,17 @@ function executeOne(op: ShapeOp, affectedIds: Set<string>, errors: OpError[]): v
         return
       }
       const preset = (op.devicePreset ?? 'desktop') as DevicePreset
-      const shape = createHtmlFrameShape(op.name, op.x ?? 0, op.y ?? 0, artifactId, preset)
+      const centered = createHtmlFrameShape(op.name, 0, 0, artifactId, preset)
+      const width = op.width ?? centered.width
+      const height = op.height ?? centered.height
+      const fallbackRect = centerRectInViewport(width, height, useCanvasViewportStore.getState().vbox)
+      const shape = createHtmlFrameShape(
+        op.name,
+        op.x ?? fallbackRect.x,
+        op.y ?? fallbackRect.y,
+        artifactId,
+        preset
+      )
       if (op.width) shape.width = op.width
       if (op.height) shape.height = op.height
       store.addShape(shape)
@@ -1377,23 +1389,36 @@ function executeOne(op: ShapeOp, affectedIds: Set<string>, errors: OpError[]): v
         errors.push({ code: 'INVALID_OP', message: 'Cannot create screen artifacts — no handler registered' })
         return
       }
-      let cursorX = 0
-      for (const spec of op.specs) {
+      const specs = op.specs.map((spec) => {
+        const preset = (spec.devicePreset ?? 'desktop') as DevicePreset
+        const base = createHtmlFrameShape(spec.name, 0, 0, '__pending__', preset)
+        return {
+          spec,
+          preset,
+          width: spec.width ?? base.width,
+          height: spec.height ?? base.height
+        }
+      })
+      const autoRects = layoutRectsInViewport(
+        specs.map((spec) => ({ width: spec.width, height: spec.height })),
+        useCanvasViewportStore.getState().vbox
+      )
+      for (let i = 0; i < specs.length; i += 1) {
+        const { spec, preset, width, height } = specs[i]
         const artifactId = factory(spec.name)
         if (!artifactId) {
           errors.push({ code: 'INVALID_OP', message: `Cannot create screen artifact for "${spec.name}"` })
           continue
         }
-        const preset = (spec.devicePreset ?? 'desktop') as DevicePreset
-        const x = spec.x ?? cursorX
-        const y = spec.y ?? 0
+        const autoRect = autoRects[i] ?? centerRectInViewport(width, height, useCanvasViewportStore.getState().vbox)
+        const x = spec.x ?? autoRect.x
+        const y = spec.y ?? autoRect.y
         const shape = createHtmlFrameShape(spec.name, x, y, artifactId, preset)
-        if (spec.width) shape.width = spec.width
-        if (spec.height) shape.height = spec.height
+        shape.width = width
+        shape.height = height
         store.addShape(shape)
         if (spec.brief) setScreenBrief(shape.id, spec.brief)
         affectedIds.add(shape.id)
-        cursorX = x + shape.width + 80 // lay successive screens out in a row
       }
       break
     }

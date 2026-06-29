@@ -3,6 +3,7 @@ import { useDesignWorkspaceStore } from '../../design/design-workspace-store'
 import { createDesignArtifactId } from '../../design/design-types'
 import type { DesignArtifact } from '../../design/design-types'
 import type { DesignHtmlElementContext } from '../../design/design-composer-context'
+import type { DesignRuntimeQualityPayload } from '../../design/design-html-quality'
 import { setScreenArtifactFactory } from '../../design/canvas/screen-artifact-bridge'
 import { artifactDesignMdPath, artifactDirPath } from '../../design/design-artifact-persistence'
 import { ensureDesignBoardArtifact, findDesignBoardArtifact } from '../../design/design-board'
@@ -18,6 +19,8 @@ type CanvasProps = {
   onImplementDesign?: (artifact: DesignArtifact) => void
   onScreenCreated?: (shapeId: string, userPrompt: string, brief?: string) => void
   onUseElementAsContext?: (context: DesignHtmlElementContext | null, promptSeed?: string) => void
+  onRuntimeQualityFindings?: (payload: DesignRuntimeQualityPayload) => void
+  onRequestQualityRepair?: (payload: DesignRuntimeQualityPayload) => void
 }
 
 /** Design-mode unified stage: one SVG/Figma-style board hosts HTML screen frames and vector layers. */
@@ -27,7 +30,9 @@ export function DesignCanvas({
   onOpenAgentSettings,
   onImplementDesign,
   onScreenCreated,
-  onUseElementAsContext
+  onUseElementAsContext,
+  onRuntimeQualityFindings,
+  onRequestQualityRepair
 }: CanvasProps): ReactElement {
   const workspaceRoot = useDesignWorkspaceStore((s) => s.workspaceRoot)
   const settingsLoaded = useDesignWorkspaceStore((s) => s.settingsLoaded)
@@ -96,6 +101,8 @@ export function DesignCanvas({
         syncHtmlScreens
         onImplementDesign={onImplementDesign}
         onUseElementAsContext={onUseElementAsContext}
+        onRuntimeQualityFindings={onRuntimeQualityFindings}
+        onRequestQualityRepair={onRequestQualityRepair}
       />
       <PropertiesPanel onImplementDesign={onImplementDesign} />
     </div>

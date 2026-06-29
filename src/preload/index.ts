@@ -171,6 +171,8 @@ const api = {
     ipcRenderer.invoke('file:save-workspace-clipboard-image', payload),
   pickWorkspaceImage: (payload) =>
     ipcRenderer.invoke('file:pick-workspace-image', payload),
+  saveWorkspaceImageBytes: (payload) =>
+    ipcRenderer.invoke('file:save-workspace-image-bytes', payload),
   readClipboardImage: () =>
     ipcRenderer.invoke('clipboard:read-image'),
   getPathForFile: (file) =>

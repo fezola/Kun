@@ -18,7 +18,7 @@ type ViewportState = {
   setVbox: (vbox: ViewBox) => void
   pan: (dx: number, dy: number) => void
   zoomTo: (factor: number, center: { x: number; y: number }) => void
-  zoomToFit: (bounds: Rect, padding?: number) => void
+  zoomToFit: (bounds: Rect, padding?: number, options?: { maxZoom?: number; minZoom?: number }) => void
   resetView: () => void
   setActiveTool: (tool: CanvasTool) => void
   toggleGrid: () => void
@@ -28,6 +28,10 @@ type ViewportState = {
 
 function clampZoom(zoom: number): number {
   return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom))
+}
+
+function safeSize(size: number, fallback: number): number {
+  return Number.isFinite(size) && size > 0 ? size : fallback
 }
 
 export const useCanvasViewportStore = create<ViewportState>((set, get) => ({
@@ -40,11 +44,23 @@ export const useCanvasViewportStore = create<ViewportState>((set, get) => ({
 
   setContainerSize: (width, height) => {
     set((s) => {
-      const zoom = s.containerWidth / s.vbox.width
+      const containerWidth = safeSize(width, DEFAULT_WIDTH)
+      const containerHeight = safeSize(height, DEFAULT_HEIGHT)
+      const currentZoom = safeSize(s.containerWidth, DEFAULT_WIDTH) / safeSize(s.vbox.width, DEFAULT_WIDTH)
+      const zoom = clampZoom(currentZoom)
+      const cx = s.vbox.x + s.vbox.width / 2
+      const cy = s.vbox.y + s.vbox.height / 2
+      const nextWidth = containerWidth / zoom
+      const nextHeight = containerHeight / zoom
       return {
-        containerWidth: width,
-        containerHeight: height,
-        vbox: { ...s.vbox, width: width / zoom, height: height / zoom }
+        containerWidth,
+        containerHeight,
+        vbox: {
+          x: cx - nextWidth / 2,
+          y: cy - nextHeight / 2,
+          width: nextWidth,
+          height: nextHeight
+        }
       }
     })
   },
@@ -58,10 +74,10 @@ export const useCanvasViewportStore = create<ViewportState>((set, get) => ({
 
   zoomTo: (factor, center) =>
     set((s) => {
-      const currentZoom = s.containerWidth / s.vbox.width
+      const currentZoom = safeSize(s.containerWidth, DEFAULT_WIDTH) / safeSize(s.vbox.width, DEFAULT_WIDTH)
       const newZoom = clampZoom(currentZoom * factor)
-      const newWidth = s.containerWidth / newZoom
-      const newHeight = s.containerHeight / newZoom
+      const newWidth = safeSize(s.containerWidth, DEFAULT_WIDTH) / newZoom
+      const newHeight = safeSize(s.containerHeight, DEFAULT_HEIGHT) / newZoom
       const cx = center.x
       const cy = center.y
       return {
@@ -74,15 +90,21 @@ export const useCanvasViewportStore = create<ViewportState>((set, get) => ({
       }
     }),
 
-  zoomToFit: (bounds, padding = 40) =>
+  zoomToFit: (bounds, padding = 40, options) =>
     set((s) => {
       const { containerWidth, containerHeight } = s
-      if (bounds.width === 0 || bounds.height === 0) return s
-      const scaleX = (containerWidth - padding * 2) / bounds.width
-      const scaleY = (containerHeight - padding * 2) / bounds.height
-      const zoom = clampZoom(Math.min(scaleX, scaleY))
-      const newWidth = containerWidth / zoom
-      const newHeight = containerHeight / zoom
+      if (bounds.width <= 0 || bounds.height <= 0) return s
+      const safeWidth = safeSize(containerWidth, DEFAULT_WIDTH)
+      const safeHeight = safeSize(containerHeight, DEFAULT_HEIGHT)
+      const safePadding = Math.max(0, padding)
+      const availableWidth = Math.max(1, safeWidth - safePadding * 2)
+      const availableHeight = Math.max(1, safeHeight - safePadding * 2)
+      const rawZoom = Math.min(availableWidth / bounds.width, availableHeight / bounds.height)
+      const maxZoom = options?.maxZoom ?? MAX_ZOOM
+      const minZoom = options?.minZoom ?? MIN_ZOOM
+      const zoom = Math.max(minZoom, Math.min(maxZoom, clampZoom(rawZoom)))
+      const newWidth = safeWidth / zoom
+      const newHeight = safeHeight / zoom
       const cx = bounds.x + bounds.width / 2
       const cy = bounds.y + bounds.height / 2
       return {
@@ -98,10 +120,10 @@ export const useCanvasViewportStore = create<ViewportState>((set, get) => ({
   resetView: () =>
     set((s) => ({
       vbox: {
-        x: -s.containerWidth / 2,
-        y: -s.containerHeight / 2,
-        width: s.containerWidth,
-        height: s.containerHeight
+        x: -safeSize(s.containerWidth, DEFAULT_WIDTH) / 2,
+        y: -safeSize(s.containerHeight, DEFAULT_HEIGHT) / 2,
+        width: safeSize(s.containerWidth, DEFAULT_WIDTH),
+        height: safeSize(s.containerHeight, DEFAULT_HEIGHT)
       }
     })),
 
@@ -113,6 +135,6 @@ export const useCanvasViewportStore = create<ViewportState>((set, get) => ({
 
   getZoom: () => {
     const s = get()
-    return s.containerWidth / s.vbox.width
+    return safeSize(s.containerWidth, DEFAULT_WIDTH) / safeSize(s.vbox.width, DEFAULT_WIDTH)
   }
 }))

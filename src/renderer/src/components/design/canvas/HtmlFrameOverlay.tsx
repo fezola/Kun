@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
-import { Monitor, MousePointer2 } from 'lucide-react'
+import { AlertTriangle, Brush, Check, CheckCircle2, Monitor, MousePointer2, PenLine, ShieldCheck } from 'lucide-react'
 import { useCanvasShapeStore } from '../../../design/canvas/canvas-shape-store'
 import { useCanvasViewportStore } from '../../../design/canvas/canvas-viewport-store'
 import { useCanvasSelectionStore } from '../../../design/canvas/canvas-selection-store'
@@ -7,6 +7,16 @@ import { isHtmlFrame, type CanvasShape } from '../../../design/canvas/canvas-typ
 import type { DesignHtmlElementContext } from '../../../design/design-composer-context'
 import { startDesignHtmlPreviewWatch } from '../../../design/design-preview-file'
 import { useDesignWorkspaceStore } from '../../../design/design-workspace-store'
+import {
+  buildDesignRuntimeQualityAuditScript,
+  getDesignRuntimeQualityFindings,
+  normalizeRuntimeQualityFindings,
+  setDesignRuntimeQualityFindings,
+  summarizeDesignHtmlQualityDetails,
+  summarizeDesignHtmlQualityStatus,
+  type DesignHtmlQualityFinding,
+  type DesignRuntimeQualityPayload
+} from '../../../design/design-html-quality'
 
 const MAX_ACTIVE_WEBVIEWS = 6
 const MIN_ZOOM_FOR_WEBVIEW = 0.04
@@ -18,6 +28,25 @@ const AI_CURSOR_TTL_MS = 4500
 const PREVIEW_FAST_POLL_MS = 6_000
 /** Give up polling a preview that never lands after this (matches the page-generation ceiling). */
 const PREVIEW_MAX_WAIT_MS = 300_000
+
+function qualityBadgeClasses(kind: ReturnType<typeof summarizeDesignHtmlQualityStatus>['kind']): string {
+  if (kind === 'critical') return 'border-red-300/70 bg-red-50/92 text-red-600'
+  if (kind === 'warning') return 'border-amber-300/70 bg-amber-50/92 text-amber-700'
+  if (kind === 'passed') return 'border-emerald-300/70 bg-emerald-50/92 text-emerald-700'
+  return 'border-ds-border bg-white/88 text-ds-muted'
+}
+
+function qualityFindingClasses(severity: DesignHtmlQualityFinding['severity']): string {
+  if (severity === 'critical') return 'border-red-200 bg-red-50/75 text-red-700'
+  if (severity === 'warning') return 'border-amber-200 bg-amber-50/75 text-amber-800'
+  return 'border-sky-200 bg-sky-50/75 text-sky-700'
+}
+
+function qualityFindingLabel(severity: DesignHtmlQualityFinding['severity']): string {
+  if (severity === 'critical') return 'critical'
+  if (severity === 'warning') return 'warning'
+  return 'note'
+}
 
 /**
  * Runs inside the live webview to locate the section the agent just wrote: the
@@ -58,8 +87,13 @@ type ScreenOverlayProps = {
   screenHeight: number
   active: boolean
   interactive: boolean
+  /** Element-pick ("修改") mode is on for this frame: clicking selects text/elements. */
+  editing: boolean
   onDoubleClick: (shapeId: string) => void
+  onToggleModify: (shapeId: string) => void
   onUseElementAsContext?: (context: DesignHtmlElementContext | null, promptSeed?: string) => void
+  onRuntimeQualityFindings?: (payload: DesignRuntimeQualityPayload) => void
+  onRequestQualityRepair?: (payload: DesignRuntimeQualityPayload) => void
 }
 
 function ScreenOverlayInner({
@@ -71,8 +105,12 @@ function ScreenOverlayInner({
   screenHeight,
   active,
   interactive,
+  editing,
   onDoubleClick,
-  onUseElementAsContext
+  onToggleModify,
+  onUseElementAsContext,
+  onRuntimeQualityFindings,
+  onRequestQualityRepair
 }: ScreenOverlayProps): ReactElement {
   const [fileUrl, setFileUrl] = useState('')
   const [revision, setRevision] = useState(0)
@@ -93,12 +131,19 @@ function ScreenOverlayInner({
   } | null>(null)
   const aiFadeTimerRef = useRef<number>(0)
   const firstRevisionRef = useRef<number | null>(null)
+  const qualitySignatureRef = useRef('')
+  const [qualityChecked, setQualityChecked] = useState(false)
+  const [qualityFindings, setQualityFindings] = useState<DesignHtmlQualityFinding[]>([])
+  const [qualityDetailsOpen, setQualityDetailsOpen] = useState(false)
 
   const artifact = useDesignWorkspaceStore((s) =>
     s.artifacts.find((a) => a.id === shape.htmlArtifactId)
   )
   const artifactKind = artifact?.kind
   const artifactRelativePath = artifact?.relativePath
+  const parallelState = useDesignWorkspaceStore((s) =>
+    shape.htmlArtifactId ? s.parallelPageStates[shape.htmlArtifactId] : undefined
+  )
   const setFileError = useDesignWorkspaceStore((s) => s.setFileError)
 
   useEffect(() => {
@@ -178,7 +223,7 @@ function ScreenOverlayInner({
 
   const selectElementAt = useCallback(
     (event: React.PointerEvent<HTMLDivElement>): void => {
-      if (!active || interactive || !artifact || !webviewRef.current?.executeJavaScript) return
+      if (!editing || interactive || !artifact || !webviewRef.current?.executeJavaScript) return
       event.preventDefault()
       event.stopPropagation()
       const rect = event.currentTarget.getBoundingClientRect()
@@ -287,12 +332,30 @@ function ScreenOverlayInner({
           setFileError(message)
         })
     },
-    [active, artifact, interactive, onUseElementAsContext, setFileError]
+    [editing, artifact, interactive, onUseElementAsContext, setFileError]
   )
 
   useEffect(() => {
     setSelectedElementRect(null)
   }, [artifact?.id, artifact?.relativePath, shape.id])
+
+  useEffect(() => {
+    qualitySignatureRef.current = ''
+    setQualityChecked(false)
+    setQualityFindings(getDesignRuntimeQualityFindings(artifact?.relativePath))
+    setQualityDetailsOpen(false)
+  }, [artifact?.id, artifact?.relativePath, shape.id])
+
+  useEffect(() => {
+    if (!active || interactive) setQualityDetailsOpen(false)
+  }, [active, interactive])
+
+  // Leaving 修改 mode drops the picked element + its AI context so the rail clears.
+  useEffect(() => {
+    if (editing) return
+    setSelectedElementRect(null)
+    onUseElementAsContext?.(null)
+  }, [editing, onUseElementAsContext])
 
   const queryAiCursor = useCallback(() => {
     const wv = webviewRef.current
@@ -349,10 +412,73 @@ function ScreenOverlayInner({
     []
   )
 
-  if (screenWidth < 20 || screenHeight < 20) return <></>
-
   const titleBarHeight = Math.min(28, screenHeight * 0.06)
   const webviewUrl = fileUrl ? `${fileUrl}${fileUrl.includes('?') ? '&' : '?'}rev=${revision}` : ''
+
+  useEffect(() => {
+    if (!webviewUrl || artifactKind !== 'html' || !artifact?.id || !artifactRelativePath) return
+    const wv = webviewRef.current
+    if (typeof wv?.executeJavaScript !== 'function') return
+    const executeJavaScript = wv.executeJavaScript.bind(wv)
+    let cancelled = false
+    let timer = 0
+    const queueAudit = (): void => {
+      window.clearTimeout(timer)
+      timer = window.setTimeout(() => {
+        if (cancelled) return
+        void executeJavaScript(buildDesignRuntimeQualityAuditScript())
+          .then((value) => {
+            if (cancelled) return
+            const findings = normalizeRuntimeQualityFindings(value)
+            setQualityChecked(true)
+            setQualityFindings(findings)
+            setDesignRuntimeQualityFindings(artifactRelativePath, findings)
+            const signature = JSON.stringify(findings.map((finding) => [
+              finding.code,
+              finding.severity,
+              finding.message
+            ]))
+            if (signature === qualitySignatureRef.current) return
+            qualitySignatureRef.current = signature
+            onRuntimeQualityFindings?.({
+              artifactId: artifact.id,
+              artifactRelativePath,
+              shapeId: shape.id,
+              findings
+            })
+          })
+          .catch(() => undefined)
+      }, 750)
+    }
+    wv.addEventListener('dom-ready', queueAudit)
+    wv.addEventListener('did-finish-load', queueAudit)
+    queueAudit()
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+      wv.removeEventListener('dom-ready', queueAudit)
+      wv.removeEventListener('did-finish-load', queueAudit)
+    }
+  }, [artifact?.id, artifactKind, artifactRelativePath, onRuntimeQualityFindings, shape.id, webviewUrl])
+
+  if (screenWidth < 20 || screenHeight < 20) return <></>
+
+  const drawingActive = parallelState?.status === 'queued' || parallelState?.status === 'running'
+  const drawingLabel = parallelState?.status === 'queued' ? 'AI 排队中…' : 'AI 正在绘制…'
+  const failedMessage = parallelState?.status === 'failed'
+    ? parallelState.error || '生成失败'
+    : ''
+  const qualityStatus = summarizeDesignHtmlQualityStatus(qualityFindings, qualityChecked)
+  const qualityDetails = summarizeDesignHtmlQualityDetails(qualityFindings, qualityChecked)
+  const qualityPanelWidth = Math.max(170, Math.min(300, screenWidth - 20))
+  const QualityIcon =
+    qualityStatus.kind === 'critical'
+      ? AlertTriangle
+      : qualityStatus.kind === 'warning'
+        ? AlertTriangle
+        : qualityStatus.kind === 'passed'
+          ? CheckCircle2
+          : ShieldCheck
 
   return (
     <div
@@ -400,19 +526,165 @@ function ScreenOverlayInner({
           />
         ) : (
           <div className="flex h-full items-center justify-center text-ds-faint">
-            <div className="text-center" style={{ fontSize: Math.min(12, screenWidth * 0.028) }}>
-              {previewError || (artifact ? 'Generating...' : 'No content')}
+            <div
+              className="flex flex-col items-center gap-2 text-center"
+              style={{ fontSize: Math.min(12, screenWidth * 0.028) }}
+            >
+              {drawingActive ? (
+                <Brush
+                  className="h-5 w-5 animate-pulse text-accent"
+                  strokeWidth={1.8}
+                  aria-hidden="true"
+                />
+              ) : null}
+              <span>
+                {previewError ||
+                  failedMessage ||
+                  (artifact ? (drawingActive ? drawingLabel : 'Generating...') : 'No content')}
+              </span>
             </div>
           </div>
         )}
-        {webviewUrl && active && !interactive ? (
+        {webviewUrl && drawingActive && !aiCursor ? (
+          <div className="pointer-events-none absolute inset-0">
+            <div className="absolute right-3 top-3 flex max-w-[70%] items-center gap-1.5 rounded-full border border-accent/30 bg-white/88 px-2.5 py-1.5 text-[11px] font-semibold text-accent shadow-[0_10px_30px_rgba(20,47,95,0.14)] backdrop-blur-md">
+              <Brush className="h-3.5 w-3.5 animate-pulse" strokeWidth={1.8} aria-hidden="true" />
+              <span className="min-w-0 truncate">{drawingLabel}</span>
+            </div>
+          </div>
+        ) : null}
+        {webviewUrl && failedMessage ? (
+          <div className="pointer-events-none absolute inset-x-3 top-3 rounded-md border border-red-300/70 bg-white/92 px-2.5 py-1.5 text-[11px] font-semibold text-red-600 shadow-sm">
+            {failedMessage}
+          </div>
+        ) : null}
+        {webviewUrl && active && !interactive && !drawingActive && !failedMessage && screenWidth > 190 ? (
+          <div className="pointer-events-none absolute left-2.5 top-2.5 z-20 flex flex-col items-start gap-1.5">
+            <button
+              type="button"
+              className={`pointer-events-auto flex max-w-[min(210px,60%)] items-center gap-1.5 rounded-full border px-2.5 py-1.5 text-[10.5px] font-semibold shadow-sm backdrop-blur-md transition hover:shadow-md ${qualityBadgeClasses(qualityStatus.kind)}`}
+              title={qualityStatus.title}
+              aria-expanded={qualityDetailsOpen}
+              onPointerDown={(e) => e.stopPropagation()}
+              onDoubleClick={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation()
+                setQualityDetailsOpen((open) => !open)
+              }}
+            >
+              <QualityIcon className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} aria-hidden="true" />
+              <span className="min-w-0 truncate">{qualityStatus.label}</span>
+            </button>
+            {qualityDetailsOpen ? (
+              <div
+                className="pointer-events-auto rounded-md border border-ds-border bg-white/95 p-2.5 text-left text-[11px] leading-snug text-ds-ink shadow-[0_16px_40px_rgba(20,47,95,0.18)] backdrop-blur-md"
+                style={{ width: qualityPanelWidth }}
+                onPointerDown={(e) => e.stopPropagation()}
+                onDoubleClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-start gap-2">
+                  <QualityIcon className="mt-0.5 h-3.5 w-3.5 shrink-0" strokeWidth={1.9} aria-hidden="true" />
+                  <div className="min-w-0">
+                    <div className="truncate text-[11.5px] font-semibold">{qualityDetails.heading}</div>
+                    <div className="mt-0.5 text-[10.5px] text-ds-muted">{qualityDetails.body}</div>
+                  </div>
+                </div>
+                {qualityDetails.rows.length > 0 ? (
+                  <div className="mt-2 flex flex-col gap-1.5">
+                    {qualityDetails.rows.map((finding) => (
+                      <div
+                        key={`${finding.severity}-${finding.code}`}
+                        className="rounded-md border border-ds-border/80 bg-white/75 p-1.5"
+                      >
+                        <div className="flex min-w-0 items-center gap-1.5">
+                          <span
+                            className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[9.5px] font-semibold ${qualityFindingClasses(finding.severity)}`}
+                          >
+                            {qualityFindingLabel(finding.severity)}
+                          </span>
+                          <span className="min-w-0 truncate text-[10.5px] font-semibold text-ds-ink">
+                            {finding.code}
+                          </span>
+                        </div>
+                        <div className="mt-1 break-words text-[10.5px] font-medium text-ds-ink">
+                          {finding.message}
+                        </div>
+                        <div className="mt-0.5 break-words text-[10.5px] text-ds-muted">
+                          {finding.suggestion}
+                        </div>
+                      </div>
+                    ))}
+                    {qualityDetails.overflowCount > 0 ? (
+                      <div className="px-1 text-[10.5px] font-medium text-ds-muted">
+                        +{qualityDetails.overflowCount} more
+                      </div>
+                    ) : null}
+                    {artifact?.id && artifactRelativePath && onRequestQualityRepair ? (
+                      <button
+                        type="button"
+                        className="mt-0.5 inline-flex w-fit items-center gap-1.5 rounded-md border border-accent/30 bg-accent px-2 py-1 text-[10.5px] font-semibold text-white shadow-sm transition hover:opacity-90"
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onDoubleClick={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          onRequestQualityRepair({
+                            artifactId: artifact.id,
+                            artifactRelativePath,
+                            shapeId: shape.id,
+                            findings: qualityFindings
+                          })
+                          setQualityDetailsOpen(false)
+                        }}
+                      >
+                        <Brush className="h-3 w-3" strokeWidth={1.9} aria-hidden="true" />
+                        Repair
+                      </button>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+        {webviewUrl && active && !interactive && !drawingActive && !failedMessage && screenWidth > 160 ? (
+          <div className="pointer-events-none absolute right-2.5 top-2.5 z-20 flex items-center gap-1.5">
+            {editing ? (
+              <span className="rounded-full border border-accent/30 bg-white/88 px-2 py-1 text-[10.5px] font-medium text-accent shadow-sm backdrop-blur-md">
+                点击文字进行修改
+              </span>
+            ) : null}
+            <button
+              type="button"
+              onPointerDown={(e) => e.stopPropagation()}
+              onDoubleClick={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation()
+                onToggleModify(shape.id)
+              }}
+              title={editing ? '完成修改' : '修改内容'}
+              className={`pointer-events-auto inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[11px] font-semibold shadow-[0_10px_30px_rgba(20,47,95,0.14)] backdrop-blur-md transition ${
+                editing
+                  ? 'border-accent bg-accent text-white hover:opacity-90'
+                  : 'border-ds-border bg-white/90 text-ds-ink hover:bg-white'
+              }`}
+            >
+              {editing ? (
+                <Check className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
+              ) : (
+                <PenLine className="h-3.5 w-3.5" strokeWidth={1.9} aria-hidden="true" />
+              )}
+              {editing ? '完成' : '修改'}
+            </button>
+          </div>
+        ) : null}
+        {webviewUrl && editing && !interactive ? (
           <div
             className="absolute inset-0 cursor-crosshair"
-            title="Select an element"
+            title="点击元素进行修改"
             onPointerDown={selectElementAt}
           />
         ) : null}
-        {selectedElementRect && active && !interactive ? (
+        {selectedElementRect && editing && !interactive ? (
           <div
             className="pointer-events-none absolute border border-accent bg-accent/10 shadow-[0_0_0_1px_rgba(255,255,255,0.75)]"
             style={{
@@ -475,9 +747,16 @@ const ScreenOverlay = memo(ScreenOverlayInner)
 type Props = {
   workspaceRoot: string
   onUseElementAsContext?: (context: DesignHtmlElementContext | null, promptSeed?: string) => void
+  onRuntimeQualityFindings?: (payload: DesignRuntimeQualityPayload) => void
+  onRequestQualityRepair?: (payload: DesignRuntimeQualityPayload) => void
 }
 
-export function HtmlFrameOverlay({ workspaceRoot, onUseElementAsContext }: Props): ReactElement {
+export function HtmlFrameOverlay({
+  workspaceRoot,
+  onUseElementAsContext,
+  onRuntimeQualityFindings,
+  onRequestQualityRepair
+}: Props): ReactElement {
   const objects = useCanvasShapeStore((s) => s.document.objects)
   const vbox = useCanvasViewportStore((s) => s.vbox)
   const containerWidth = useCanvasViewportStore((s) => s.containerWidth)
@@ -485,6 +764,7 @@ export function HtmlFrameOverlay({ workspaceRoot, onUseElementAsContext }: Props
   const selectedIds = useCanvasSelectionStore((s) => s.selectedIds)
 
   const [interactiveId, setInteractiveId] = useState<string | null>(null)
+  const [editingId, setEditingId] = useState<string | null>(null)
 
   const zoom = containerWidth / vbox.width
 
@@ -517,15 +797,25 @@ export function HtmlFrameOverlay({ workspaceRoot, onUseElementAsContext }: Props
   }, [htmlFrames, vbox, selectedIds])
 
   const onDoubleClick = useCallback((shapeId: string) => {
+    // Browsing the live page and 修改 (element-pick) are mutually exclusive.
+    setEditingId(null)
     setInteractiveId((prev) => (prev === shapeId ? null : shapeId))
   }, [])
 
-  // Exit interactive mode on selection change
+  const onToggleModify = useCallback((shapeId: string) => {
+    setInteractiveId(null)
+    setEditingId((prev) => (prev === shapeId ? null : shapeId))
+  }, [])
+
+  // Exit interactive / 修改 modes on selection change
   useEffect(() => {
     if (interactiveId && !selectedIds.has(interactiveId)) {
       setInteractiveId(null)
     }
-  }, [selectedIds, interactiveId])
+    if (editingId && !selectedIds.has(editingId)) {
+      setEditingId(null)
+    }
+  }, [selectedIds, interactiveId, editingId])
 
   const selectedIdsKey = useMemo(() => [...selectedIds].sort().join(','), [selectedIds])
 
@@ -555,8 +845,12 @@ export function HtmlFrameOverlay({ workspaceRoot, onUseElementAsContext }: Props
             screenHeight={screenHeight}
             active={active}
             interactive={interactiveId === shape.id}
+            editing={editingId === shape.id}
             onDoubleClick={onDoubleClick}
+            onToggleModify={onToggleModify}
             onUseElementAsContext={onUseElementAsContext}
+            onRuntimeQualityFindings={onRuntimeQualityFindings}
+            onRequestQualityRepair={onRequestQualityRepair}
           />
         )
       })}

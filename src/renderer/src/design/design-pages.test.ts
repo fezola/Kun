@@ -6,7 +6,9 @@ import {
   extractAgentDesignSummary,
   parsePagesPlan
 } from './design-pages'
+import { deriveParallelDesignPageStatesFromBlocks } from './design-pages-run'
 import type { DesignArtifact } from './design-types'
+import type { ChatBlock } from '../agent/types'
 
 describe('extractAgentDesignSummary', () => {
   it('returns the closing prose paragraph, dropping code fences', () => {
@@ -108,6 +110,53 @@ describe('parsePagesPlan', () => {
     expect(parsePagesPlan('noise [{"title":"B","brief":"b"}] tail')).toEqual([{ title: 'B', brief: 'b' }])
   })
 
+  it('preserves prototype-flow metadata when the planner provides it', () => {
+    const text = [
+      '```pages',
+      '[',
+      '  { "title": "Home", "brief": "Landing", "userGoal": "Compare plans before signing up", "dataExamples": ["Pro plan $24", "Acme Finance", "14-day trial"], "states": ["loading prices", "empty comparison"], "primaryAction": "Start trial", "linksTo": ["Signup", "Dashboard", "", 42] },',
+      '  { "title": "Signup", "brief": "Create account", "primaryAction": "Create account" }',
+      ']',
+      '```'
+    ].join('\n')
+
+    expect(parsePagesPlan(text)).toEqual([
+      {
+        title: 'Home',
+        brief: 'Landing',
+        userGoal: 'Compare plans before signing up',
+        dataExamples: ['Pro plan $24', 'Acme Finance', '14-day trial'],
+        states: ['loading prices', 'empty comparison'],
+        primaryAction: 'Start trial',
+        linksTo: ['Signup', 'Dashboard']
+      },
+      {
+        title: 'Signup',
+        brief: 'Create account',
+        primaryAction: 'Create account'
+      }
+    ])
+  })
+
+  it('accepts semicolon-delimited data/state fallbacks from loose planners', () => {
+    const text = [
+      '```pages',
+      '[',
+      '  { "title": "Ops", "brief": "Operations dashboard", "data": "APAC queue; 18 overdue tasks", "keyStates": "offline mode; empty queue" }',
+      ']',
+      '```'
+    ].join('\n')
+
+    expect(parsePagesPlan(text)).toEqual([
+      {
+        title: 'Ops',
+        brief: 'Operations dashboard',
+        dataExamples: ['APAC queue', '18 overdue tasks'],
+        states: ['offline mode', 'empty queue']
+      }
+    ])
+  })
+
   it('dedupes by title, caps at max, and uses title when brief is missing', () => {
     const items = Array.from({ length: 9 }, (_, i) => `{ "title": "P${i}", "brief": "b${i}" }`)
     items.push('{ "title": "P0", "brief": "dupe" }') // duplicate title dropped
@@ -137,5 +186,105 @@ describe('buildDesignPlanPrompt', () => {
     expect(prompt).toContain(`2-${DESIGN_PAGES_MAX} pages`)
     expect(prompt).toContain('"Login"')
     expect(prompt).toContain('do NOT duplicate')
+    expect(prompt).toContain('primary action')
+    expect(prompt).toContain('userGoal')
+    expect(prompt).toContain('dataExamples')
+    expect(prompt).toContain('states')
+    expect(prompt).toContain('linksTo')
+    expect(prompt).toContain('clickable prototype flow')
+    expect(prompt).toContain('realistic domain nouns')
+    expect(prompt).toContain('mobile/desktop behavior')
+    expect(prompt).toContain('Design delivery checklist')
+  })
+})
+
+describe('deriveParallelDesignPageStatesFromBlocks', () => {
+  it('keeps the tool-to-artifact mapping from running args through completed results', () => {
+    const jobs = [
+      {
+        artifactId: 'landing',
+        title: 'Landing',
+        relativePath: '.kun-design/doc/landing/v1.html',
+        designMdPath: '.kun-design/doc/landing/DESIGN.md',
+        brief: 'Landing page',
+        screenManifest: []
+      }
+    ]
+    const toolIds = new Map<string, string>()
+    const running: ChatBlock[] = [
+      {
+        kind: 'tool',
+        id: 'tool_call_a',
+        summary: 'delegate_task',
+        status: 'running',
+        detail: JSON.stringify({ label: 'page:landing', prompt: 'write .kun-design/doc/landing/v1.html' }),
+        meta: { toolName: 'delegate_task' }
+      }
+    ]
+
+    const runningStates = deriveParallelDesignPageStatesFromBlocks(running, jobs, {}, toolIds)
+    expect(runningStates).toEqual([{ artifactId: 'landing', status: 'running', updatedAt: expect.any(String) }])
+
+    const completed: ChatBlock[] = [
+      {
+        kind: 'tool',
+        id: 'tool_call_a',
+        summary: 'delegate_task',
+        status: 'success',
+        detail: JSON.stringify({
+          childId: 'child_1',
+          status: 'completed',
+          summary: 'A finished landing page.'
+        }),
+        meta: { toolName: 'delegate_task' }
+      }
+    ]
+    const doneStates = deriveParallelDesignPageStatesFromBlocks(
+      completed,
+      jobs,
+      Object.fromEntries(runningStates.map((state) => [state.artifactId, state])),
+      toolIds
+    )
+    expect(doneStates[0]).toMatchObject({
+      artifactId: 'landing',
+      childId: 'child_1',
+      status: 'done',
+      summary: 'A finished landing page.'
+    })
+  })
+
+  it('marks failed delegate_task results on the matching page', () => {
+    const jobs = [
+      {
+        artifactId: 'community',
+        title: 'Community',
+        relativePath: '.kun-design/doc/community/v1.html',
+        designMdPath: '.kun-design/doc/community/DESIGN.md',
+        brief: 'Community page',
+        screenManifest: []
+      }
+    ]
+    const states = deriveParallelDesignPageStatesFromBlocks(
+      [
+        {
+          kind: 'tool',
+          id: 'tool_call_b',
+          summary: 'delegate_task',
+          status: 'error',
+          detail: JSON.stringify({
+            label: 'page:community',
+            status: 'failed',
+            error: 'model request failed'
+          }),
+          meta: { toolName: 'delegate_task' }
+        }
+      ],
+      jobs
+    )
+    expect(states[0]).toMatchObject({
+      artifactId: 'community',
+      status: 'failed',
+      error: 'model request failed'
+    })
   })
 })

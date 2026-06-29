@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useCanvasShapeStore } from '../../../design/canvas/canvas-shape-store'
 import { useCanvasViewportStore } from '../../../design/canvas/canvas-viewport-store'
 import { useCanvasSelectionStore } from '../../../design/canvas/canvas-selection-store'
+import { useImageAnnotationStore } from '../../../design/canvas/image-annotation-store'
 import { useCanvasUndoStore } from '../../../design/canvas/canvas-undo-store'
 import { createSelectTool } from '../../../design/canvas/tools/select-tool'
 import { createRectTool } from '../../../design/canvas/tools/rect-tool'
@@ -14,16 +15,21 @@ import { createScreenTool } from '../../../design/canvas/tools/screen-tool'
 import { createArrowTool, createLineTool } from '../../../design/canvas/tools/linear-tool'
 import { createDrawTool } from '../../../design/canvas/tools/draw-tool'
 import type { CanvasToolHandler } from '../../../design/canvas/tools/tool-types'
-import type { CanvasTool } from '../../../design/canvas/canvas-types'
+import type { CanvasDocument, CanvasTool } from '../../../design/canvas/canvas-types'
 import { createEmptyDocument } from '../../../design/canvas/canvas-types'
 import { loadCanvasDocument, persistCanvasDocument } from '../../../design/canvas/canvas-persistence'
 import { loadDesignSystem, persistDesignSystem } from '../../../design/canvas/design-system-persistence'
 import { useDesignSystemStore } from '../../../design/canvas/design-system-store'
 import { createEmptyDesignSystem } from '../../../design/canvas/design-system-types'
-import { syncHtmlArtifactsToBoardDocument } from '../../../design/design-board'
+import { syncHtmlArtifactsToBoardDocument, syncHtmlFrameNodesToArtifacts } from '../../../design/design-board'
+import {
+  CANVAS_SCREEN_FIT_PADDING,
+  getCanvasDocumentContentBounds
+} from '../../../design/canvas/canvas-placement'
 import type { DesignArtifact } from '../../../design/design-types'
 import type { DesignHtmlElementContext } from '../../../design/design-composer-context'
 import { useDesignWorkspaceStore } from '../../../design/design-workspace-store'
+import type { DesignRuntimeQualityPayload } from '../../../design/design-html-quality'
 import { CanvasWorkspaceContext } from '../../../design/canvas/canvas-workspace-context'
 import {
   handleCanvasKeyDown,
@@ -65,6 +71,8 @@ type Props = {
   syncHtmlScreens?: boolean
   onImplementDesign?: (artifact: DesignArtifact) => void
   onUseElementAsContext?: (context: DesignHtmlElementContext | null, promptSeed?: string) => void
+  onRuntimeQualityFindings?: (payload: DesignRuntimeQualityPayload) => void
+  onRequestQualityRepair?: (payload: DesignRuntimeQualityPayload) => void
 }
 
 export function CanvasViewport({
@@ -75,7 +83,9 @@ export function CanvasViewport({
   onToggleLeftSidebar,
   onOpenAgentSettings,
   syncHtmlScreens = false,
-  onUseElementAsContext
+  onUseElementAsContext,
+  onRuntimeQualityFindings,
+  onRequestQualityRepair
 }: Props) {
   const { t } = useTranslation('common')
   const svgRef = useRef<SVGSVGElement>(null)
@@ -122,7 +132,29 @@ export function CanvasViewport({
     }
 
     let cancelled = false
+    let fitFrame = 0
+    let nodeSyncTimer: ReturnType<typeof setTimeout> | null = null
+    let nodeSyncDoc: CanvasDocument | null = null
     setDocLoaded(false)
+
+    const fitDocument = (doc: CanvasDocument): void => {
+      const bounds = getCanvasDocumentContentBounds(doc)
+      if (!bounds) return
+      fitFrame = requestAnimationFrame(() => {
+        if (!cancelled) {
+          useCanvasViewportStore.getState().zoomToFit(bounds, CANVAS_SCREEN_FIT_PADDING, { maxZoom: 1 })
+        }
+      })
+    }
+
+    const queueHtmlFrameNodeSync = (doc: CanvasDocument): void => {
+      nodeSyncDoc = doc
+      if (nodeSyncTimer) clearTimeout(nodeSyncTimer)
+      nodeSyncTimer = setTimeout(() => {
+        nodeSyncTimer = null
+        if (!cancelled && nodeSyncDoc) syncHtmlFrameNodesToArtifacts(nodeSyncDoc)
+      }, 180)
+    }
 
     // 1) Reset transient state for the new artifact
     useCanvasSelectionStore.getState().clearSelection()
@@ -141,11 +173,12 @@ export function CanvasViewport({
           useDesignWorkspaceStore.getState().artifacts
         )
         doc = synced.document
-        if (synced.addedFrameIds.length > 0) {
+        if (synced.addedFrameIds.length > 0 || synced.updatedFrameIds.length > 0) {
           persistCanvasDocument(workspaceRoot, artifactId, doc, baseDir)
         }
       }
       useCanvasShapeStore.getState().loadDocument(doc)
+      fitDocument(doc)
       setDocLoaded(true)
     })
 
@@ -161,6 +194,7 @@ export function CanvasViewport({
       if (cancelled) return
       if (state.document === prev.document) return
       persistCanvasDocument(workspaceRoot, artifactId, state.document, baseDir)
+      queueHtmlFrameNodeSync(state.document)
     })
 
     // 3b) Persist the design system when tokens/components change (debounced).
@@ -172,6 +206,8 @@ export function CanvasViewport({
 
     return () => {
       cancelled = true
+      if (fitFrame) cancelAnimationFrame(fitFrame)
+      if (nodeSyncTimer) clearTimeout(nodeSyncTimer)
       unsubscribe()
       unsubscribeDesignSystem()
     }
@@ -199,9 +235,15 @@ export function CanvasViewport({
     if (!docLoaded || !syncHtmlScreens || !artifactId || !workspaceRoot) return
     const current = useCanvasShapeStore.getState().document
     const synced = syncHtmlArtifactsToBoardDocument(current, useDesignWorkspaceStore.getState().artifacts)
-    if (synced.addedFrameIds.length === 0) return
+    if (synced.addedFrameIds.length === 0 && synced.updatedFrameIds.length === 0) return
     useCanvasShapeStore.getState().loadDocument(synced.document)
     persistCanvasDocument(workspaceRoot, artifactId, synced.document, baseDir)
+    if (synced.addedFrameIds.length > 0) {
+      const bounds = getCanvasDocumentContentBounds(synced.document)
+      if (bounds) {
+        useCanvasViewportStore.getState().zoomToFit(bounds, CANVAS_SCREEN_FIT_PADDING, { maxZoom: 1 })
+      }
+    }
   }, [artifactId, baseDir, docLoaded, htmlArtifactSyncKey, syncHtmlScreens, workspaceRoot])
 
   const screenToCanvas = useCallback(
@@ -270,6 +312,13 @@ export function CanvasViewport({
       if (shape?.type === 'text') {
         useCanvasSelectionStore.getState().select([hitId])
         useCanvasSelectionStore.getState().setEditing(hitId)
+        return
+      }
+      // Double-clicking a filled image opens the annotation editor: draw markup
+      // over the picture, then the agent re-edits it (image-to-image).
+      if (shape?.type === 'image' && shape.imageUrl) {
+        useCanvasSelectionStore.getState().select([hitId])
+        useImageAnnotationStore.getState().openImageAnnotation(hitId)
       }
     },
     [screenToCanvas]
@@ -403,6 +452,8 @@ export function CanvasViewport({
           <HtmlFrameOverlay
             workspaceRoot={workspaceRoot}
             onUseElementAsContext={onUseElementAsContext}
+            onRuntimeQualityFindings={onRuntimeQualityFindings}
+            onRequestQualityRepair={onRequestQualityRepair}
           />
         </div>
       </div>

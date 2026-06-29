@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { useDesignWorkspaceStore } from '../../design/design-workspace-store'
 import type { DesignHtmlElementContext } from '../../design/design-composer-context'
 import type { DesignArtifact } from '../../design/design-types'
+import type { DesignRuntimeQualityPayload } from '../../design/design-html-quality'
 import { DesignCanvas } from './DesignCanvas'
 
 type Props = {
@@ -14,6 +15,8 @@ type Props = {
   onImplementDesign?: (artifact: DesignArtifact) => void
   onScreenCreated?: (shapeId: string, userPrompt: string, brief?: string) => void
   onUseElementAsContext?: (context: DesignHtmlElementContext | null, promptSeed?: string) => void
+  onRuntimeQualityFindings?: (payload: DesignRuntimeQualityPayload) => void
+  onRequestQualityRepair?: (payload: DesignRuntimeQualityPayload) => void
 }
 
 /**
@@ -27,7 +30,9 @@ export function DesignWorkspaceView({
   onOpenAgentSettings,
   onImplementDesign,
   onScreenCreated,
-  onUseElementAsContext
+  onUseElementAsContext,
+  onRuntimeQualityFindings,
+  onRequestQualityRepair
 }: Props): ReactElement {
   const { t } = useTranslation('common')
   const loadDesignSettings = useDesignWorkspaceStore((s) => s.loadDesignSettings)
@@ -61,6 +66,8 @@ export function DesignWorkspaceView({
           onImplementDesign={onImplementDesign}
           onScreenCreated={onScreenCreated}
           onUseElementAsContext={onUseElementAsContext}
+          onRuntimeQualityFindings={onRuntimeQualityFindings}
+          onRequestQualityRepair={onRequestQualityRepair}
         />
       </div>
     </div>

@@ -5,6 +5,7 @@ import { useCanvasUndoStore } from './canvas-undo-store'
 import { useCanvasSelectionStore } from './canvas-selection-store'
 import { useDesignSystemStore } from './design-system-store'
 import { setScreenArtifactFactory } from './screen-artifact-bridge'
+import { useCanvasViewportStore } from './canvas-viewport-store'
 import { createEmptyDocument, type CanvasShape } from './canvas-types'
 
 beforeEach(() => {
@@ -12,6 +13,8 @@ beforeEach(() => {
   useCanvasUndoStore.getState().clear()
   useCanvasSelectionStore.getState().clearSelection()
   useDesignSystemStore.getState().resetSystem()
+  useCanvasViewportStore.getState().setVbox({ x: -600, y: -400, width: 1200, height: 800 })
+  useCanvasViewportStore.getState().setContainerSize(1200, 800)
 })
 
 function getShape(id: string): CanvasShape {
@@ -167,20 +170,36 @@ describe('variant-matrix', () => {
 })
 
 describe('add-screens', () => {
-  it('creates N HTML screens in one op, laid out in a row', () => {
+  it('places a single screen in the current viewport when x/y are omitted', () => {
+    useCanvasViewportStore.getState().setVbox({ x: 1000, y: 500, width: 1600, height: 1000 })
+    setScreenArtifactFactory((name) => `art_${name}`)
+    const r = executeOps([{ op: 'add-screen', name: 'Home' }])
+    expect(r.ok).toBe(true)
+    const shape = getShape(r.affectedIds[0])
+    expect(shape.x).toBe(1160)
+    expect(shape.y).toBe(600)
+    expect(shape.width).toBe(1280)
+    expect(shape.height).toBe(800)
+    setScreenArtifactFactory(null as unknown as (name: string) => string | null)
+  })
+
+  it('creates N HTML screens around the current viewport, wrapping when needed', () => {
+    useCanvasViewportStore.getState().setVbox({ x: 1000, y: 500, width: 1600, height: 1000 })
     setScreenArtifactFactory((name) => `art_${name}`)
     const r = executeOps([
       {
         op: 'add-screens',
-        specs: [{ name: 'Home' }, { name: 'Search' }, { name: 'Profile', devicePreset: 'mobile' }]
+        specs: [{ name: 'Home', devicePreset: 'mobile' }, { name: 'Search', devicePreset: 'mobile' }]
       }
     ])
     expect(r.ok).toBe(true)
-    expect(r.affectedIds).toHaveLength(3)
+    expect(r.affectedIds).toHaveLength(2)
     const shapes = r.affectedIds.map(getShape)
     expect(shapes.every((s) => Boolean(s.htmlArtifactId))).toBe(true)
-    const xs = shapes.map((s) => s.x)
-    expect(new Set(xs).size).toBe(3) // distinct x positions (row layout)
+    expect(shapes.map((s) => [s.x, s.y, s.width, s.height])).toEqual([
+      [1370, 578, 390, 844],
+      [1840, 578, 390, 844]
+    ])
     setScreenArtifactFactory(null as unknown as (name: string) => string | null)
   })
 })
