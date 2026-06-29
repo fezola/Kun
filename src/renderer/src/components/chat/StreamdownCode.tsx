@@ -348,8 +348,8 @@ function CodeComponent({ node, className, children, ...props }: CodeProps) {
   const match = className?.match(LANGUAGE_REGEX)
   const language = match?.[1] ?? ''
 
-  if (language === 'shapeops') {
-    return <ShapeOpsChip code={text} />
+  if (language === 'shapeops' || language === 'design_canvas') {
+    return <CanvasOpsChip code={text} language={language} />
   }
 
   if (isPlainTextLanguage(language) && !text.replace(TRAILING_NEWLINES_REGEX, '').trim()) {
@@ -360,20 +360,33 @@ function CodeComponent({ node, className, children, ...props }: CodeProps) {
 }
 
 /**
- * Renders an agent's ```shapeops``` block as a compact chip instead of raw JSON.
- * The ops drive the code-mode canvas; click to inspect the underlying batch.
+ * Renders ```shapeops``` / ```design_canvas``` blocks as compact chips instead
+ * of dumping raw JSON (which may embed full HTML payloads). Click to inspect.
  */
-function ShapeOpsChip({ code }: { code: string }): ReactNode {
+function CanvasOpsChip({
+  code,
+  language
+}: {
+  code: string
+  language: 'shapeops' | 'design_canvas'
+}): ReactNode {
   const { t } = useTranslation('common')
   const [expanded, setExpanded] = useState(false)
   const count = useMemo(() => {
     try {
       const parsed = JSON.parse(code)
+      if (language === 'design_canvas') {
+        if (Array.isArray(parsed)) return parsed.length
+        if (parsed && typeof parsed === 'object' && typeof parsed.action === 'string') {
+          return 1
+        }
+        return 1
+      }
       return Array.isArray(parsed) ? parsed.length : 1
     } catch {
       return null
     }
-  }, [code])
+  }, [code, language])
 
   return (
     <div className="my-1.5">

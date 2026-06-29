@@ -9,6 +9,7 @@ import { useValidatedFileReference } from '../../lib/file-reference-validation'
 import { openWorkspacePathInEditor } from '../../lib/open-workspace-path'
 import { previewWorkspaceFile } from '../../lib/workspace-file-preview'
 import { useChatStore } from '../../store/chat-store'
+import { sanitizeAssistantCanvasToolDisplay } from '../../design/canvas/strip-canvas-tool-display'
 import { StreamdownCode } from './StreamdownCode'
 
 /** Reveal ~1/8 of the outstanding backlog per frame… */
@@ -156,7 +157,8 @@ type Props = {
 }
 
 export function StreamdownAssistant({ text, streaming, className }: Props): ReactElement {
-  const pacedText = useTypewriterText(text, streaming)
+  const displayText = sanitizeAssistantCanvasToolDisplay(text)
+  const pacedText = useTypewriterText(displayText, streaming)
 
   // While streaming, keep a stable key so the typewriter doesn't tear down
   // mid-stroke. Once settled, key on `text.length` — any subsequent edit
@@ -164,7 +166,7 @@ export function StreamdownAssistant({ text, streaming, className }: Props): Reac
   // children in place, which has been observed to leave stale fragments
   // (bullet tail spliced into the next paragraph) on bullet→paragraph
   // transitions containing inline code.
-  const streamdownKey = streaming ? 'live' : `static:${text.length}`
+  const streamdownKey = streaming ? 'live' : `static:${displayText.length}`
 
   return (
     <Streamdown

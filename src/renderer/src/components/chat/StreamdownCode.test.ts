@@ -47,4 +47,17 @@ describe('StreamdownCode plain text fences', () => {
 
     expect(html).toBe('')
   })
+
+  it('renders design_canvas fenced blocks as compact chips', () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        StreamdownCode,
+        { className: 'language-design_canvas', 'data-block': true },
+        '{ "action": "add_screen", "name": "Home" }'
+      )
+    )
+
+    expect(html).toContain('Canvas ops')
+    expect(html).not.toContain('add_screen')
+  })
 })
