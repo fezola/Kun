@@ -45,6 +45,8 @@ export type DesignArtifact = {
   implementedAt?: string
   /** Code thread that implemented it (provenance). */
   implementedThreadId?: string
+  /** Hash of the DESIGN_SYSTEM.md published at implement time (code-drift baseline). */
+  implementedDesignSystemHash?: string
 }
 
 /** Short, collision-resistant id for a design artifact directory. */

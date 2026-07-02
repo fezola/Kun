@@ -26,6 +26,8 @@ export type DesignWorkspaceState = {
   publishDesignSystem: boolean
   settingsLoaded: boolean
   fileError: string | null
+  /** Hash of the current published .kun-design/DESIGN_SYSTEM.md ('' = none). */
+  designSystemHash: string
 
   setWorkspaceRoot: (workspaceRoot: string) => void
   setCanvasView: (view: DesignCanvasView) => void
@@ -38,7 +40,7 @@ export type DesignWorkspaceState = {
   /** Append a new version, repointing the artifact's current document at it. */
   addArtifactVersion: (artifactId: string, version: DesignArtifactVersion) => void
   /** Stamp an artifact as handed to code (provenance + drift baseline). */
-  markImplemented: (artifactId: string, threadId: string) => void
+  markImplemented: (artifactId: string, threadId: string, designSystemHash?: string) => void
   removeArtifact: (artifactId: string) => void
   /** Rename an artifact's title (persisted to its meta.json sidecar). */
   renameArtifact: (artifactId: string, title: string) => void
@@ -51,5 +53,7 @@ export type DesignWorkspaceState = {
   loadDesignSettings: () => Promise<void>
   /** Rebuild the artifact list from `.kun-design/` on disk (durable list). */
   rehydrateArtifacts: () => Promise<void>
+  /** Re-read DESIGN_SYSTEM.md and refresh designSystemHash (code-drift detection). */
+  refreshDesignSystemHash: () => Promise<void>
   resetWorkspace: () => void
 }

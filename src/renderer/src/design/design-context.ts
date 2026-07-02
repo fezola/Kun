@@ -167,3 +167,16 @@ export function formatDesignSystemMarkdown(ctx: DesignContext | undefined): stri
   body.push('', '## Craft', '', ...DESIGN_CRAFT_LINES)
   return `${body.join('\n')}\n`
 }
+
+/**
+ * Stable content hash of a published DESIGN_SYSTEM.md body. Lets design mode
+ * detect when the shared design system has drifted from what an artifact was
+ * implemented against (the code side of bidirectional design↔code drift).
+ */
+export function hashDesignSystem(content: string): string {
+  let hash = 5381
+  for (let i = 0; i < content.length; i += 1) {
+    hash = ((hash << 5) + hash + content.charCodeAt(i)) | 0
+  }
+  return (hash >>> 0).toString(36)
+}

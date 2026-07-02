@@ -8,6 +8,7 @@ import {
   persistArtifactMeta,
   reconstructArtifact
 } from './design-artifact-persistence'
+import { hashDesignSystem } from './design-context'
 import type { DesignArtifact, DesignCanvasView, DesignViewport } from './design-types'
 import type { DesignWorkspaceState } from './design-workspace-store-types'
 
@@ -55,6 +56,7 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
   publishDesignSystem: true,
   settingsLoaded: false,
   fileError: null,
+  designSystemHash: '',
 
   setWorkspaceRoot: (workspaceRoot) => set({ workspaceRoot }),
 
@@ -102,11 +104,17 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
     if (updated) persistArtifactMeta(get().workspaceRoot, updated)
   },
 
-  markImplemented: (artifactId, threadId) => {
+  markImplemented: (artifactId, threadId, designSystemHash) => {
     set((state) => ({
+      ...(designSystemHash ? { designSystemHash } : {}),
       artifacts: state.artifacts.map((item) =>
         item.id === artifactId
-          ? { ...item, implementedAt: new Date().toISOString(), implementedThreadId: threadId }
+          ? {
+              ...item,
+              implementedAt: new Date().toISOString(),
+              implementedThreadId: threadId,
+              ...(designSystemHash ? { implementedDesignSystemHash: designSystemHash } : {})
+            }
           : item
       )
     }))
@@ -193,6 +201,7 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
       set({ settingsLoaded: true })
     }
     await get().rehydrateArtifacts()
+    await get().refreshDesignSystemHash()
   },
 
   rehydrateArtifacts: async () => {
@@ -230,5 +239,17 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
     })
   },
 
-  resetWorkspace: () => set({ artifacts: [], activeArtifactId: null, fileError: null })
+  refreshDesignSystemHash: async () => {
+    const { workspaceRoot } = get()
+    if (!workspaceRoot || typeof window.kunGui?.readWorkspaceFile !== 'function') {
+      set({ designSystemHash: '' })
+      return
+    }
+    const res = await window.kunGui
+      .readWorkspaceFile({ path: '.kun-design/DESIGN_SYSTEM.md', workspaceRoot })
+      .catch(() => null)
+    set({ designSystemHash: res && res.ok ? hashDesignSystem(res.content) : '' })
+  },
+
+  resetWorkspace: () => set({ artifacts: [], activeArtifactId: null, fileError: null, designSystemHash: '' })
 }))

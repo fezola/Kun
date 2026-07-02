@@ -57,7 +57,8 @@ export function parseArtifactMeta(raw: string, dirId: string): DesignArtifact | 
     updatedAt,
     versions: versions.length > 0 ? versions : [{ id, relativePath, createdAt, summary: '' }],
     implementedAt: isStr(o.implementedAt) ? o.implementedAt : undefined,
-    implementedThreadId: isStr(o.implementedThreadId) ? o.implementedThreadId : undefined
+    implementedThreadId: isStr(o.implementedThreadId) ? o.implementedThreadId : undefined,
+    implementedDesignSystemHash: isStr(o.implementedDesignSystemHash) ? o.implementedDesignSystemHash : undefined
   }
 }
 

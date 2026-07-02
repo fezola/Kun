@@ -29,6 +29,7 @@ export function DesignSidebar({
   const setActiveArtifact = useDesignWorkspaceStore((s) => s.setActiveArtifact)
   const removeArtifact = useDesignWorkspaceStore((s) => s.removeArtifact)
   const renameArtifact = useDesignWorkspaceStore((s) => s.renameArtifact)
+  const designSystemHash = useDesignWorkspaceStore((s) => s.designSystemHash)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   const committingRef = useRef(false)
@@ -83,6 +84,12 @@ export function DesignSidebar({
               const active = artifact.id === activeArtifactId
               const implemented = Boolean(artifact.implementedAt)
               const drift = implemented && (artifact.implementedAt ?? '') < artifact.updatedAt
+              const codeDrift =
+                implemented &&
+                !drift &&
+                Boolean(artifact.implementedDesignSystemHash) &&
+                Boolean(designSystemHash) &&
+                artifact.implementedDesignSystemHash !== designSystemHash
               return (
                 <li
                   key={artifact.id}
@@ -125,10 +132,12 @@ export function DesignSidebar({
                       ) : null}
                       {implemented ? (
                         <span
-                          title={drift ? t('designDrift') : t('designImplemented')}
-                          className={`shrink-0 text-[12px] leading-none ${drift ? 'text-[#c98a3a]' : 'text-[#2e9e6b]'}`}
+                          title={drift ? t('designDrift') : codeDrift ? t('designCodeDrift') : t('designImplemented')}
+                          className={`shrink-0 text-[12px] leading-none ${
+                            drift ? 'text-[#c98a3a]' : codeDrift ? 'text-[#c0392b]' : 'text-[#2e9e6b]'
+                          }`}
                         >
-                          {drift ? '⟳' : '✓'}
+                          {drift ? '⟳' : codeDrift ? '⚠' : '✓'}
                         </span>
                       ) : null}
                     </button>
