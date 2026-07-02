@@ -1,10 +1,11 @@
 import type { CanvasShape, ShapeType } from '../canvas-types'
-import { createDefaultShape, isImplicitImageSlot, shapeBounds, type DevicePreset } from '../canvas-types'
+import { createDefaultShape, isHtmlFrame, isImplicitImageSlot, shapeBounds, type DevicePreset } from '../canvas-types'
 import { useCanvasShapeStore, withDescendants } from '../canvas-shape-store'
 import { useCanvasViewportStore } from '../canvas-viewport-store'
 import { centerRectInViewport, placeRectInViewportAvoiding } from '../canvas-placement'
 import { alignShapes, collectiveBounds, distributeShapes, type AlignAxis, type DistributeAxis } from '../canvas-align'
-import { getScreenArtifactFactory, setScreenBrief } from '../screen-artifact-bridge'
+import { getScreenArtifactFactory, getScreenCreationFactory, setScreenBrief } from '../screen-artifact-bridge'
+import { useDesignWorkspaceStore } from '../../design-workspace-store'
 import type { ExecuteOpsOptions, OpError, ShapeOp } from './schema'
 import {
   LINEAR_TYPES,
@@ -19,6 +20,23 @@ import {
   reflowFrame,
   suggestionForMissingId
 } from './context'
+
+function promoteResizedHtmlFrameToManualNode(shapeId: string): void {
+  const shape = useCanvasShapeStore.getState().document.objects[shapeId]
+  if (!shape || !isHtmlFrame(shape) || !shape.htmlArtifactId) return
+  const designStore = useDesignWorkspaceStore.getState()
+  const artifact = designStore.artifacts.find((item) => item.id === shape.htmlArtifactId)
+  if (!artifact || artifact.kind !== 'html') return
+  designStore.updateArtifactNode(shape.htmlArtifactId, {
+    x: Math.round(shape.x),
+    y: Math.round(shape.y),
+    width: Math.round(shape.width),
+    height: Math.round(shape.height),
+    sizeMode: 'manual',
+    boardHidden: false,
+    viewMode: artifact.node?.viewMode ?? 'preview'
+  })
+}
 
 export function executeBasicShapeOp(
   op: ShapeOp,
@@ -157,6 +175,7 @@ export function executeBasicShapeOp(
         // Otherwise honor each child's resize constraints.
         applyConstraintsOnResize(op.id, oldBounds, newBounds, affectedIds)
       }
+      promoteResizedHtmlFrameToManualNode(op.id)
       break
     }
     case 'align': {
@@ -256,15 +275,11 @@ export function executeBasicShapeOp(
       break
     }
     case 'add-screen': {
+      const creationFactory = getScreenCreationFactory()
       const factory = getScreenArtifactFactory()
       const allowPlainFrame = options.screenFallback === 'plain-frame'
-      const artifactId = factory?.(op.name) ?? null
-      if (!artifactId && !allowPlainFrame) {
-        errors.push({ code: 'INVALID_OP', message: 'Cannot create screen artifact — no handler registered' })
-        return true
-      }
       const preset = (op.devicePreset ?? defaultScreenDevicePreset()) as DevicePreset
-      const centered = createScreenLikeShape(op.name, 0, 0, preset, artifactId)
+      const centered = createScreenLikeShape(op.name, 0, 0, preset, null)
       const width = op.width ?? centered.width
       const height = op.height ?? centered.height
       const fallbackRect = placeRectInViewportAvoiding(
@@ -272,10 +287,36 @@ export function executeBasicShapeOp(
         useCanvasViewportStore.getState().vbox,
         htmlFrameRects()
       )
+      const x = op.x ?? fallbackRect.x
+      const y = op.y ?? fallbackRect.y
+      if (creationFactory && !allowPlainFrame) {
+        const created = creationFactory({
+          name: op.name,
+          ...(op.brief ? { brief: op.brief } : {}),
+          x,
+          y,
+          width,
+          height,
+          devicePreset: preset,
+          preparePreview: false
+        })
+        if (!created) {
+          errors.push({ code: 'INVALID_OP', message: 'Cannot create screen artifact — handler returned no screen' })
+          return true
+        }
+        if (op.brief) setScreenBrief(created.shapeId, op.brief)
+        affectedIds.add(created.shapeId)
+        break
+      }
+      const artifactId = factory?.(op.name) ?? null
+      if (!artifactId && !allowPlainFrame) {
+        errors.push({ code: 'INVALID_OP', message: 'Cannot create screen artifact — no handler registered' })
+        return true
+      }
       const shape = createScreenLikeShape(
         op.name,
-        op.x ?? fallbackRect.x,
-        op.y ?? fallbackRect.y,
+        x,
+        y,
         preset,
         artifactId
       )

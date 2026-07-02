@@ -11,6 +11,7 @@ import {
 
 export const AI_CURSOR_TTL_MS = 4500
 export const FRAME_AUTO_GROW_THRESHOLD = 12
+export const HTML_FRAME_MIN_OVERLAY_ZOOM = 0.04
 const FRAME_AUTO_GROW_MAX_WIDTH = 7_680
 const FRAME_AUTO_GROW_MIN_WIDTH = 240
 const FRAME_AUTO_GROW_MAX_HEIGHT = 12_000
@@ -18,6 +19,7 @@ const FRAME_AUTO_GROW_MIN_HEIGHT = 180
 const HTML_FRAME_SCROLLBAR_STYLE_ID = '__kun_html_frame_auto_crop_scrollbars__'
 
 export const HTML_FRAME_CONTENT_SIZE_QUERY = `(() => {
+  try {
   const html = document.documentElement
   const body = document.body
   const nums = (...values) => values.filter((v) => Number.isFinite(v) && v > 0)
@@ -107,6 +109,9 @@ export const HTML_FRAME_CONTENT_SIZE_QUERY = `(() => {
     paintedHeight: Math.ceil(paintedHeight),
     paintedWidth: Math.ceil(paintedWidth)
   }
+  } catch {
+    return null
+  }
 })()`
 
 export function htmlFrameShouldSuppressDocumentScrollbars({
@@ -143,6 +148,7 @@ export function buildHtmlFrameScrollbarSuppressionScript(suppress: boolean): str
     }
   `
   return `(() => {
+    try {
     const id = ${JSON.stringify(HTML_FRAME_SCROLLBAR_STYLE_ID)}
     const existing = document.getElementById(id)
     if (!${JSON.stringify(suppress)}) {
@@ -153,6 +159,9 @@ export function buildHtmlFrameScrollbarSuppressionScript(suppress: boolean): str
     style.id = id
     style.textContent = ${JSON.stringify(css)}
     ;(document.head || document.documentElement).appendChild(style)
+    } catch {
+      return
+    }
   })()`
 }
 
@@ -183,20 +192,21 @@ export function resolveHtmlFrameMeasurementDecision(value: unknown): HtmlFrameMe
     typeof measured.documentHeight === 'number' && Number.isFinite(measured.documentHeight)
       ? measured.documentHeight
       : measured.height
+  const rawMeasuredHeight = Math.max(1, Math.ceil(measured.height))
   const nextWidth = Math.max(
     FRAME_AUTO_GROW_MIN_WIDTH,
     Math.min(FRAME_AUTO_GROW_MAX_WIDTH, Math.ceil(measured.width))
   )
   const nextHeight = Math.max(
     FRAME_AUTO_GROW_MIN_HEIGHT,
-    Math.min(FRAME_AUTO_GROW_MAX_HEIGHT, Math.ceil(measured.height))
+    Math.min(FRAME_AUTO_GROW_MAX_HEIGHT, rawMeasuredHeight)
   )
   return {
     nextWidth,
     nextHeight,
     documentHeight,
     suppressScrollbars: htmlFrameShouldSuppressDocumentScrollbars({
-      measuredHeight: nextHeight,
+      measuredHeight: rawMeasuredHeight,
       documentHeight
     })
   }
@@ -250,6 +260,68 @@ export function htmlFrameOverlayPointerEvents({
   return interactive || editing ? 'auto' : 'none'
 }
 
+export function htmlFrameOverlayCanMountAtZoom(zoom: number): boolean {
+  return Number.isFinite(zoom) && zoom >= HTML_FRAME_MIN_OVERLAY_ZOOM
+}
+
+export function htmlFrameShouldClearElementContextOnEditingChange({
+  wasEditing,
+  editing
+}: {
+  wasEditing: boolean
+  editing: boolean
+}): boolean {
+  return wasEditing && !editing
+}
+
+export type HtmlFramePreviewAsyncEpoch = {
+  shapeId: string
+  artifactId: string
+  artifactRelativePath: string
+  previewWebviewUrl: string
+  previewRevision: number
+  webviewMountNonce: number
+}
+
+export function htmlFramePreviewAsyncEpochMatches(
+  captured: HtmlFramePreviewAsyncEpoch | null,
+  current: HtmlFramePreviewAsyncEpoch | null
+): boolean {
+  return Boolean(
+    captured &&
+      current &&
+      captured.shapeId === current.shapeId &&
+      captured.artifactId === current.artifactId &&
+      captured.artifactRelativePath === current.artifactRelativePath &&
+      captured.previewWebviewUrl === current.previewWebviewUrl &&
+      captured.previewRevision === current.previewRevision &&
+      captured.webviewMountNonce === current.webviewMountNonce
+  )
+}
+
+export function htmlFrameShouldPromotePreviewToReady({
+  previewStatus,
+  previewRenderState,
+  drawingActive,
+  artifactRelativePath,
+  previewRelativePath
+}: {
+  previewStatus?: 'pending' | 'ready' | 'error'
+  previewRenderState: DesignPreviewRenderState
+  drawingActive: boolean
+  artifactRelativePath?: string
+  previewRelativePath?: string
+}): boolean {
+  const artifactPath = artifactRelativePath?.trim()
+  return Boolean(
+    previewStatus === 'pending' &&
+      previewRenderState === 'renderable' &&
+      !drawingActive &&
+      artifactPath &&
+      previewRelativePath === artifactPath
+  )
+}
+
 /**
  * While a page is actively generating, `shape.height` (the store's frame size)
  * only catches up to the streamed content a beat AFTER each measurement — this
@@ -273,19 +345,24 @@ export function htmlFrameVisualCanvasHeight(
   return Math.max(FRAME_AUTO_GROW_MIN_HEIGHT, Math.min(canvasHeight, measuredContentHeight))
 }
 
+export function htmlFrameShouldCropVisualHeight({
+  transparentGeneratingSurface,
+  autoResizeEnabled
+}: {
+  transparentGeneratingSurface: boolean
+  autoResizeEnabled: boolean
+}): boolean {
+  return transparentGeneratingSurface && autoResizeEnabled
+}
+
 export function shouldAutoResizeHtmlFrame({
-  sizeMode,
-  previewStatus,
-  parallelStatus
+  sizeMode
 }: {
   sizeMode?: 'auto' | 'manual'
   role?: DesignArtifactFoundationRole
   previewStatus?: 'pending' | 'ready' | 'error'
   parallelStatus?: 'queued' | 'running' | 'done' | 'failed'
 }): boolean {
-  if (previewStatus === 'pending' || parallelStatus === 'queued' || parallelStatus === 'running') {
-    return true
-  }
   return sizeMode !== 'manual'
 }
 
@@ -338,6 +415,7 @@ export function htmlFrameDrawingActive({
  * label + rect in the webview's CSS px, which maps 1:1 to the overlay content div.
  */
 export const AI_SECTION_QUERY = `(() => {
+  try {
   const tagged = document.querySelectorAll('[data-ds-section]')
   let el = null
   let label = ''
@@ -355,6 +433,9 @@ export const AI_SECTION_QUERY = `(() => {
   const r = el.getBoundingClientRect()
   if (r.width < 1 || r.height < 1) return null
   return { label: label, left: Math.round(r.left), top: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) }
+  } catch {
+    return null
+  }
 })()`
 
 /**
@@ -371,4 +452,3 @@ export function htmlFrameWebviewPartition(shapeId: string): string {
     .slice(0, 80)
   return `kun-proto-frame-${safeId || 'frame'}`
 }
-

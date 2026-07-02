@@ -1,9 +1,7 @@
-import { artifactDesignMdPath } from './design-artifact-persistence'
 import {
   createEmptyDocument,
   createHtmlFrameShape,
   isHtmlFrame,
-  shapeBounds,
   type CanvasDocument,
   type CanvasShape,
   type Rect
@@ -22,10 +20,9 @@ import {
   defaultPreviewNodeSizeForDesignTarget,
   type DesignTarget
 } from './design-context'
-import { useCanvasSelectionStore } from './canvas/canvas-selection-store'
-import { useCanvasShapeStore } from './canvas/canvas-shape-store'
 import { useCanvasViewportStore } from './canvas/canvas-viewport-store'
 import { serializeCanvasDocument } from './canvas/canvas-persistence'
+import { createLinkedHtmlScreen } from './canvas/screen-lifecycle'
 import {
   createDesignArtifactId,
   defaultDesignArtifactNode,
@@ -39,6 +36,7 @@ export type SyncHtmlArtifactsToBoardResult = {
   document: CanvasDocument
   addedFrameIds: string[]
   updatedFrameIds: string[]
+  removedFrameIds: string[]
 }
 
 export type CreateScreenFrameArtifactResult = {
@@ -79,7 +77,8 @@ export function buildHtmlArtifactSyncKey(
           node?.width ?? '',
           node?.height ?? '',
           node?.sizeMode ?? '',
-          node?.viewMode ?? ''
+          node?.viewMode ?? '',
+          node?.boardHidden ? 'hidden' : ''
         ].join(':')
       })
   ].join('|')
@@ -94,16 +93,75 @@ function cloneDocument(doc: CanvasDocument): CanvasDocument {
   }
 }
 
+function descendantIds(objects: Record<string, CanvasShape>, id: string): string[] {
+  const shape = objects[id]
+  if (!shape) return []
+  return shape.children.flatMap((childId) => [childId, ...descendantIds(objects, childId)])
+}
+
+function documentShapeIdsInOrder(doc: CanvasDocument): string[] {
+  const visited = new Set<string>()
+  const ordered: string[] = []
+  const visit = (id: string): void => {
+    if (visited.has(id)) return
+    const shape = doc.objects[id]
+    if (!shape) return
+    visited.add(id)
+    ordered.push(id)
+    for (const childId of shape.children) visit(childId)
+  }
+  visit(doc.rootId)
+  for (const id of Object.keys(doc.objects)) visit(id)
+  return ordered
+}
+
 function linkedHtmlFrames(doc: CanvasDocument): Map<string, CanvasShape> {
   const frames = new Map<string, CanvasShape>()
-  for (const shape of Object.values(doc.objects)) {
-    if (shape && isHtmlFrame(shape) && shape.htmlArtifactId) frames.set(shape.htmlArtifactId, shape)
+  for (const id of documentShapeIdsInOrder(doc)) {
+    const shape = doc.objects[id]
+    if (shape && isHtmlFrame(shape) && shape.htmlArtifactId && !frames.has(shape.htmlArtifactId)) {
+      frames.set(shape.htmlArtifactId, shape)
+    }
   }
   return frames
 }
 
+function documentHasHtmlFrameForArtifact(doc: CanvasDocument, artifactId: string): boolean {
+  for (const id of documentShapeIdsInOrder(doc)) {
+    const shape = doc.objects[id]
+    if (shape && isHtmlFrame(shape) && shape.htmlArtifactId === artifactId) return true
+  }
+  return false
+}
+
+export function removedLinkedHtmlArtifactIds(
+  before: CanvasDocument,
+  after: CanvasDocument
+): string[] {
+  const removed = new Set<string>()
+  for (const id of documentShapeIdsInOrder(before)) {
+    const shape = before.objects[id]
+    if (!shape || !isHtmlFrame(shape) || !shape.htmlArtifactId) continue
+    if (!documentHasHtmlFrameForArtifact(after, shape.htmlArtifactId)) {
+      removed.add(shape.htmlArtifactId)
+    }
+  }
+  return [...removed]
+}
+
 function nodeRect(node: DesignArtifactNode): Rect {
   return { x: node.x, y: node.y, width: node.width, height: node.height }
+}
+
+function ensureHtmlFrameMinSize(size: Pick<Rect, 'width' | 'height'>): Pick<Rect, 'width' | 'height'> {
+  return {
+    width: Math.max(BOARD_HTML_FRAME_MIN_WIDTH, size.width),
+    height: Math.max(BOARD_HTML_FRAME_MIN_HEIGHT, size.height)
+  }
+}
+
+function frameRectFromNode(node: DesignArtifactNode): Rect {
+  return { x: node.x, y: node.y, ...ensureHtmlFrameMinSize(node) }
 }
 
 function artifactNodeIsDefault(node: DesignArtifactNode | undefined, index: number): boolean {
@@ -229,6 +287,7 @@ function frameNodePatch(shape: CanvasShape): DesignArtifactNode | null {
     width: Math.round(shape.width),
     height: Math.round(shape.height),
     sizeMode: 'manual',
+    boardHidden: false,
     viewMode: 'preview'
   }
 }
@@ -261,19 +320,50 @@ export function syncHtmlArtifactsToBoardDocument(
   doc: CanvasDocument,
   artifacts: readonly DesignArtifact[]
 ): SyncHtmlArtifactsToBoardResult {
-  const root = doc.objects[doc.rootId]
-  if (!root) return { document: doc, addedFrameIds: [], updatedFrameIds: [] }
-
   const htmlArtifacts = artifacts.filter((artifact) => artifact.kind === 'html')
   const addedFrameIds: string[] = []
   const updatedFrameIds: string[] = []
+  const removedFrameIds: string[] = []
   let next: CanvasDocument | null = null
+  const htmlArtifactIds = new Set(htmlArtifacts.map((artifact) => artifact.id))
+  const seenFrameArtifactIds = new Set<string>()
+
+  for (const id of documentShapeIdsInOrder(doc)) {
+    const shape = doc.objects[id]
+    if (!shape || !isHtmlFrame(shape) || !shape.htmlArtifactId) continue
+    const duplicateLinkedFrame = seenFrameArtifactIds.has(shape.htmlArtifactId)
+    const missingArtifact = !htmlArtifactIds.has(shape.htmlArtifactId)
+    if (!duplicateLinkedFrame && !missingArtifact) {
+      seenFrameArtifactIds.add(shape.htmlArtifactId)
+      continue
+    }
+    if (!next) next = cloneDocument(doc)
+    const existing = next.objects[shape.id]
+    if (!existing) continue
+    const removeIds = [shape.id, ...descendantIds(next.objects, shape.id)]
+    for (const id of removeIds) delete next.objects[id]
+    if (existing.parentId && next.objects[existing.parentId]) {
+      const parent = next.objects[existing.parentId]
+      next.objects[existing.parentId] = {
+        ...parent,
+        children: parent.children.filter((childId) => childId !== shape.id)
+      }
+    }
+    removedFrameIds.push(shape.id)
+  }
+
+  const workingDoc = next ?? doc
+  const root = workingDoc.objects[workingDoc.rootId]
+  if (!root) return { document: workingDoc, addedFrameIds, updatedFrameIds, removedFrameIds }
+
   const designTarget = useDesignWorkspaceStore.getState().designContext.designTarget
-  const framesByArtifactId = linkedHtmlFrames(doc)
+  const framesByArtifactId = linkedHtmlFrames(workingDoc)
   const autoPlaceArtifacts = htmlArtifacts
     .map((artifact, index) => ({ artifact, index }))
     .filter(({ artifact, index }) =>
-      !framesByArtifactId.has(artifact.id) && !shouldUseArtifactNodeForFrame(artifact, index)
+      !artifact.node?.boardHidden &&
+      !framesByArtifactId.has(artifact.id) &&
+      !shouldUseArtifactNodeForFrame(artifact, index)
     )
   const autoRects = layoutRectsInViewport(
     autoPlaceArtifacts.map(({ artifact, index }) =>
@@ -296,10 +386,14 @@ export function syncHtmlArtifactsToBoardDocument(
     const autoNode = autoArtifactNode(artifact, index)
     const defaultFrameSize = defaultFrameSizeForArtifact(artifact, index, designTarget)
     const defaultDevicePreset = defaultDevicePresetForArtifact(artifact, designTarget)
+    if (!existing && artifact.node?.boardHidden) return
     if (existing) {
       const patch: Partial<CanvasShape> = {}
       const nextName = artifact.title || existing.name
       if (existing.name !== nextName) patch.name = nextName
+      const minSize = ensureHtmlFrameMinSize(existing)
+      if (Math.abs(minSize.width - existing.width) > 0.5) patch.width = minSize.width
+      if (Math.abs(minSize.height - existing.height) > 0.5) patch.height = minSize.height
       if (!customNode) {
         // A stale device preset means the design target genuinely changed for
         // this frame (e.g. Web -> App) — snap it to the new target's base size
@@ -321,19 +415,19 @@ export function syncHtmlArtifactsToBoardDocument(
         if (presetChanged) patch.devicePreset = defaultDevicePreset
       }
       if (Object.keys(patch).length > 0) {
-        if (!next) next = cloneDocument(doc)
+        if (!next) next = cloneDocument(workingDoc)
         next.objects[existing.id] = { ...next.objects[existing.id], ...patch }
         updatedFrameIds.push(existing.id)
       }
       return
     }
 
-    if (!next) next = cloneDocument(doc)
+    if (!next) next = cloneDocument(workingDoc)
     const nextRoot = next.objects[next.rootId]
     if (!nextRoot) return
 
     const rect = customNode
-      ? nodeRect(customNode)
+      ? frameRectFromNode(customNode)
       : autoNode
         ? { x: autoNode.x, y: autoNode.y, ...defaultFrameSize }
       : occupiedAutoRects.length === 0
@@ -358,16 +452,20 @@ export function syncHtmlArtifactsToBoardDocument(
     addedFrameIds.push(frame.id)
   })
 
-  return { document: next ?? doc, addedFrameIds, updatedFrameIds }
+  return { document: next ?? workingDoc, addedFrameIds, updatedFrameIds, removedFrameIds }
 }
 
 export function syncHtmlFrameNodesToArtifacts(doc: CanvasDocument): void {
   const designStore = useDesignWorkspaceStore.getState()
-  for (const shape of Object.values(doc.objects)) {
+  const syncedArtifactIds = new Set<string>()
+  for (const id of documentShapeIdsInOrder(doc)) {
+    const shape = doc.objects[id]
     if (!shape || !isHtmlFrame(shape) || !shape.htmlArtifactId) continue
+    if (syncedArtifactIds.has(shape.htmlArtifactId)) continue
     const artifactIndex = designStore.artifacts.findIndex((item) => item.id === shape.htmlArtifactId)
     const artifact = artifactIndex >= 0 ? designStore.artifacts[artifactIndex] : undefined
-    if (!artifact) continue
+    if (!artifact || artifact.kind !== 'html') continue
+    syncedArtifactIds.add(shape.htmlArtifactId)
     const patch = frameNodePatch(shape)
     if (!patch) continue
     const nextNode = {
@@ -380,7 +478,8 @@ export function syncHtmlFrameNodesToArtifacts(doc: CanvasDocument): void {
       current &&
       rectsAlmostEqual(nodeRect(current), nodeRect(nextNode)) &&
       (current.viewMode ?? 'preview') === (nextNode.viewMode ?? 'preview') &&
-      current.sizeMode === nextNode.sizeMode
+      current.sizeMode === nextNode.sizeMode &&
+      current.boardHidden === nextNode.boardHidden
     ) {
       continue
     }
@@ -442,47 +541,15 @@ export function createScreenFrameArtifact(options: {
   x?: number
   y?: number
 }): CreateScreenFrameArtifactResult {
-  const state = useDesignWorkspaceStore.getState()
-  const docId = state.ensureActiveDocument()
-  const createdAt = new Date().toISOString()
-  const artifactId = createDesignArtifactId()
-  const relativePath = `.kun-design/${docId}/${artifactId}/v1.html`
-  const designMdPath = artifactDesignMdPath(docId, artifactId)
-  const brief = options.brief?.trim() ?? ''
-  const titleSource = options.title?.trim() || brief || 'Screen'
-  const title = titleSource.length > 48 ? `${titleSource.slice(0, 48)}...` : titleSource
-  const defaultFrameSize = defaultFrameSizeForDesignTarget(state.designContext.designTarget)
-  const defaultDevicePreset = defaultDevicePresetForDesignTarget(state.designContext.designTarget)
-  const width = Math.max(240, options.width ?? defaultFrameSize.width)
-  const height = Math.max(180, options.height ?? defaultFrameSize.height)
-  const vbox = useCanvasViewportStore.getState().vbox
-  const occupied = Object.values(useCanvasShapeStore.getState().document.objects)
-    .filter((shape): shape is CanvasShape => Boolean(shape) && shape.visible !== false && isHtmlFrame(shape))
-    .map(shapeBounds)
-  const rect = placeRectInViewportAvoiding({ width, height }, vbox, occupied)
-  const x = options.x ?? rect.x
-  const y = options.y ?? rect.y
-
-  state.upsertArtifact({
-    id: artifactId,
-    kind: 'html',
-    title,
-    relativePath,
-    createdAt,
-    updatedAt: createdAt,
-    versions: [{ id: `${artifactId}-v1`, relativePath, createdAt, summary: brief }],
-    designMdPath,
-    previewStatus: 'pending',
-    node: { x, y, width, height, sizeMode: 'manual', viewMode: 'preview' }
+  const created = createLinkedHtmlScreen({
+    boardArtifactId: options.boardArtifactId,
+    name: options.title,
+    brief: options.brief,
+    x: options.x,
+    y: options.y,
+    width: options.width,
+    height: options.height
   })
-  useDesignWorkspaceStore.getState().setActiveArtifact(options.boardArtifactId)
-
-  const shape = createHtmlFrameShape(title, x, y, artifactId, defaultDevicePreset)
-  shape.width = width
-  shape.height = height
-  useCanvasShapeStore.getState().addShape(shape)
-  useCanvasSelectionStore.getState().select([shape.id])
-  useCanvasViewportStore.getState().setActiveTool('select')
-
-  return { artifactId, relativePath, designMdPath, shape }
+  if (!created) throw new Error('Cannot create screen artifact')
+  return created
 }

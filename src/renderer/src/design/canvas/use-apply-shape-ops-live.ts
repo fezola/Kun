@@ -15,6 +15,7 @@ import { takeScreenBrief } from './screen-artifact-bridge'
 import type { ExecuteOpsOptions, OpError } from './shape-ops'
 import { isHtmlFrame, type CanvasDocument } from './canvas-types'
 import { useDesignAssistantStore } from '../design-assistant-store'
+import { useDesignWorkspaceStore } from '../design-workspace-store'
 
 /** Coalesce per-token `liveAssistant` deltas so we re-parse at most this often. */
 const STREAM_THROTTLE_MS = 120
@@ -29,6 +30,12 @@ type ActiveCanvasTurnReplayState = {
 type GeneratedImageFallbackTarget = {
   id: string
   imageUrl: string
+}
+
+export type PendingScreenGeneration = {
+  shapeId: string
+  userPrompt: string
+  brief?: string
 }
 
 const EXISTING_IMAGE_EDIT_PATTERN =
@@ -154,6 +161,29 @@ export function canvasReplayStateForStoreUpdate(
   }
 }
 
+export function takeNextReadyScreenGeneration({
+  pendingScreens,
+  document,
+  currentTurnId,
+  htmlArtifactIds
+}: {
+  pendingScreens: PendingScreenGeneration[]
+  document: CanvasDocument
+  currentTurnId: string | null
+  htmlArtifactIds?: ReadonlySet<string>
+}): PendingScreenGeneration | null {
+  if (currentTurnId) return null
+  while (pendingScreens.length > 0) {
+    const next = pendingScreens.shift()
+    if (!next) continue
+    const shape = document.objects[next.shapeId]
+    if (!shape || !isHtmlFrame(shape) || !shape.htmlArtifactId) continue
+    if (htmlArtifactIds && !htmlArtifactIds.has(shape.htmlArtifactId)) continue
+    return next
+  }
+  return null
+}
+
 /**
  * Apply the `design_canvas` / legacy ```shapeops``` blocks the chat agent emits
  * — IN REAL TIME, as they stream — so the design draft builds up live on the
@@ -200,7 +230,7 @@ export function useApplyShapeOpsLive(
     // turns must run one at a time on the shared chat thread — so queue them and
     // drain one per turn-completion. `screenGenSeen` guards against ever
     // re-enqueuing (hence regenerating) a frame across the run's lifetime.
-    const pendingScreens: { shapeId: string; userPrompt: string; brief?: string }[] = []
+    const pendingScreens: PendingScreenGeneration[] = []
     const screenGenSeen = new Set<string>()
 
     const resetTurn = (): void => {
@@ -321,9 +351,18 @@ export function useApplyShapeOpsLive(
     // on every turn-completion; the previous screen's generation turn ending is
     // what advances the queue.
     const drainPendingScreens = (): void => {
-      if (useChatStore.getState().currentTurnId) return
-      const next = pendingScreens.shift()
+      const next = takeNextReadyScreenGeneration({
+        pendingScreens,
+        document: useCanvasShapeStore.getState().document,
+        currentTurnId: useChatStore.getState().currentTurnId,
+        htmlArtifactIds: new Set(
+          useDesignWorkspaceStore.getState().artifacts
+            .filter((artifact) => artifact.kind === 'html')
+            .map((artifact) => artifact.id)
+        )
+      })
       if (!next) return
+      useCanvasSelectionStore.getState().select([next.shapeId])
       onScreenCreatedRef.current?.(next.shapeId, next.userPrompt, next.brief)
     }
 

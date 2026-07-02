@@ -63,18 +63,13 @@ export function resolveDesignComposerContextTargets(input: {
       .map((id) => canvasDocument.objects[id])
       .filter((shape): shape is CanvasShape => Boolean(shape))
     if (selectedShapes.length === 1 && isHtmlFrame(selectedShapes[0])) {
-      const shape = selectedShapes[0]
-      const artifact = artifacts.find((item) => item.id === shape.htmlArtifactId)
-      if (artifact?.kind === 'html') {
-        const chip = {
-          id: `html-screen-frame:${shape.id}:${artifact.id}`,
-          kind: 'html-screen-frame' as const,
-          label: artifact.title || shape.name,
-          detail: `${Math.round(shape.width)} x ${Math.round(shape.height)} - ${artifact.relativePath}`,
-          removable: true
-        }
-        return suppressedIds.has(chip.id) ? [] : [{ kind: 'html-screen-frame', chip, artifact, shape }]
-      }
+      const target = resolveDesignComposerScreenFrameTarget({
+        artifacts,
+        canvasDocument,
+        shapeId: selectedShapes[0].id,
+        suppressedIds
+      })
+      if (target) return [target]
     }
     if (selectedShapes.length > 0) {
       const sortedIds = selectedShapes.map((shape) => shape.id).sort()
@@ -107,6 +102,30 @@ export function resolveDesignComposerContextTargets(input: {
   }
 
   return []
+}
+
+export function resolveDesignComposerScreenFrameTarget(input: {
+  artifacts: readonly DesignArtifact[]
+  canvasDocument: CanvasDocument
+  shapeId: string | null | undefined
+  suppressedIds?: ReadonlySet<string>
+}): Extract<DesignComposerContextTarget, { kind: 'html-screen-frame' }> | null {
+  const shapeId = input.shapeId?.trim()
+  if (!shapeId) return null
+  const shape = input.canvasDocument.objects[shapeId]
+  if (!shape || !isHtmlFrame(shape)) return null
+  const artifact = input.artifacts.find((item) => item.id === shape.htmlArtifactId)
+  if (artifact?.kind !== 'html') return null
+  const chip = {
+    id: `html-screen-frame:${shape.id}:${artifact.id}`,
+    kind: 'html-screen-frame' as const,
+    label: artifact.title || shape.name,
+    detail: `${Math.round(shape.width)} x ${Math.round(shape.height)} - ${artifact.relativePath}`,
+    removable: true
+  }
+  return input.suppressedIds?.has(chip.id)
+    ? null
+    : { kind: 'html-screen-frame', chip, artifact, shape }
 }
 
 export function designHtmlElementContextTarget(input: {

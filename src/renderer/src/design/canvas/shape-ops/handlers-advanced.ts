@@ -6,7 +6,7 @@ import { centerRectInViewport, layoutRectsInViewport, placeRectInViewportAvoidin
 import { collectiveBounds } from '../canvas-align'
 import { lintDesignSystem, setLastLintFindings } from '../design-lint'
 import { applyDesignSystemTemplateOp, type DesignSystemTemplateOp } from '../design-system-template'
-import { getScreenArtifactFactory, setScreenBrief } from '../screen-artifact-bridge'
+import { getScreenArtifactFactory, getScreenCreationFactory, setScreenBrief } from '../screen-artifact-bridge'
 import { useDesignSystemStore } from '../design-system-store'
 import type { ExecuteOpsOptions, OpError, ShapeOp } from './schema'
 import {
@@ -33,9 +33,10 @@ export function executeAdvancedShapeOp(
   const store = useCanvasShapeStore.getState()
   switch (op.op) {
     case 'add-screens': {
+      const creationFactory = getScreenCreationFactory()
       const factory = getScreenArtifactFactory()
       const allowPlainFrame = options.screenFallback === 'plain-frame'
-      if (!factory && !allowPlainFrame) {
+      if (!creationFactory && !factory && !allowPlainFrame) {
         errors.push({ code: 'INVALID_OP', message: 'Cannot create screen artifacts — no handler registered' })
         return true
       }
@@ -59,11 +60,6 @@ export function executeAdvancedShapeOp(
       const placedRects: Rect[] = []
       for (let i = 0; i < specs.length; i += 1) {
         const { spec, preset, width, height } = specs[i]
-        const artifactId = factory?.(spec.name) ?? null
-        if (!artifactId && !allowPlainFrame) {
-          errors.push({ code: 'INVALID_OP', message: `Cannot create screen artifact for "${spec.name}"` })
-          continue
-        }
         const batchRect = batchRects[i] ?? centerRectInViewport(width, height, vbox)
         const autoRect =
           occupiedRects.length === 0 && !hasExplicitPlacements
@@ -71,6 +67,31 @@ export function executeAdvancedShapeOp(
             : placeRectInViewportAvoiding({ width, height }, vbox, [...occupiedRects, ...placedRects])
         const x = spec.x ?? autoRect.x
         const y = spec.y ?? autoRect.y
+        if (creationFactory && !allowPlainFrame) {
+          const created = creationFactory({
+            name: spec.name,
+            ...(spec.brief ? { brief: spec.brief } : {}),
+            x,
+            y,
+            width,
+            height,
+            devicePreset: preset,
+            preparePreview: false
+          })
+          if (!created) {
+            errors.push({ code: 'INVALID_OP', message: `Cannot create screen artifact for "${spec.name}"` })
+            continue
+          }
+          placedRects.push({ x, y, width, height })
+          if (spec.brief) setScreenBrief(created.shapeId, spec.brief)
+          affectedIds.add(created.shapeId)
+          continue
+        }
+        const artifactId = factory?.(spec.name) ?? null
+        if (!artifactId && !allowPlainFrame) {
+          errors.push({ code: 'INVALID_OP', message: `Cannot create screen artifact for "${spec.name}"` })
+          continue
+        }
         const shape = createScreenLikeShape(spec.name, x, y, preset, artifactId)
         shape.width = width
         shape.height = height

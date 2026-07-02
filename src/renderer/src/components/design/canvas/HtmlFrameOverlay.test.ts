@@ -5,17 +5,26 @@ import {
   executeHtmlFrameWebviewScript,
   htmlFrameAllowsWidthAutoGrow,
   htmlFrameDrawingActive,
+  htmlFrameOverlayCanMountAtZoom,
   htmlFrameOverlayPointerEvents,
+  htmlFramePreviewAsyncEpochMatches,
+  htmlFrameShouldClearElementContextOnEditingChange,
   htmlFrameShouldApplyScrollbarSuppression,
+  htmlFrameShouldCropVisualHeight,
+  htmlFrameShouldPromotePreviewToReady,
   htmlFrameWebviewPartition,
   htmlFrameShouldSuppressDocumentScrollbars,
   htmlFrameVisualCanvasHeight,
+  htmlFramesInCanvasPaintOrder,
+  htmlFrameIntersectsViewport,
   resolveHtmlFrameMeasurementDecision,
+  selectHtmlFramesForOverlay,
   shouldAutoResizeHtmlFrame,
   shouldRenderHtmlFrameWebview
 } from './HtmlFrameOverlay'
 import { designHtmlPreviewWebviewZoomFactor as htmlFrameWebviewZoomFactor } from '../DesignHtmlPreviewHost'
 import { inferDesignArtifactFoundationRole } from '../../../design/design-types'
+import { createEmptyDocument, createHtmlFrameShape, type CanvasDocument, type CanvasShape } from '../../../design/canvas/canvas-types'
 
 class FakeHTMLElement {
   tagName: string
@@ -122,6 +131,19 @@ function runContentSizeQuery(
   }
 }
 
+function appendHtmlFrame(
+  document: CanvasDocument,
+  id: string,
+  x = 0,
+  y = 0
+): CanvasShape {
+  const frame = createHtmlFrameShape(id, x, y, `artifact-${id}`, 'desktop')
+  frame.id = id
+  document.objects[id] = { ...frame, parentId: document.rootId }
+  document.objects[document.rootId].children.push(id)
+  return document.objects[id]
+}
+
 describe('HtmlFrameOverlay preview gating', () => {
   it('mounts the webview for skeleton placeholders before the first stable HTML lands', () => {
     expect(shouldRenderHtmlFrameWebview({
@@ -171,6 +193,102 @@ describe('HtmlFrameOverlay pointer event policy', () => {
   })
 })
 
+describe('HtmlFrameOverlay zoom mount policy', () => {
+  it('mounts webview overlays only once the canvas zoom is usable', () => {
+    expect(htmlFrameOverlayCanMountAtZoom(0.04)).toBe(true)
+    expect(htmlFrameOverlayCanMountAtZoom(0.039)).toBe(false)
+    expect(htmlFrameOverlayCanMountAtZoom(Number.NaN)).toBe(false)
+  })
+})
+
+describe('HtmlFrameOverlay element context clear policy', () => {
+  it('clears picked element context only when leaving edit mode', () => {
+    expect(htmlFrameShouldClearElementContextOnEditingChange({ wasEditing: false, editing: false })).toBe(false)
+    expect(htmlFrameShouldClearElementContextOnEditingChange({ wasEditing: false, editing: true })).toBe(false)
+    expect(htmlFrameShouldClearElementContextOnEditingChange({ wasEditing: true, editing: true })).toBe(false)
+    expect(htmlFrameShouldClearElementContextOnEditingChange({ wasEditing: true, editing: false })).toBe(true)
+  })
+})
+
+describe('HtmlFrameOverlay async preview epoch policy', () => {
+  it('rejects stale async webview results after file, revision, or mount changes', () => {
+    const epoch = {
+      shapeId: 'shape-1',
+      artifactId: 'screen',
+      artifactRelativePath: '.kun-design/doc/screen/v1.html',
+      previewWebviewUrl: 'file:///workspace/.kun-design/doc/screen/v1.html?rev=3',
+      previewRevision: 3,
+      webviewMountNonce: 8
+    }
+
+    expect(htmlFramePreviewAsyncEpochMatches(epoch, { ...epoch })).toBe(true)
+    expect(htmlFramePreviewAsyncEpochMatches(epoch, {
+      ...epoch,
+      artifactRelativePath: '.kun-design/doc/screen/v2.html',
+      previewWebviewUrl: 'file:///workspace/.kun-design/doc/screen/v2.html?rev=1',
+      previewRevision: 1
+    })).toBe(false)
+    expect(htmlFramePreviewAsyncEpochMatches(epoch, {
+      ...epoch,
+      previewWebviewUrl: 'file:///workspace/.kun-design/doc/screen/v1.html?rev=4',
+      previewRevision: 4
+    })).toBe(false)
+    expect(htmlFramePreviewAsyncEpochMatches(epoch, { ...epoch, webviewMountNonce: 9 })).toBe(false)
+    expect(htmlFramePreviewAsyncEpochMatches(epoch, null)).toBe(false)
+  })
+})
+
+describe('HtmlFrameOverlay frame ordering', () => {
+  it('collects html frames in canvas paint order and skips hidden frames', () => {
+    const document = createEmptyDocument()
+    appendHtmlFrame(document, 'bottom')
+    const hidden = appendHtmlFrame(document, 'hidden')
+    appendHtmlFrame(document, 'top')
+    document.objects.hidden = { ...hidden, visible: false }
+
+    expect(htmlFramesInCanvasPaintOrder(document).map((shape) => shape.id)).toEqual(['bottom', 'top'])
+  })
+
+  it('keeps topmost and selected frames mounted under the active webview cap', () => {
+    const frames = Array.from({ length: 12 }, (_, index) => {
+      const frame = createHtmlFrameShape(`Frame ${index + 1}`, 0, 0, `artifact-${index + 1}`, 'desktop')
+      frame.id = `f${index + 1}`
+      return frame
+    })
+
+    expect(selectHtmlFramesForOverlay(frames, new Set(['f2']), 10).map((shape) => shape.id)).toEqual([
+      'f2',
+      'f4',
+      'f5',
+      'f6',
+      'f7',
+      'f8',
+      'f9',
+      'f10',
+      'f11',
+      'f12'
+    ])
+  })
+
+  it('renders the selected subset in paint order so top frames still paint last', () => {
+    const bottom = createHtmlFrameShape('Bottom', 0, 0, 'bottom', 'desktop')
+    bottom.id = 'bottom'
+    const top = createHtmlFrameShape('Top', 0, 0, 'top', 'desktop')
+    top.id = 'top'
+
+    expect(selectHtmlFramesForOverlay([bottom, top], new Set(['bottom']), 2).map((shape) => shape.id)).toEqual([
+      'bottom',
+      'top'
+    ])
+  })
+
+  it('filters frames outside the current viewport', () => {
+    const frame = createHtmlFrameShape('Visible', 10, 10, 'visible', 'desktop')
+    expect(htmlFrameIntersectsViewport(frame, { x: 0, y: 0, width: 500, height: 500 })).toBe(true)
+    expect(htmlFrameIntersectsViewport(frame, { x: 2000, y: 0, width: 500, height: 500 })).toBe(false)
+  })
+})
+
 describe('HtmlFrameOverlay native webview scaling', () => {
   it('passes normal zoom levels through unchanged', () => {
     expect(htmlFrameWebviewZoomFactor(1)).toBe(1)
@@ -215,6 +333,27 @@ describe('HtmlFrameOverlay visual crop policy', () => {
     // whatever was last measured).
     expect(htmlFrameVisualCanvasHeight(844, 260, false)).toBe(844)
     expect(htmlFrameVisualCanvasHeight(3200, 800, false)).toBe(3200)
+  })
+
+  it('does not crop manual frames while a stale generating measurement exists', () => {
+    const cropToMeasured = htmlFrameShouldCropVisualHeight({
+      transparentGeneratingSurface: true,
+      autoResizeEnabled: false
+    })
+
+    expect(cropToMeasured).toBe(false)
+    expect(htmlFrameVisualCanvasHeight(1200, 260, cropToMeasured)).toBe(1200)
+  })
+
+  it('only crops transparent generating surfaces for auto-sized frames', () => {
+    expect(htmlFrameShouldCropVisualHeight({
+      transparentGeneratingSurface: true,
+      autoResizeEnabled: true
+    })).toBe(true)
+    expect(htmlFrameShouldCropVisualHeight({
+      transparentGeneratingSurface: false,
+      autoResizeEnabled: true
+    })).toBe(false)
   })
 })
 
@@ -347,6 +486,20 @@ describe('HtmlFrameOverlay internal scrollbar suppression', () => {
     expect(buildHtmlFrameScrollbarSuppressionScript(true)).toContain('overflow: hidden')
     expect(buildHtmlFrameScrollbarSuppressionScript(false)).toContain('existing.remove()')
   })
+
+  it('keeps guest scrollbar injection failures inside the webview script', () => {
+    const execute = new Function(`return ${buildHtmlFrameScrollbarSuppressionScript(true)}`)
+    expect(() => execute()).not.toThrow()
+    expect(execute()).toBeUndefined()
+  })
+})
+
+describe('HtmlFrameOverlay guest script safety', () => {
+  it('returns null instead of throwing when measurement runs before a DOM is available', () => {
+    const execute = new Function(`return ${HTML_FRAME_CONTENT_SIZE_QUERY}`)
+    expect(() => execute()).not.toThrow()
+    expect(execute()).toBeNull()
+  })
 })
 
 describe('HtmlFrameOverlay webview script execution', () => {
@@ -392,6 +545,19 @@ describe('HtmlFrameOverlay measurement decision', () => {
       nextWidth: 420,
       nextHeight: 844,
       documentHeight: 850,
+      suppressScrollbars: false
+    })
+  })
+
+  it('keeps document scrollbars for legitimate content beyond the frame height cap', () => {
+    expect(resolveHtmlFrameMeasurementDecision({
+      width: 1280,
+      height: 20000,
+      documentHeight: 20000
+    })).toEqual({
+      nextWidth: 1280,
+      nextHeight: 12000,
+      documentHeight: 20000,
       suppressScrollbars: false
     })
   })
@@ -447,9 +613,47 @@ describe('HtmlFrameOverlay auto resize policy', () => {
     })).toBe(true)
   })
 
-  it('keeps pending and running frames auto-sized while generation is active', () => {
-    expect(shouldAutoResizeHtmlFrame({ sizeMode: 'manual', previewStatus: 'pending' })).toBe(true)
-    expect(shouldAutoResizeHtmlFrame({ sizeMode: 'manual', parallelStatus: 'running' })).toBe(true)
+  it('keeps pending and running frames auto-sized unless the user manually locked them', () => {
+    expect(shouldAutoResizeHtmlFrame({ sizeMode: 'auto', previewStatus: 'pending' })).toBe(true)
+    expect(shouldAutoResizeHtmlFrame({ parallelStatus: 'running' })).toBe(true)
+    expect(shouldAutoResizeHtmlFrame({ sizeMode: 'manual', previewStatus: 'pending' })).toBe(false)
+    expect(shouldAutoResizeHtmlFrame({ sizeMode: 'manual', parallelStatus: 'running' })).toBe(false)
+  })
+})
+
+describe('HtmlFrameOverlay preview ready promotion policy', () => {
+  it('promotes only the current renderable preview source to ready', () => {
+    expect(htmlFrameShouldPromotePreviewToReady({
+      previewStatus: 'pending',
+      previewRenderState: 'renderable',
+      drawingActive: false,
+      artifactRelativePath: '.kun-design/doc/screen/v2.html',
+      previewRelativePath: '.kun-design/doc/screen/v2.html'
+    })).toBe(true)
+  })
+
+  it('does not promote stale renderable previews from a previous artifact path', () => {
+    expect(htmlFrameShouldPromotePreviewToReady({
+      previewStatus: 'pending',
+      previewRenderState: 'renderable',
+      drawingActive: false,
+      artifactRelativePath: '.kun-design/doc/screen/v2.html',
+      previewRelativePath: '.kun-design/doc/screen/v1.html'
+    })).toBe(false)
+    expect(htmlFrameShouldPromotePreviewToReady({
+      previewStatus: 'pending',
+      previewRenderState: 'transient',
+      drawingActive: false,
+      artifactRelativePath: '.kun-design/doc/screen/v2.html',
+      previewRelativePath: '.kun-design/doc/screen/v2.html'
+    })).toBe(false)
+    expect(htmlFrameShouldPromotePreviewToReady({
+      previewStatus: 'pending',
+      previewRenderState: 'renderable',
+      drawingActive: true,
+      artifactRelativePath: '.kun-design/doc/screen/v2.html',
+      previewRelativePath: '.kun-design/doc/screen/v2.html'
+    })).toBe(false)
   })
 })
 

@@ -2,10 +2,11 @@ import { useEffect, useMemo, type ReactElement } from 'react'
 import { useCanvasShapeStore } from '../../../design/canvas/canvas-shape-store'
 import { useCanvasViewportStore } from '../../../design/canvas/canvas-viewport-store'
 import { useCanvasSelectionStore } from '../../../design/canvas/canvas-selection-store'
-import { isHtmlFrame, type CanvasShape } from '../../../design/canvas/canvas-types'
+import { isHtmlFrame, type CanvasDocument, type CanvasShape, type Rect } from '../../../design/canvas/canvas-types'
 import type { DesignHtmlElementContext } from '../../../design/design-composer-context'
 import type { DesignRuntimeQualityPayload } from '../../../design/design-html-quality'
 import { ScreenOverlay } from './html-frame/HtmlFrameScreenOverlay'
+import { htmlFrameOverlayCanMountAtZoom } from './html-frame/html-frame-helpers'
 
 export {
   HTML_FRAME_CONTENT_SIZE_QUERY,
@@ -13,8 +14,13 @@ export {
   executeHtmlFrameWebviewScript,
   htmlFrameAllowsWidthAutoGrow,
   htmlFrameDrawingActive,
+  htmlFrameOverlayCanMountAtZoom,
   htmlFrameOverlayPointerEvents,
+  htmlFramePreviewAsyncEpochMatches,
+  htmlFrameShouldClearElementContextOnEditingChange,
   htmlFrameShouldApplyScrollbarSuppression,
+  htmlFrameShouldCropVisualHeight,
+  htmlFrameShouldPromotePreviewToReady,
   htmlFrameShouldSuppressDocumentScrollbars,
   htmlFrameVisualCanvasHeight,
   htmlFrameWebviewPartition,
@@ -25,7 +31,46 @@ export {
 export type { HtmlFrameMeasurementDecision } from './html-frame/html-frame-helpers'
 
 const MAX_ACTIVE_WEBVIEWS = 10
-const MIN_ZOOM_FOR_WEBVIEW = 0.04
+
+export function htmlFramesInCanvasPaintOrder(document: CanvasDocument): CanvasShape[] {
+  const frames: CanvasShape[] = []
+  const visit = (id: string): void => {
+    const shape = document.objects[id]
+    if (!shape || !shape.visible) return
+    if (id !== document.rootId && isHtmlFrame(shape)) {
+      frames.push(shape)
+      return
+    }
+    for (const childId of shape.children) visit(childId)
+  }
+  for (const childId of document.objects[document.rootId]?.children ?? []) visit(childId)
+  return frames
+}
+
+export function htmlFrameIntersectsViewport(shape: CanvasShape, vbox: Rect): boolean {
+  const right = shape.x + shape.width
+  const bottom = shape.y + shape.height
+  const vRight = vbox.x + vbox.width
+  const vBottom = vbox.y + vbox.height
+  return right > vbox.x && shape.x < vRight && bottom > vbox.y && shape.y < vBottom
+}
+
+export function selectHtmlFramesForOverlay(
+  framesInPaintOrder: CanvasShape[],
+  selectedIds: ReadonlySet<string>,
+  maxActive: number = MAX_ACTIVE_WEBVIEWS
+): CanvasShape[] {
+  const priority = framesInPaintOrder
+    .map((shape, index) => ({
+      shape,
+      index,
+      selected: selectedIds.has(shape.id) ? 1 : 0
+    }))
+    .sort((a, b) => b.selected - a.selected || b.index - a.index)
+    .slice(0, Math.max(0, maxActive))
+  const mountedIds = new Set(priority.map((item) => item.shape.id))
+  return framesInPaintOrder.filter((shape) => mountedIds.has(shape.id))
+}
 
 type Props = {
   workspaceRoot: string
@@ -48,7 +93,8 @@ export function HtmlFrameOverlay({
   onRuntimeQualityFindings,
   onRequestQualityRepair
 }: Props): ReactElement {
-  const objects = useCanvasShapeStore((s) => s.document.objects)
+  const document = useCanvasShapeStore((s) => s.document)
+  const objects = document.objects
   const vbox = useCanvasViewportStore((s) => s.vbox)
   const containerWidth = useCanvasViewportStore((s) => s.containerWidth)
   const containerHeight = useCanvasViewportStore((s) => s.containerHeight)
@@ -59,31 +105,16 @@ export function HtmlFrameOverlay({
   const panning = activeTool === 'hand'
 
   const htmlFrames = useMemo(() => {
-    const frames: CanvasShape[] = []
-    for (const id of Object.keys(objects)) {
-      const shape = objects[id]
-      if (shape && isHtmlFrame(shape) && shape.visible) {
-        frames.push(shape)
-      }
-    }
-    return frames
-  }, [objects])
+    return htmlFramesInCanvasPaintOrder(document)
+  }, [document])
 
-  // Visibility + priority: viewport-visible frames first, selected frames get priority
+  // Mount priority favors selected/topmost frames, then we render in paint order
+  // so the DOM overlay matches the SVG canvas stacking order.
   const visibleFrames = useMemo(() => {
-    return htmlFrames
-      .filter((shape) => {
-        const right = shape.x + shape.width
-        const bottom = shape.y + shape.height
-        const vRight = vbox.x + vbox.width
-        const vBottom = vbox.y + vbox.height
-        return right > vbox.x && shape.x < vRight && bottom > vbox.y && shape.y < vBottom
-      })
-      .sort((a, b) => {
-        const aSelected = selectedIds.has(a.id) ? 1 : 0
-        const bSelected = selectedIds.has(b.id) ? 1 : 0
-        return bSelected - aSelected
-      })
+    return selectHtmlFramesForOverlay(
+      htmlFrames.filter((shape) => htmlFrameIntersectsViewport(shape, vbox)),
+      selectedIds
+    )
   }, [htmlFrames, vbox, selectedIds])
 
   const selectedIdsKey = useMemo(() => [...selectedIds].sort().join(','), [selectedIds])
@@ -92,11 +123,11 @@ export function HtmlFrameOverlay({
     onUseElementAsContext?.(null)
   }, [onUseElementAsContext, selectedIdsKey])
 
-  if (htmlFrames.length === 0 || zoom < MIN_ZOOM_FOR_WEBVIEW) return <></>
+  if (htmlFrames.length === 0 || !htmlFrameOverlayCanMountAtZoom(zoom)) return <></>
 
   return (
     <div className="pointer-events-none absolute inset-0 overflow-hidden">
-      {visibleFrames.slice(0, MAX_ACTIVE_WEBVIEWS).map((shape) => {
+      {visibleFrames.map((shape) => {
         const screenX = ((shape.x - vbox.x) / vbox.width) * containerWidth
         const screenY = ((shape.y - vbox.y) / vbox.height) * containerHeight
         const screenWidth = (shape.width / vbox.width) * containerWidth

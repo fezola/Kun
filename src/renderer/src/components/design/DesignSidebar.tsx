@@ -22,7 +22,7 @@ import type { SettingsRouteSection } from '../../store/chat-store'
 import { WorkspaceModeTabs } from '../chat/WorkspaceModeTabs'
 import { useDesignWorkspaceStore } from '../../design/design-workspace-store'
 import type { DesignArtifact, DesignDocument } from '../../design/design-types'
-import { groupDesignArtifacts } from '../../design/design-artifact-actions'
+import { collectAgentDrawingArtifactIds, groupDesignArtifacts } from '../../design/design-artifact-actions'
 import { findDesignBoardArtifact } from '../../design/design-board'
 import { useCanvasShapeStore } from '../../design/canvas/canvas-shape-store'
 import { useCanvasSelectionStore } from '../../design/canvas/canvas-selection-store'
@@ -113,13 +113,8 @@ export function DesignSidebar({
     return null
   }, [canvasObjects, selectedIds])
   const agentDrawingArtifactIds = useMemo(() => {
-    const ids = new Set<string>()
-    for (const direction of [...grouped.directions, ...grouped.archivedDirections]) {
-      for (const artifact of direction.artifacts) ids.add(artifact.id)
-    }
-    for (const id of screenLinkedIds) ids.add(id)
-    return ids
-  }, [grouped.archivedDirections, grouped.directions, screenLinkedIds])
+    return collectAgentDrawingArtifactIds(artifacts, grouped, screenLinkedIds)
+  }, [artifacts, grouped, screenLinkedIds])
   const agentDrawingArtifacts = useMemo(
     () => artifacts.filter((artifact) => artifact.kind === 'html' && agentDrawingArtifactIds.has(artifact.id)),
     [agentDrawingArtifactIds, artifacts]
@@ -194,6 +189,9 @@ export function DesignSidebar({
     }
 
     useCanvasSelectionStore.getState().clearSelection()
+    if (boardArtifact && artifact.kind === 'html' && artifact.node?.boardHidden) {
+      useDesignWorkspaceStore.getState().updateArtifactNode(artifact.id, { boardHidden: false })
+    }
     if (artifact.node) {
       viewportStore.zoomToFit(
         {

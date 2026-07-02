@@ -11,6 +11,7 @@ export function buildPrototypeNavigationCaptureScript(links: readonly PrototypeP
   const targetTitles = links.map((link) => link.targetTitle).filter((title) => title.trim())
   return `
 (() => {
+  try {
   const key = '__kunPrototypeNavCaptureInstalled';
   const titleKey = '__kunPrototypeNavCaptureTitles';
   const hrefs = ${JSON.stringify(hrefs)};
@@ -287,6 +288,9 @@ export function buildPrototypeNavigationCaptureScript(links: readonly PrototypeP
     }, true);
   }
   return true;
+  } catch {
+    return false;
+  }
 })()
 `
 }

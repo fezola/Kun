@@ -201,6 +201,7 @@ describe("runtime design quality findings", () => {
       expect(script).toContain('runtime-generic-image-alt')
       expect(script).toContain('runtime-broken-images')
       expect(script).toContain('generating design preview')
+      expect(new Function(`return ${script}`)()).toEqual([])
     })
     it('summarizes runtime findings for the canvas quality badge', () => {
       expect(summarizeDesignHtmlQualityStatus([], false)).toMatchObject({

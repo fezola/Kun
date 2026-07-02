@@ -16,6 +16,7 @@ import { useDesignSystemStore } from '../../../design/canvas/design-system-store
 import { createEmptyDesignSystem } from '../../../design/canvas/design-system-types'
 import {
   buildHtmlArtifactSyncKey,
+  removedLinkedHtmlArtifactIds,
   syncHtmlArtifactsToBoardDocument,
   syncHtmlFrameNodesToArtifacts
 } from '../../../design/design-board'
@@ -40,10 +41,15 @@ import { CanvasToolbar } from './CanvasToolbar'
 import { CanvasZoomBar } from './CanvasZoomBar'
 import { CanvasMinimap } from './CanvasMinimap'
 import { SelectionOverlay } from './SelectionOverlay'
-import { PrototypeFlowOverlay } from './PrototypeFlowOverlay'
 import { PrototypePlayerOverlay } from './PrototypePlayerOverlay'
 import { AlignmentToolbar } from './AlignmentToolbar'
-import { HtmlFrameOverlay } from './HtmlFrameOverlay'
+import {
+  HtmlFrameOverlay,
+  htmlFrameIntersectsViewport,
+  htmlFramesInCanvasPaintOrder,
+  selectHtmlFramesForOverlay
+} from './HtmlFrameOverlay'
+import { htmlFrameOverlayCanMountAtZoom } from './html-frame/html-frame-helpers'
 import { SidebarTitlebarToggleButton } from '../../sidebar/SidebarPrimitives'
 import {
   boundsForShapeIds,
@@ -57,7 +63,10 @@ import {
   shouldSyncCanvasHtmlFrames,
   shouldToggleHtmlFrameInteractiveOnDoubleClick,
   writeStoredCanvasViewport,
-  resolveCanvasDesignSystemBaseDir
+  resolveCanvasDesignSystemBaseDir,
+  resolveCanvasSelectionAfterDocumentSync,
+  resolveHtmlFrameOverlayInteractionState,
+  shouldResetCanvasTransientInteractionAfterDocumentSync
 } from './canvas-viewport/helpers'
 
 export {
@@ -67,7 +76,10 @@ export {
   shouldRenderCanvasMinimap,
   shouldRenderDesignArtifactOverlays,
   shouldSyncCanvasHtmlFrames,
-  shouldToggleHtmlFrameInteractiveOnDoubleClick
+  shouldToggleHtmlFrameInteractiveOnDoubleClick,
+  resolveCanvasSelectionAfterDocumentSync,
+  resolveHtmlFrameOverlayInteractionState,
+  shouldResetCanvasTransientInteractionAfterDocumentSync
 } from './canvas-viewport/helpers'
 
 type Props = {
@@ -131,6 +143,13 @@ export function CanvasViewport({
   const [prototypePlayerOpen, setPrototypePlayerOpen] = useState(false)
   const [interactiveHtmlFrameId, setInteractiveHtmlFrameId] = useState<string | null>(null)
   const [editingHtmlFrameId, setEditingHtmlFrameId] = useState<string | null>(null)
+  const zoom = containerWidth / vbox.width
+  const htmlFrameOverlayMountableIds = useMemo(() => {
+    if (!htmlFrameOverlayCanMountAtZoom(zoom)) return new Set<string>()
+    const frames = htmlFramesInCanvasPaintOrder(document)
+      .filter((shape) => htmlFrameIntersectsViewport(shape, vbox))
+    return new Set(selectHtmlFramesForOverlay(frames, selectedIds).map((shape) => shape.id))
+  }, [document, selectedIds, vbox, zoom])
 
   const requestCanvasCritique = useCallback((promptSeed: string): void => {
     onUseElementAsContext?.(null, promptSeed)
@@ -150,19 +169,33 @@ export function CanvasViewport({
   }, [])
 
   useEffect(() => {
-    if (interactiveHtmlFrameId && !selectedIds.has(interactiveHtmlFrameId)) {
-      setInteractiveHtmlFrameId(null)
+    const next = resolveHtmlFrameOverlayInteractionState(document, selectedIds, {
+      interactiveId: interactiveHtmlFrameId,
+      editingId: editingHtmlFrameId,
+      overlayAvailable: htmlFrameOverlayCanMountAtZoom(zoom),
+      mountableFrameIds: htmlFrameOverlayMountableIds
+    })
+    if (next.interactiveId !== interactiveHtmlFrameId) {
+      setInteractiveHtmlFrameId(next.interactiveId)
     }
-    if (editingHtmlFrameId && !selectedIds.has(editingHtmlFrameId)) {
-      setEditingHtmlFrameId(null)
+    if (next.editingId !== editingHtmlFrameId) {
+      setEditingHtmlFrameId(next.editingId)
+      if (!next.editingId) onUseElementAsContext?.(null)
     }
-  }, [editingHtmlFrameId, interactiveHtmlFrameId, selectedIds])
+  }, [
+    document,
+    editingHtmlFrameId,
+    htmlFrameOverlayMountableIds,
+    interactiveHtmlFrameId,
+    onUseElementAsContext,
+    selectedIds,
+    zoom
+  ])
 
   const designArtifactOverlaysEnabled = shouldRenderDesignArtifactOverlays(surface)
   const minimapEnabled = shouldRenderCanvasMinimap(surface)
   const htmlFrameSyncEnabled = shouldSyncCanvasHtmlFrames(surface, syncHtmlScreens)
   const resolvedDesignSystemBaseDir = resolveCanvasDesignSystemBaseDir(baseDir, designSystemBaseDir)
-  const zoom = containerWidth / vbox.width
   const uiScale = useCanvasUiScale()
   const tool = useMemo(() => createCanvasTool(activeTool, surface), [activeTool, surface])
   const middlePanTool = useMemo(() => createHandTool(), [])
@@ -224,19 +257,11 @@ export function CanvasViewport({
     let nodeSyncDoc: CanvasDocument | null = null
     setDocLoaded(false)
 
-    const focusBoundsAtActualSize = (bounds: Rect | null): void => {
+    const focusBoundsToFit = (bounds: Rect | null): void => {
       if (!bounds) return
       viewFrame = requestAnimationFrame(() => {
         if (!cancelled) {
-          const store = useCanvasViewportStore.getState()
-          const width = Math.max(1, store.containerWidth)
-          const height = Math.max(1, store.containerHeight)
-          store.setVbox({
-            x: bounds.x + bounds.width / 2 - width / 2,
-            y: bounds.y + bounds.height / 2 - height / 2,
-            width,
-            height
-          })
+          useCanvasViewportStore.getState().zoomToFit(bounds, 72, { maxZoom: 1, minZoom: 0.04 })
         }
       })
     }
@@ -270,7 +295,7 @@ export function CanvasViewport({
         )
         doc = synced.document
         addedFrameIds = synced.addedFrameIds
-        if (synced.addedFrameIds.length > 0 || synced.updatedFrameIds.length > 0) {
+        if (synced.addedFrameIds.length > 0 || synced.updatedFrameIds.length > 0 || synced.removedFrameIds.length > 0) {
           persistCanvasDocument(workspaceRoot, artifactId, doc, baseDir)
         }
       }
@@ -279,9 +304,9 @@ export function CanvasViewport({
       if (storedView) {
         useCanvasViewportStore.getState().setVbox(storedView)
       } else if (addedFrameIds.length > 0) {
-        focusBoundsAtActualSize(boundsForShapeIds(doc, addedFrameIds))
+        focusBoundsToFit(boundsForShapeIds(doc, addedFrameIds))
       } else if (loaded) {
-        focusBoundsAtActualSize(getCanvasDocumentContentBounds(doc))
+        focusBoundsToFit(getCanvasDocumentContentBounds(doc))
       }
       setDocLoaded(true)
     })
@@ -298,7 +323,24 @@ export function CanvasViewport({
       if (cancelled) return
       if (state.document === prev.document) return
       persistCanvasDocument(workspaceRoot, artifactId, state.document, baseDir)
-      if (htmlFrameSyncEnabled) queueHtmlFrameNodeSync(state.document)
+      if (htmlFrameSyncEnabled) {
+        const removedArtifactIds = removedLinkedHtmlArtifactIds(prev.document, state.document)
+        if (removedArtifactIds.length > 0) {
+          const designStore = useDesignWorkspaceStore.getState()
+          const htmlArtifacts = new Map(
+            designStore.artifacts
+              .filter((item) => item.kind === 'html')
+              .map((item) => [item.id, item])
+          )
+          for (const removedArtifactId of removedArtifactIds) {
+            const artifact = htmlArtifacts.get(removedArtifactId)
+            if (artifact && artifact.node?.boardHidden !== true) {
+              designStore.updateArtifactNode(removedArtifactId, { boardHidden: true })
+            }
+          }
+        }
+        queueHtmlFrameNodeSync(state.document)
+      }
     })
 
     // 3b) Persist the design system when tokens/components change (debounced).
@@ -326,22 +368,34 @@ export function CanvasViewport({
     if (!docLoaded || !htmlFrameSyncEnabled || !artifactId || !workspaceRoot) return
     const current = useCanvasShapeStore.getState().document
     const synced = syncHtmlArtifactsToBoardDocument(current, useDesignWorkspaceStore.getState().artifacts)
-    if (synced.addedFrameIds.length === 0 && synced.updatedFrameIds.length === 0) return
+    if (
+      synced.addedFrameIds.length === 0 &&
+      synced.updatedFrameIds.length === 0 &&
+      synced.removedFrameIds.length === 0
+    ) return
     useCanvasShapeStore.getState().loadDocument(synced.document, documentKey)
+    if (synced.removedFrameIds.length > 0) {
+      const selection = useCanvasSelectionStore.getState()
+      if (shouldResetCanvasTransientInteractionAfterDocumentSync(synced.removedFrameIds)) {
+        selection.setMarquee(null)
+        selection.setSnapGuides([])
+      }
+      const nextSelection = resolveCanvasSelectionAfterDocumentSync(synced.document, selection)
+      if (nextSelection.selectedIds.length !== selection.selectedIds.size) {
+        selection.select(nextSelection.selectedIds)
+      }
+      const afterSelection = useCanvasSelectionStore.getState()
+      if (afterSelection.hoverTargetId !== nextSelection.hoverTargetId) {
+        afterSelection.setHoverTarget(nextSelection.hoverTargetId)
+      }
+      if (afterSelection.editingId !== nextSelection.editingId) {
+        afterSelection.setEditing(nextSelection.editingId)
+      }
+    }
     persistCanvasDocument(workspaceRoot, artifactId, synced.document, baseDir)
     if (synced.addedFrameIds.length > 0) {
       const bounds = boundsForShapeIds(synced.document, synced.addedFrameIds)
-      if (bounds) {
-        const store = useCanvasViewportStore.getState()
-        const width = Math.max(1, store.containerWidth)
-        const height = Math.max(1, store.containerHeight)
-        store.setVbox({
-          x: bounds.x + bounds.width / 2 - width / 2,
-          y: bounds.y + bounds.height / 2 - height / 2,
-          width,
-          height
-        })
-      }
+      if (bounds) useCanvasViewportStore.getState().zoomToFit(bounds, 72, { maxZoom: 1, minZoom: 0.04 })
     }
   }, [artifactId, baseDir, docLoaded, documentKey, htmlArtifactSyncKey, htmlFrameSyncEnabled, workspaceRoot])
 
@@ -634,21 +688,6 @@ export function CanvasViewport({
               onRuntimeQualityFindings={onRuntimeQualityFindings}
               onRequestQualityRepair={onRequestQualityRepair}
             />
-          ) : null}
-          {designArtifactOverlaysEnabled && docLoaded && root ? (
-            <svg
-              className="pointer-events-none absolute inset-0 z-10 h-full w-full"
-              viewBox={viewBoxStr}
-              xmlns="http://www.w3.org/2000/svg"
-              aria-hidden="true"
-              focusable="false"
-            >
-              <PrototypeFlowOverlay
-                artifacts={designArtifacts}
-                objects={document.objects}
-                zoom={zoom}
-              />
-            </svg>
           ) : null}
         </div>
         {designArtifactOverlaysEnabled ? (

@@ -59,6 +59,6 @@ export function resizeDesignArtifactNode(
     y,
     width,
     height,
-    sizeMode: north || south ? 'manual' : 'auto'
+    sizeMode: 'manual'
   }
 }

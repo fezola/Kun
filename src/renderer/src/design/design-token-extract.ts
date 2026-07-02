@@ -24,6 +24,7 @@ export type WebviewLike = {
  * `webview.executeJavaScript` in production.
  */
 export const TOKEN_EXTRACT_GUEST_SRC = `(() => {
+  try {
   const customPropNames = new Set();
   for (const sheet of Array.from(document.styleSheets)) {
     let rules;
@@ -94,6 +95,9 @@ export const TOKEN_EXTRACT_GUEST_SRC = `(() => {
     sampledColors: sampled.slice(0, 24),
     title: document.title || ''
   };
+  } catch {
+    return null;
+  }
 })()`
 
 type GuestColor = { name: string; value: string }

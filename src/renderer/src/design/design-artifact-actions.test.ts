@@ -4,6 +4,7 @@ import {
   buildDesignDirectionComparison,
   buildDesignDirectionScreenMatrix,
   canImplementDesignArtifact,
+  collectAgentDrawingArtifactIds,
   groupDesignArtifacts
 } from './design-artifact-actions'
 import { useDesignWorkspaceStore } from './design-workspace-store'
@@ -93,6 +94,23 @@ describe('design artifact actions', () => {
         }
       ]
     })
+  })
+
+  it('treats board-hidden HTML artifacts as agent drawings so they can be restored from the sidebar', () => {
+    const visibleLinked = artifact('visible-linked', 'html')
+    const hidden = artifact('hidden-screen', 'html', {
+      node: { x: 40, y: 60, width: 390, height: 844, sizeMode: 'auto', boardHidden: true }
+    })
+    const looseDraft = artifact('loose-draft', 'html')
+    const grouped = groupDesignArtifacts([visibleLinked, hidden, looseDraft], new Set(['visible-linked']))
+    const agentIds = collectAgentDrawingArtifactIds(
+      [visibleLinked, hidden, looseDraft],
+      grouped,
+      new Set(['visible-linked'])
+    )
+
+    expect([...agentIds].sort()).toEqual(['hidden-screen', 'visible-linked'])
+    expect(grouped.html.map((item) => item.id)).toEqual(['hidden-screen', 'loose-draft'])
   })
 
   it('builds direction comparison rows with shared and unique screens', () => {

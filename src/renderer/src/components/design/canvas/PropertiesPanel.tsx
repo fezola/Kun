@@ -90,6 +90,42 @@ export function nextInspectorOpenForSelection(
   return pinned
 }
 
+export function shouldPromoteHtmlFrameInspectorUpdateToManual(
+  surface: 'design' | 'code',
+  patch: Partial<CanvasShape>
+): boolean {
+  return surface === 'design' && !patch.devicePreset && (patch.width !== undefined || patch.height !== undefined)
+}
+
+export function commitInspectorUpdate(
+  surface: 'design' | 'code',
+  label: string,
+  ids: string[],
+  patch: Partial<CanvasShape>
+): void {
+  const beforeDoc = useCanvasShapeStore.getState().document
+  const editableIds = filterEditableShapeIds(beforeDoc, ids)
+  commitUpdate(label, ids, patch)
+  if (!shouldPromoteHtmlFrameInspectorUpdateToManual(surface, patch)) return
+
+  const doc = useCanvasShapeStore.getState().document
+  const designStore = useDesignWorkspaceStore.getState()
+  for (const id of editableIds) {
+    const shape = doc.objects[id]
+    if (!shape || !isHtmlFrame(shape) || !shape.htmlArtifactId) continue
+    designStore.updateArtifactNode(shape.htmlArtifactId, {
+      x: Math.round(shape.x),
+      y: Math.round(shape.y),
+      width: Math.round(shape.width),
+      height: Math.round(shape.height),
+      sizeMode: 'manual',
+      boardHidden: false,
+      viewMode:
+        designStore.artifacts.find((item) => item.id === shape.htmlArtifactId)?.node?.viewMode ?? 'preview'
+    })
+  }
+}
+
 function PropertiesPanelInner({ surface = 'design', onImplementDesign }: Props): ReactElement | null {
   const { t } = useTranslation('common')
   const selectedIds = useCanvasSelectionStore((s) => s.selectedIds)
@@ -130,8 +166,8 @@ function PropertiesPanelInner({ surface = 'design', onImplementDesign }: Props):
   }, [pinned, selectionKey])
 
   const updateAll = useCallback(
-    (label: string, patch: Partial<CanvasShape>) => commitUpdate(label, ids, patch),
-    [ids]
+    (label: string, patch: Partial<CanvasShape>) => commitInspectorUpdate(surface, label, ids, patch),
+    [ids, surface]
   )
   const alignSelection = useCallback(
     (axis: AlignAxis) => {

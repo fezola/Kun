@@ -15,13 +15,14 @@ import { useCanvasShapeStore } from './canvas-shape-store'
 import { useCanvasUndoStore } from './canvas-undo-store'
 import { useCanvasSelectionStore } from './canvas-selection-store'
 import { createEmptyDocument } from './canvas-types'
-import { setScreenArtifactFactory, takeScreenBrief } from './screen-artifact-bridge'
+import { setScreenArtifactFactory, setScreenCreationFactory, takeScreenBrief } from './screen-artifact-bridge'
 
 beforeEach(() => {
   useCanvasShapeStore.getState().loadDocument(createEmptyDocument())
   useCanvasUndoStore.getState().clear()
   useCanvasSelectionStore.getState().clearSelection()
   setScreenArtifactFactory(() => null)
+  setScreenCreationFactory(null)
   takeLastCanvasOpErrors() // clear any cross-test leakage
 })
 

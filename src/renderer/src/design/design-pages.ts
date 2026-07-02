@@ -7,7 +7,7 @@ import {
   type DesignContext
 } from './design-context'
 import { buildPrototypeHref, type ScreenManifestEntry } from './design-turn-prompt'
-import type { DesignArtifact, DesignPrototypeLink } from './design-types'
+import { currentDesignArtifactVersion, type DesignArtifact, type DesignPrototypeLink } from './design-types'
 
 /** A planned page in a multi-page (Stitch-style) generation run. */
 export type DesignPagePlanEntry = {
@@ -161,7 +161,7 @@ export function buildHtmlSiblingManifest(
   const siblings: ScreenManifestEntry[] = []
   for (const artifact of artifacts) {
     if (artifact.kind !== 'html' || artifact.id === excludeId) continue
-    const summary = artifact.versions[0]?.summary?.trim()
+    const summary = currentDesignArtifactVersion(artifact)?.summary?.trim()
     siblings.push({
       name: artifact.title,
       htmlPath: artifact.relativePath,

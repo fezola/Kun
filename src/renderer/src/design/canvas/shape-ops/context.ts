@@ -269,6 +269,7 @@ export function materializeComponentInstance(
       componentVersion: isRoot ? comp.version : undefined,
       overrides: isRoot ? overrides : undefined
     }
+    delete clone.htmlArtifactId
     applyOverridesToClone(clone, node.name, comp.slots, overrides)
     store.addShape(clone, targetParent)
     for (const childId of node.children) {
@@ -327,6 +328,7 @@ export function cloneLiveSubtree(rootId: string, dx: number, dy: number, parentI
       parentId: null,
       frameId: null
     }
+    delete clone.htmlArtifactId
     store.addShape(clone, targetParent)
     for (const childId of node.children) {
       const child = objects[childId]
@@ -418,4 +420,3 @@ export function responsiveReflowFrame(
   if (frame.layout) reflowFrame(frameId, affectedIds)
   affectedIds.add(frameId)
 }
-

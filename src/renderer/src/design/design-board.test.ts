@@ -3,12 +3,13 @@ import {
   buildHtmlArtifactSyncKey,
   createScreenFrameArtifact,
   findDesignBoardArtifact,
+  removedLinkedHtmlArtifactIds,
   syncHtmlArtifactsToBoardDocument,
   syncHtmlFrameNodesToArtifacts
 } from './design-board'
 import { useCanvasSelectionStore } from './canvas/canvas-selection-store'
 import { useCanvasShapeStore } from './canvas/canvas-shape-store'
-import { createEmptyDocument, createHtmlFrameShape, isHtmlFrame } from './canvas/canvas-types'
+import { createDefaultShape, createEmptyDocument, createHtmlFrameShape, isHtmlFrame } from './canvas/canvas-types'
 import { useCanvasUndoStore } from './canvas/canvas-undo-store'
 import { useCanvasViewportStore } from './canvas/canvas-viewport-store'
 import { defaultPreviewNodeSizeForDesignTarget } from './design-context'
@@ -113,6 +114,14 @@ describe('design board helpers', () => {
     expect(buildHtmlArtifactSyncKey([autoPreview], 'web')).not.toBe(buildHtmlArtifactSyncKey([autoCode], 'web'))
   })
 
+  it('includes board hidden state in the HTML screen sync key', () => {
+    const node = { x: 40, y: 60, width: 1280, height: 800, sizeMode: 'auto' as const }
+    const visible = artifact('screen', 'html', { node })
+    const hidden = artifact('screen', 'html', { node: { ...node, boardHidden: true } })
+
+    expect(buildHtmlArtifactSyncKey([visible], 'web')).not.toBe(buildHtmlArtifactSyncKey([hidden], 'web'))
+  })
+
   it('syncs unmounted HTML artifacts into screen frames only once', () => {
     const screen = artifact('screen', 'html', {
       title: 'Login',
@@ -138,6 +147,131 @@ describe('design board helpers', () => {
     expect(second.updatedFrameIds).toEqual([])
   })
 
+  it('does not recreate a board-hidden HTML artifact after its linked frame was deleted', () => {
+    const screen = artifact('screen', 'html', {
+      title: 'Hidden',
+      node: { x: 40, y: 60, width: 390, height: 844, sizeMode: 'auto', boardHidden: true }
+    })
+
+    const synced = syncHtmlArtifactsToBoardDocument(createEmptyDocument(), [screen])
+    const root = synced.document.objects[synced.document.rootId]
+
+    expect(synced.addedFrameIds).toEqual([])
+    expect(root.children).toEqual([])
+  })
+
+  it('recreates a previously hidden HTML artifact once boardHidden is cleared', () => {
+    const screen = artifact('screen', 'html', {
+      title: 'Restored',
+      node: { x: 40, y: 60, width: 390, height: 844, sizeMode: 'auto', boardHidden: false }
+    })
+
+    const synced = syncHtmlArtifactsToBoardDocument(createEmptyDocument(), [screen])
+    const frame = synced.document.objects[synced.addedFrameIds[0]]
+
+    expect(synced.addedFrameIds).toHaveLength(1)
+    expect(frame).toMatchObject({
+      type: 'frame',
+      name: 'Restored',
+      htmlArtifactId: 'screen',
+      x: 40,
+      y: 60,
+      width: 1280,
+      height: 844
+    })
+  })
+
+  it('keeps an existing board-hidden frame and clears the hidden flag during node sync', () => {
+    const screen = artifact('screen', 'html', {
+      title: 'Restored',
+      node: { x: 40, y: 60, width: 390, height: 844, sizeMode: 'auto', boardHidden: true }
+    })
+    installDesignDocument([screen], screen.id)
+    useDesignWorkspaceStore.setState({ designContext: { designTarget: 'app' } })
+    const doc = createEmptyDocument()
+    const frame = createHtmlFrameShape('Restored', 40, 60, 'screen', 'mobile')
+    doc.objects[frame.id] = { ...frame, parentId: doc.rootId }
+    doc.objects[doc.rootId] = { ...doc.objects[doc.rootId], children: [frame.id] }
+
+    const synced = syncHtmlArtifactsToBoardDocument(doc, [screen])
+    syncHtmlFrameNodesToArtifacts(synced.document)
+
+    expect(synced.addedFrameIds).toEqual([])
+    expect(synced.removedFrameIds).toEqual([])
+    expect(useDesignWorkspaceStore.getState().artifacts.find((item) => item.id === 'screen')?.node)
+      .toMatchObject({ boardHidden: false, x: 40, y: 60, width: 390, height: 844 })
+  })
+
+  it('detects deleted linked HTML frames only when no replacement frame remains', () => {
+    const before = createEmptyDocument()
+    const frame = createHtmlFrameShape('Screen', 40, 60, 'screen', 'mobile')
+    before.objects[frame.id] = { ...frame, parentId: before.rootId }
+    before.objects[before.rootId] = { ...before.objects[before.rootId], children: [frame.id] }
+
+    expect(removedLinkedHtmlArtifactIds(before, createEmptyDocument())).toEqual(['screen'])
+
+    const replacement = createHtmlFrameShape('Screen copy', 80, 90, 'screen', 'mobile')
+    const afterWithReplacement = createEmptyDocument()
+    afterWithReplacement.objects[replacement.id] = { ...replacement, parentId: afterWithReplacement.rootId }
+    afterWithReplacement.objects[afterWithReplacement.rootId] = {
+      ...afterWithReplacement.objects[afterWithReplacement.rootId],
+      children: [replacement.id]
+    }
+    expect(removedLinkedHtmlArtifactIds(before, afterWithReplacement)).toEqual([])
+  })
+
+  it('removes linked HTML frames whose artifact has been deleted', () => {
+    const doc = createEmptyDocument()
+    const root = doc.objects[doc.rootId]
+    const orphan = createHtmlFrameShape('Deleted Screen', 40, 60, 'deleted-artifact', 'desktop')
+    const child = createDefaultShape('rect', 80, 120)
+    child.parentId = orphan.id
+    orphan.children = [child.id]
+    doc.objects[orphan.id] = { ...orphan, parentId: doc.rootId }
+    doc.objects[child.id] = child
+    doc.objects[doc.rootId] = { ...root, children: [orphan.id] }
+
+    const synced = syncHtmlArtifactsToBoardDocument(doc, [])
+
+    expect(synced.removedFrameIds).toEqual([orphan.id])
+    expect(synced.addedFrameIds).toEqual([])
+    expect(synced.updatedFrameIds).toEqual([])
+    expect(synced.document.objects[orphan.id]).toBeUndefined()
+    expect(synced.document.objects[child.id]).toBeUndefined()
+    expect(synced.document.objects[synced.document.rootId]?.children).toEqual([])
+  })
+
+  it('removes duplicate linked frames for the same HTML artifact and keeps the first frame', () => {
+    const doc = createEmptyDocument()
+    const root = doc.objects[doc.rootId]
+    const first = createHtmlFrameShape('Home copy 1', 40, 60, 'home', 'desktop')
+    const duplicate = createHtmlFrameShape('Home copy 2', 1440, 60, 'home', 'desktop')
+    const duplicateChild = createDefaultShape('rect', 1480, 120)
+    duplicateChild.parentId = duplicate.id
+    duplicate.children = [duplicateChild.id]
+    doc.objects[first.id] = { ...first, parentId: doc.rootId }
+    doc.objects[duplicate.id] = { ...duplicate, parentId: doc.rootId }
+    doc.objects[duplicateChild.id] = duplicateChild
+    doc.objects[doc.rootId] = { ...root, children: [first.id, duplicate.id] }
+
+    const synced = syncHtmlArtifactsToBoardDocument(doc, [
+      artifact('home', 'html', {
+        title: 'Home',
+        node: { x: 40, y: 60, width: 1280, height: 800, sizeMode: 'auto' }
+      })
+    ])
+
+    expect(synced.removedFrameIds).toEqual([duplicate.id])
+    expect(synced.addedFrameIds).toEqual([])
+    expect(synced.document.objects[first.id]).toMatchObject({
+      htmlArtifactId: 'home',
+      name: 'Home'
+    })
+    expect(synced.document.objects[duplicate.id]).toBeUndefined()
+    expect(synced.document.objects[duplicateChild.id]).toBeUndefined()
+    expect(synced.document.objects[synced.document.rootId]?.children).toEqual([first.id])
+  })
+
   it('uses real screen dimensions and current viewport placement for implicit default artifact nodes', () => {
     useCanvasViewportStore.getState().setVbox({ x: 1000, y: 500, width: 1600, height: 1000 })
     const screen = artifact('home', 'html', { node: defaultDesignArtifactNode(5) })
@@ -152,6 +286,49 @@ describe('design board helpers', () => {
       y: 600,
       width: 1280,
       height: 800
+    })
+  })
+
+  it('clamps tiny manual artifact nodes to the minimum usable HTML frame size', () => {
+    const screen = artifact('tiny', 'html', {
+      node: { x: 40, y: 60, width: 100, height: 120, sizeMode: 'manual' }
+    })
+
+    const synced = syncHtmlArtifactsToBoardDocument(createEmptyDocument(), [screen])
+
+    expect(synced.addedFrameIds).toHaveLength(1)
+    const frame = synced.document.objects[synced.addedFrameIds[0]]
+    expect(frame).toMatchObject({
+      htmlArtifactId: 'tiny',
+      x: 40,
+      y: 60,
+      width: 240,
+      height: 180
+    })
+  })
+
+  it('repairs existing linked HTML frames that are smaller than the usable minimum', () => {
+    const doc = createEmptyDocument()
+    const root = doc.objects[doc.rootId]
+    const existing = createHtmlFrameShape('Tiny', 80, 120, 'tiny', 'desktop')
+    existing.width = 100
+    existing.height = 120
+    doc.objects[existing.id] = { ...existing, parentId: doc.rootId }
+    doc.objects[doc.rootId] = { ...root, children: [existing.id] }
+
+    const synced = syncHtmlArtifactsToBoardDocument(doc, [
+      artifact('tiny', 'html', {
+        title: 'Tiny',
+        node: { x: 80, y: 120, width: 100, height: 120, sizeMode: 'manual' }
+      })
+    ])
+
+    expect(synced.updatedFrameIds).toEqual([existing.id])
+    expect(synced.document.objects[existing.id]).toMatchObject({
+      x: 80,
+      y: 120,
+      width: 240,
+      height: 180
     })
   })
 
@@ -333,6 +510,41 @@ describe('design board helpers', () => {
     frame.height = 800
     doc.objects[frame.id] = { ...frame, parentId: doc.rootId }
     doc.objects[doc.rootId] = { ...root, children: [frame.id] }
+
+    syncHtmlFrameNodesToArtifacts(doc)
+
+    const updated = useDesignWorkspaceStore.getState().artifacts.find((item) => item.id === 'home')
+    expect(updated?.node).toMatchObject({
+      x: 80,
+      y: 120,
+      width: 1280,
+      height: 800,
+      sizeMode: 'auto'
+    })
+  })
+
+  it('does not let duplicate linked frames overwrite artifact node geometry', () => {
+    const screen = artifact('home', 'html', {
+      node: {
+        x: 80,
+        y: 120,
+        width: 1280,
+        height: 800,
+        sizeMode: 'auto'
+      }
+    })
+    installDesignDocument([screen], screen.id)
+    const doc = createEmptyDocument()
+    const root = doc.objects[doc.rootId]
+    const first = createHtmlFrameShape('Home', 80, 120, 'home', 'desktop')
+    first.width = 1280
+    first.height = 800
+    const duplicate = createHtmlFrameShape('Home copy', 2400, 900, 'home', 'desktop')
+    duplicate.width = 600
+    duplicate.height = 420
+    doc.objects[first.id] = { ...first, parentId: doc.rootId }
+    doc.objects[duplicate.id] = { ...duplicate, parentId: doc.rootId }
+    doc.objects[doc.rootId] = { ...root, children: [first.id, duplicate.id] }
 
     syncHtmlFrameNodesToArtifacts(doc)
 
@@ -530,7 +742,15 @@ describe('design board helpers', () => {
       kind: 'html',
       title: 'Design an onboarding screen',
       relativePath: expect.stringMatching(/^\.kun-design\/doc\/.+\/v1\.html$/),
-      previewStatus: 'pending'
+      previewStatus: 'pending',
+      node: {
+        x: -640,
+        y: -400,
+        width: 1280,
+        height: 800,
+        sizeMode: 'auto',
+        viewMode: 'preview'
+      }
     })
     expect(shape).toMatchObject({
       type: 'frame',
@@ -559,7 +779,7 @@ describe('design board helpers', () => {
     expect(created?.node).toMatchObject({
       width: 390,
       height: 844,
-      sizeMode: 'manual'
+      sizeMode: 'auto'
     })
     expect(shape).toMatchObject({
       type: 'frame',

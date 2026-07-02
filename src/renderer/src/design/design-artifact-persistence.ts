@@ -12,6 +12,7 @@ import {
   type DesignArtifact,
   type DesignDirection,
   type DesignArtifactNode,
+  type DesignArtifactVersion,
   type DesignPrototypeLink
 } from './design-types'
 
@@ -71,6 +72,7 @@ function parseNode(value: unknown): DesignArtifactNode | undefined {
     height: Math.max(180, node.height),
     ...(node.sizeMode === 'auto' || node.sizeMode === 'manual' ? { sizeMode: node.sizeMode } : {}),
     ...(typeof node.favorite === 'boolean' ? { favorite: node.favorite } : {}),
+    ...(typeof node.boardHidden === 'boolean' ? { boardHidden: node.boardHidden } : {}),
     ...(viewMode ? { viewMode } : {})
   }
 }
@@ -115,6 +117,28 @@ function parseDirection(value: unknown): DesignDirection | undefined {
   }
 }
 
+function versionIdForRelativePath(artifactId: string, relativePath: string): string {
+  const match = /\/v(\d+)\.html$/i.exec(relativePath)
+  return match ? `${artifactId}-v${match[1]}` : artifactId
+}
+
+function versionsWithCurrentPresent(
+  artifactId: string,
+  relativePath: string,
+  createdAt: string,
+  versions: DesignArtifactVersion[]
+): DesignArtifactVersion[] {
+  const fallback = {
+    id: versionIdForRelativePath(artifactId, relativePath),
+    relativePath,
+    createdAt,
+    summary: ''
+  }
+  const list = versions.length > 0 ? versions : [fallback]
+  const currentIndex = list.findIndex((version) => version.relativePath === relativePath)
+  return currentIndex < 0 ? [fallback, ...list] : list
+}
+
 /** Parse a persisted meta.json into a DesignArtifact, defaulting from the dir id. */
 export function parseArtifactMeta(raw: string, dirId: string): DesignArtifact | null {
   let o: Record<string, unknown>
@@ -147,6 +171,7 @@ export function parseArtifactMeta(raw: string, dirId: string): DesignArtifact | 
   const role = o.role === 'design-system' || o.role === 'logo' ? o.role : undefined
   const prototypeLinks = parsePrototypeLinks(o.prototypeLinks)
   const direction = parseDirection(o.direction)
+  const normalizedVersions = versionsWithCurrentPresent(id, relativePath, createdAt, versions)
   return {
     id,
     kind,
@@ -154,7 +179,7 @@ export function parseArtifactMeta(raw: string, dirId: string): DesignArtifact | 
     relativePath,
     createdAt,
     updatedAt,
-    versions: versions.length > 0 ? versions : [{ id, relativePath, createdAt, summary: '' }],
+    versions: normalizedVersions,
     ...(kind === 'html' ? { designMdPath: isStr(o.designMdPath) ? o.designMdPath : artifactDesignMdPathOf(relativePath) } : {}),
     ...(previewStatus ? { previewStatus } : {}),
     ...(parsedNode ? { node: parsedNode } : {}),

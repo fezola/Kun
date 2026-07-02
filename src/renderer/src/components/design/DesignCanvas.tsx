@@ -1,13 +1,11 @@
 import { useEffect, type ReactElement } from 'react'
 import { useDesignWorkspaceStore } from '../../design/design-workspace-store'
-import { createDesignArtifactId } from '../../design/design-types'
 import type { DesignArtifact } from '../../design/design-types'
 import type { DesignHtmlElementContext } from '../../design/design-composer-context'
 import type { DesignRuntimeQualityPayload } from '../../design/design-html-quality'
-import { setScreenArtifactFactory } from '../../design/canvas/screen-artifact-bridge'
-import { artifactDesignMdPath, artifactDirPath } from '../../design/design-artifact-persistence'
+import { setScreenCreationFactory } from '../../design/canvas/screen-artifact-bridge'
 import { ensureDesignBoardArtifact, findDesignBoardArtifact } from '../../design/design-board'
-import { prepareDesignPreviewFile } from '../../design/design-preview-file'
+import { createLinkedHtmlScreen } from '../../design/canvas/screen-lifecycle'
 import { CanvasViewport } from './canvas/CanvasViewport'
 import { PropertiesPanel } from './canvas/PropertiesPanel'
 import { useApplyShapeOpsLive } from '../../design/canvas/use-apply-shape-ops-live'
@@ -43,45 +41,33 @@ export function DesignCanvas({
   const boardArtifact = findDesignBoardArtifact(artifacts)
   const baseDir = activeDocumentId ? `.kun-design/${activeDocumentId}` : undefined
 
-  useApplyShapeOpsLive(Boolean(boardArtifact), onScreenCreated)
-
   useEffect(() => {
     if (!workspaceRoot || !settingsLoaded) return
     void ensureDesignBoardArtifact(workspaceRoot)
   }, [workspaceRoot, settingsLoaded, artifacts.length])
 
-  // Register the factory that design_canvas/add-screen calls and the Screen
-  // tool use to create a linked HTML artifact (returns the new artifact id synchronously).
+  // Register the factory that design_canvas/add-screen calls to create the
+  // linked HTML artifact and canvas frame in one lifecycle step.
   useEffect(() => {
     if (!boardArtifact) return
-    setScreenArtifactFactory((name: string) => {
-      const store = useDesignWorkspaceStore.getState()
-      const docId = store.ensureActiveDocument()
-      const createdAt = new Date().toISOString()
-      const artifactId = createDesignArtifactId()
-      const relativePath = `${artifactDirPath(docId, artifactId)}/v1.html`
-      const designMdPath = artifactDesignMdPath(docId, artifactId)
-      const title = name || 'Screen'
-      store.upsertArtifact({
-        id: artifactId,
-        kind: 'html',
-        title,
-        relativePath,
-        createdAt,
-        updatedAt: createdAt,
-        versions: [{ id: `${artifactId}-v1`, relativePath, createdAt, summary: '' }],
-        designMdPath,
-        previewStatus: 'pending'
+    setScreenCreationFactory((request) => {
+      const created = createLinkedHtmlScreen({
+        boardArtifactId: boardArtifact.id,
+        name: request.name,
+        brief: request.brief,
+        x: request.x,
+        y: request.y,
+        width: request.width,
+        height: request.height,
+        devicePreset: request.devicePreset,
+        preparePreview: request.preparePreview
       })
-      // Drop a placeholder HTML file immediately so the canvas tile renders the
-      // "Generating…" skeleton instead of polling a missing file (and tripping the
-      // "prototype file not found" banner) until the agent writes the real page.
-      void prepareDesignPreviewFile(store.workspaceRoot, relativePath)
-      store.setActiveArtifact(boardArtifact.id)
-      return artifactId
+      return created ? { artifactId: created.artifactId, shapeId: created.shape.id } : null
     })
-    return () => setScreenArtifactFactory(() => null)
+    return () => setScreenCreationFactory(null)
   }, [boardArtifact])
+
+  useApplyShapeOpsLive(Boolean(boardArtifact), onScreenCreated)
 
   if (!boardArtifact) {
     return (

@@ -1,15 +1,40 @@
-/** Shared callback bridge for creating HTML artifacts from canvas operations. */
+/** Shared callback bridge for creating HTML screen artifacts from canvas operations. */
+
+import type { DevicePreset, Rect } from './canvas-types'
 
 type ScreenArtifactFactory = (name: string) => string | null
 
-let _factory: ScreenArtifactFactory | null = null
+export type ScreenCreationRequest = Rect & {
+  name: string
+  brief?: string
+  devicePreset: DevicePreset
+  preparePreview?: boolean
+}
 
-export function setScreenArtifactFactory(fn: ScreenArtifactFactory): void {
+export type ScreenCreationResult = {
+  artifactId: string
+  shapeId: string
+}
+
+type ScreenCreationFactory = (request: ScreenCreationRequest) => ScreenCreationResult | null
+
+let _factory: ScreenArtifactFactory | null = null
+let _creationFactory: ScreenCreationFactory | null = null
+
+export function setScreenArtifactFactory(fn: ScreenArtifactFactory | null): void {
   _factory = fn
 }
 
 export function getScreenArtifactFactory(): ScreenArtifactFactory | null {
   return _factory
+}
+
+export function setScreenCreationFactory(fn: ScreenCreationFactory | null): void {
+  _creationFactory = fn
+}
+
+export function getScreenCreationFactory(): ScreenCreationFactory | null {
+  return _creationFactory
 }
 
 /**

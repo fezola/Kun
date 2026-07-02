@@ -24,6 +24,20 @@ export type DesignArtifactVersion = {
   summary: string
 }
 
+export function designArtifactVersionNumber(version: Pick<DesignArtifactVersion, 'id' | 'relativePath'>): number | null {
+  const pathMatch = /\/v(\d+)\.html$/i.exec(version.relativePath)
+  if (pathMatch) return Number(pathMatch[1])
+  const idMatch = /-v(\d+)$/i.exec(version.id)
+  return idMatch ? Number(idMatch[1]) : null
+}
+
+export function designArtifactVersionLabel(
+  version: Pick<DesignArtifactVersion, 'id' | 'relativePath'> | undefined,
+  fallbackNumber: number
+): string {
+  return `v${version ? (designArtifactVersionNumber(version) ?? fallbackNumber) : fallbackNumber}`
+}
+
 export type DesignArtifactNode = {
   x: number
   y: number
@@ -31,6 +45,8 @@ export type DesignArtifactNode = {
   height: number
   sizeMode?: 'auto' | 'manual'
   favorite?: boolean
+  /** Hidden from the board after the user deletes its linked frame. */
+  boardHidden?: boolean
   viewMode?: DesignCanvasView
 }
 
@@ -88,6 +104,12 @@ export type DesignArtifact = {
    * label them in the sibling manifest.
    */
   role?: 'design-system' | 'logo'
+}
+
+export function currentDesignArtifactVersion(
+  artifact: Pick<DesignArtifact, 'relativePath' | 'versions'>
+): DesignArtifactVersion | undefined {
+  return artifact.versions.find((version) => version.relativePath === artifact.relativePath) ?? artifact.versions[0]
 }
 
 export type DesignArtifactFoundationRole = NonNullable<DesignArtifact['role']>

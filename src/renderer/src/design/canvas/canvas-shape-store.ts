@@ -99,6 +99,7 @@ function deepCloneShape(
     frameId: newFrameId,
     children: clonedChildren
   }
+  delete clone.htmlArtifactId
   allClones.push(clone)
   return { clones: allClones, rootId: newId }
 }

@@ -4,7 +4,8 @@ import {
   designTargetContextChip,
   designHtmlElementContextTarget,
   designSelectedContextLocations,
-  resolveDesignComposerContextTargets
+  resolveDesignComposerContextTargets,
+  resolveDesignComposerScreenFrameTarget
 } from './design-composer-context'
 import type { DesignArtifact } from './design-types'
 
@@ -85,6 +86,43 @@ describe('design composer context', () => {
       shape: frame
     })
     expect(targets[0]?.chip.detail).toContain('1280 x 800')
+  })
+
+  it('can resolve a linked HTML frame target by shape id without relying on selection', () => {
+    const canvas = artifact('canvas', 'canvas')
+    const linked = artifact('login')
+    const other = artifact('other')
+    const frame = createHtmlFrameShape('Login screen', 0, 0, linked.id, 'desktop')
+    const doc = withShape(frame)
+
+    const target = resolveDesignComposerScreenFrameTarget({
+      artifacts: [canvas, linked, other],
+      canvasDocument: doc,
+      shapeId: frame.id
+    })
+
+    expect(target).toMatchObject({
+      kind: 'html-screen-frame',
+      artifact: linked,
+      shape: frame,
+      chip: {
+        id: `html-screen-frame:${frame.id}:login`,
+        label: 'login'
+      }
+    })
+  })
+
+  it('does not let an explicit HTML frame target bypass suppressed context chips', () => {
+    const linked = artifact('login')
+    const frame = createHtmlFrameShape('Login screen', 0, 0, linked.id, 'desktop')
+    const doc = withShape(frame)
+
+    expect(resolveDesignComposerScreenFrameTarget({
+      artifacts: [linked],
+      canvasDocument: doc,
+      shapeId: frame.id,
+      suppressedIds: new Set([`html-screen-frame:${frame.id}:login`])
+    })).toBeNull()
   })
 
   it('uses regular selected canvas shapes as canvas-selection context', () => {

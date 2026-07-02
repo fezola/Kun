@@ -4,19 +4,34 @@ import { useCanvasShapeStore } from './canvas-shape-store'
 import { useCanvasUndoStore } from './canvas-undo-store'
 import { useCanvasSelectionStore } from './canvas-selection-store'
 import { useDesignSystemStore } from './design-system-store'
-import { setScreenArtifactFactory, takeScreenBrief } from './screen-artifact-bridge'
+import { setScreenArtifactFactory, setScreenCreationFactory, takeScreenBrief } from './screen-artifact-bridge'
+import { createLinkedHtmlScreen } from './screen-lifecycle'
 import { useCanvasViewportStore } from './canvas-viewport-store'
-import { createEmptyDocument, type CanvasShape } from './canvas-types'
+import { createEmptyDocument, createHtmlFrameShape, type CanvasShape } from './canvas-types'
 import { useDesignWorkspaceStore } from '../design-workspace-store'
+import type { DesignArtifact, DesignDocument } from '../design-types'
+
+const createdAt = '2026-06-20T00:00:00.000Z'
 
 beforeEach(() => {
   useCanvasShapeStore.getState().loadDocument(createEmptyDocument())
   useCanvasUndoStore.getState().clear()
   useCanvasSelectionStore.getState().clearSelection()
   useDesignSystemStore.getState().resetSystem()
+  setScreenArtifactFactory(null)
+  setScreenCreationFactory(null)
   useCanvasViewportStore.getState().setVbox({ x: -600, y: -400, width: 1200, height: 800 })
   useCanvasViewportStore.getState().setContainerSize(1200, 800)
-  useDesignWorkspaceStore.setState({ designContext: { designTarget: 'web' } })
+  useDesignWorkspaceStore.setState({
+    workspaceRoot: '',
+    documents: [],
+    activeDocumentId: null,
+    artifacts: [],
+    activeArtifactId: null,
+    designContext: { designTarget: 'web' },
+    fileError: null,
+    parallelPageStates: {}
+  })
 })
 
 function getShape(id: string): CanvasShape {
@@ -27,6 +42,82 @@ function addRect(x: number, y: number, w = 100, h = 80, parentId?: string): stri
     ? { op: 'add' as const, shape: { type: 'rect' as const, x, y, width: w, height: h }, parentId }
     : { op: 'add' as const, shape: { type: 'rect' as const, x, y, width: w, height: h } }
   return executeOps([op]).affectedIds[0]
+}
+
+function installHtmlArtifact(id = 'screen'): DesignArtifact {
+  const relativePath = `.kun-design/doc/${id}/v1.html`
+  const artifact: DesignArtifact = {
+    id,
+    kind: 'html',
+    title: id,
+    relativePath,
+    createdAt,
+    updatedAt: createdAt,
+    versions: [{ id: `${id}-v1`, relativePath, createdAt, summary: '' }],
+    node: { x: 0, y: 0, width: 390, height: 844, sizeMode: 'auto', viewMode: 'preview' }
+  }
+  const doc: DesignDocument = {
+    id: 'doc',
+    title: 'Doc',
+    createdAt,
+    updatedAt: createdAt,
+    order: 0,
+    artifacts: [artifact],
+    activeArtifactId: artifact.id
+  }
+  useDesignWorkspaceStore.setState({
+    workspaceRoot: '',
+    documents: [doc],
+    activeDocumentId: doc.id,
+    artifacts: doc.artifacts,
+    activeArtifactId: artifact.id,
+    designContext: { designTarget: 'app' }
+  })
+  return artifact
+}
+
+function installLinkedScreenFactory(): void {
+  const board: DesignArtifact = {
+    id: 'board',
+    kind: 'canvas',
+    title: 'Design board',
+    relativePath: '.kun-design/doc/board/canvas.json',
+    createdAt,
+    updatedAt: createdAt,
+    versions: [{ id: 'board-v1', relativePath: '.kun-design/doc/board/canvas.json', createdAt, summary: '' }]
+  }
+  const doc: DesignDocument = {
+    id: 'doc',
+    title: 'Doc',
+    createdAt,
+    updatedAt: createdAt,
+    order: 0,
+    artifacts: [board],
+    activeArtifactId: board.id
+  }
+  useDesignWorkspaceStore.setState({
+    workspaceRoot: '',
+    documents: [doc],
+    activeDocumentId: doc.id,
+    artifacts: [board],
+    activeArtifactId: board.id,
+    designContext: { designTarget: 'web' }
+  })
+  setScreenCreationFactory((request) => {
+    expect(request.preparePreview).toBe(false)
+    const created = createLinkedHtmlScreen({
+      boardArtifactId: board.id,
+      name: request.name,
+      brief: request.brief,
+      x: request.x,
+      y: request.y,
+      width: request.width,
+      height: request.height,
+      devicePreset: request.devicePreset,
+      preparePreview: request.preparePreview
+    })
+    return created ? { artifactId: created.artifactId, shapeId: created.shape.id } : null
+  })
 }
 
 describe('grid', () => {
@@ -133,6 +224,29 @@ describe('responsive-reflow', () => {
   })
 })
 
+describe('HTML screen frame resize ops', () => {
+  it('locks a linked HTML frame to manual size after an explicit resize op', () => {
+    installHtmlArtifact('screen')
+    const frame = createHtmlFrameShape('Screen', 0, 0, 'screen', 'mobile')
+    useCanvasShapeStore.getState().addShape(frame)
+
+    executeOps([{ op: 'resize', id: frame.id, bounds: { x: 10, y: 20, width: 520, height: 900 } }])
+
+    const shape = getShape(frame.id)
+    const artifact = useDesignWorkspaceStore.getState().artifacts.find((item) => item.id === 'screen')
+    expect(shape).toMatchObject({ x: 10, y: 20, width: 520, height: 900 })
+    expect(artifact?.node).toMatchObject({
+      x: 10,
+      y: 20,
+      width: 520,
+      height: 900,
+      sizeMode: 'manual',
+      boardHidden: false,
+      viewMode: 'preview'
+    })
+  })
+})
+
 describe('variant-matrix', () => {
   it('tiles base × devices × themes, reflowing + theming each cell', () => {
     executeOps([{ op: 'define-token', name: 'light/bg', kind: 'color', value: '#ffffff' }])
@@ -169,6 +283,34 @@ describe('variant-matrix', () => {
     )
     expect(darkChildren).toHaveLength(2) // dark theme × 2 devices
   })
+
+  it('does not clone htmlArtifactId links when tiling a linked HTML frame', () => {
+    installHtmlArtifact('screen')
+    const base = createHtmlFrameShape('Screen', 0, 0, 'screen', 'desktop')
+    useCanvasShapeStore.getState().addShape(base)
+
+    const before = new Set(useCanvasShapeStore.getState().getAllShapeIds())
+    executeOps([
+      {
+        op: 'variant-matrix',
+        baseId: base.id,
+        devices: ['mobile', 'tablet'],
+        themes: [{ name: 'default', remap: {} }],
+        at: { x: 0, y: 1200 }
+      }
+    ])
+
+    const clones = useCanvasShapeStore
+      .getState()
+      .getAllShapeIds()
+      .filter((id) => !before.has(id))
+      .map(getShape)
+      .filter((shape) => shape.type === 'frame')
+
+    expect(clones).toHaveLength(2)
+    expect(getShape(base.id).htmlArtifactId).toBe('screen')
+    expect(clones.every((shape) => shape.htmlArtifactId === undefined)).toBe(true)
+  })
 })
 
 describe('add-screens', () => {
@@ -195,6 +337,145 @@ describe('add-screens', () => {
     })
     expect(shape.htmlArtifactId).toBeUndefined()
     expect(takeScreenBrief(shape.id)).toBeNull()
+  })
+
+  it('keeps code whiteboard plain-frame fallback ahead of any linked screen factory', () => {
+    installLinkedScreenFactory()
+
+    const result = executeOps(
+      [{ op: 'add-screen', name: 'Architecture' }],
+      'code-canvas-screen',
+      { screenFallback: 'plain-frame' }
+    )
+
+    expect(result.ok).toBe(true)
+    const shape = getShape(result.affectedIds[0])
+    expect(shape).toMatchObject({
+      type: 'frame',
+      name: 'Architecture',
+      width: 1280,
+      height: 800
+    })
+    expect(shape.htmlArtifactId).toBeUndefined()
+    expect(useDesignWorkspaceStore.getState().artifacts.filter((item) => item.kind === 'html')).toEqual([])
+  })
+
+  it('creates linked HTML artifacts and frames through the screen lifecycle factory', () => {
+    installLinkedScreenFactory()
+
+    const r = executeOps([
+      {
+        op: 'add-screen',
+        name: 'Checkout',
+        brief: 'A compact checkout screen',
+        x: 24,
+        y: 48,
+        width: 390,
+        height: 844,
+        devicePreset: 'mobile'
+      }
+    ])
+
+    expect(r.ok).toBe(true)
+    const shape = getShape(r.affectedIds[0])
+    const artifact = useDesignWorkspaceStore.getState().artifacts.find((item) => item.id === shape.htmlArtifactId)
+    expect(shape).toMatchObject({
+      type: 'frame',
+      name: 'Checkout',
+      x: 24,
+      y: 48,
+      width: 390,
+      height: 844,
+      devicePreset: 'mobile'
+    })
+    expect(artifact?.node).toMatchObject({
+      x: 24,
+      y: 48,
+      width: 390,
+      height: 844,
+      sizeMode: 'auto',
+      viewMode: 'preview'
+    })
+    expect(artifact?.versions[0]?.summary).toBe('A compact checkout screen')
+    expect(takeScreenBrief(shape.id)).toBe('A compact checkout screen')
+  })
+
+  it('creates batched linked screens with auto nodes matching their frames', () => {
+    useCanvasViewportStore.getState().setVbox({ x: 1000, y: 500, width: 1600, height: 1000 })
+    installLinkedScreenFactory()
+
+    const r = executeOps([
+      {
+        op: 'add-screens',
+        specs: [
+          { name: 'Home', brief: 'Landing page' },
+          { name: 'Settings', brief: 'Account settings' }
+        ]
+      }
+    ])
+
+    expect(r.ok).toBe(true)
+    expect(r.affectedIds).toHaveLength(2)
+    for (const id of r.affectedIds) {
+      const shape = getShape(id)
+      const artifact = useDesignWorkspaceStore.getState().artifacts.find((item) => item.id === shape.htmlArtifactId)
+      expect(artifact?.node).toMatchObject({
+        x: shape.x,
+        y: shape.y,
+        width: shape.width,
+        height: shape.height,
+        sizeMode: 'auto'
+      })
+      expect(takeScreenBrief(shape.id)).toBeTruthy()
+    }
+  })
+
+  it('keeps duplicate linked screen artifact titles aligned with unique frame names', () => {
+    installLinkedScreenFactory()
+
+    const r = executeOps([
+      {
+        op: 'add-screens',
+        specs: [{ name: 'Home' }, { name: 'Home' }]
+      }
+    ])
+
+    expect(r.ok).toBe(true)
+    const shapes = r.affectedIds.map(getShape)
+    expect(shapes.map((shape) => shape.name)).toEqual(['Home', 'Home 2'])
+    for (const shape of shapes) {
+      const artifact = useDesignWorkspaceStore.getState().artifacts.find((item) => item.id === shape.htmlArtifactId)
+      expect(artifact?.title).toBe(shape.name)
+    }
+  })
+
+  it('keeps new linked screen titles unique against hidden HTML artifacts', () => {
+    installLinkedScreenFactory()
+    const state = useDesignWorkspaceStore.getState()
+    const hidden: DesignArtifact = {
+      id: 'hidden-home',
+      kind: 'html',
+      title: 'Home',
+      relativePath: '.kun-design/doc/hidden-home/v1.html',
+      createdAt,
+      updatedAt: createdAt,
+      versions: [{ id: 'hidden-home-v1', relativePath: '.kun-design/doc/hidden-home/v1.html', createdAt, summary: '' }],
+      node: { x: 40, y: 60, width: 1280, height: 800, sizeMode: 'auto', boardHidden: true }
+    }
+    useDesignWorkspaceStore.setState({
+      documents: state.documents.map((doc) =>
+        doc.id === state.activeDocumentId ? { ...doc, artifacts: [...doc.artifacts, hidden] } : doc
+      ),
+      artifacts: [...state.artifacts, hidden]
+    })
+
+    const r = executeOps([{ op: 'add-screen', name: 'Home' }])
+
+    expect(r.ok).toBe(true)
+    const shape = getShape(r.affectedIds[0])
+    const artifact = useDesignWorkspaceStore.getState().artifacts.find((item) => item.id === shape.htmlArtifactId)
+    expect(shape.name).toBe('Home 2')
+    expect(artifact?.title).toBe('Home 2')
   })
 
   it('places a single screen in the current viewport when x/y are omitted', () => {

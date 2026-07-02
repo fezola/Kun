@@ -13,6 +13,11 @@ type WriteWorkspaceFileRequest = {
   content: string
 }
 
+type ReadWorkspaceFileRequest = {
+  path: string
+  workspaceRoot?: string
+}
+
 function artifact(id: string, kind: DesignArtifact['kind']): DesignArtifact {
   const relativePath =
     kind === 'canvas' ? `.kun-design/doc/${id}/canvas.json` : `.kun-design/doc/${id}/v1.html`
@@ -108,6 +113,75 @@ describe('design workspace store', () => {
     }))
   })
 
+  it('can reuse a freshly pending initial HTML screen without appending a skeleton version', () => {
+    const fresh = {
+      ...artifact('fresh-screen', 'html'),
+      previewStatus: 'pending' as const,
+      versions: [
+        {
+          id: 'fresh-screen-v1',
+          relativePath: '.kun-design/doc/fresh-screen/v1.html',
+          createdAt,
+          summary: 'Initial brief'
+        }
+      ]
+    }
+    const canvas = artifact('canvas', 'canvas')
+    const doc: DesignDocument = {
+      id: 'doc',
+      title: 'Doc',
+      createdAt,
+      updatedAt: createdAt,
+      order: 0,
+      artifacts: [canvas, fresh],
+      activeArtifactId: canvas.id
+    }
+    useDesignWorkspaceStore.setState({
+      documents: [doc],
+      activeDocumentId: 'doc',
+      artifacts: doc.artifacts,
+      activeArtifactId: canvas.id
+    })
+    writeWorkspaceFile.mockClear()
+
+    const result = useDesignWorkspaceStore
+      .getState()
+      .prepareHtmlTurn('Build the real first screen', {
+        artifactId: fresh.id,
+        activate: false,
+        reusePendingInitial: true
+      })
+
+    expect(result).toEqual({
+      artifactId: fresh.id,
+      relativePath: '.kun-design/doc/fresh-screen/v1.html',
+      designMdPath: '.kun-design/doc/fresh-screen/DESIGN.md'
+    })
+    const updated = useDesignWorkspaceStore.getState().artifacts.find((item) => item.id === fresh.id)
+    expect(useDesignWorkspaceStore.getState().activeArtifactId).toBe(canvas.id)
+    expect(updated).toMatchObject({
+      relativePath: '.kun-design/doc/fresh-screen/v1.html',
+      designMdPath: '.kun-design/doc/fresh-screen/DESIGN.md',
+      previewStatus: 'pending'
+    })
+    expect(updated?.versions).toHaveLength(1)
+    expect(updated?.versions[0]).toMatchObject({
+      id: 'fresh-screen-v1',
+      relativePath: '.kun-design/doc/fresh-screen/v1.html',
+      summary: 'Build the real first screen'
+    })
+    expect(writeWorkspaceFile).toHaveBeenCalledWith(expect.objectContaining({
+      path: '.kun-design/doc/fresh-screen/meta.json',
+      workspaceRoot: '/workspace',
+      content: expect.stringContaining('Build the real first screen')
+    }))
+    expect(
+      writeWorkspaceFile.mock.calls.some(([request]) =>
+        (request as WriteWorkspaceFileRequest).content.includes('.kun-design/doc/fresh-screen/v2.html')
+      )
+    ).toBe(false)
+  })
+
   it('setVersionSummary writes the agent summary back so the sibling manifest surfaces it', () => {
     const versionId = useDesignWorkspaceStore.getState().artifacts.find((a) => a.id === 'screen')!.versions[0].id
     useDesignWorkspaceStore.getState().setVersionSummary('screen', versionId, '  A clean login screen with email + SSO  ')
@@ -133,6 +207,205 @@ describe('design workspace store', () => {
     }))
   })
 
+  it('resets an HTML artifact preview status when selecting another version', () => {
+    vi.useFakeTimers()
+    const node = {
+      x: 120,
+      y: 240,
+      width: 390,
+      height: 1720,
+      sizeMode: 'manual' as const,
+      boardHidden: false
+    }
+    const html = {
+      ...artifact('screen', 'html'),
+      relativePath: '.kun-design/doc/screen/v2.html',
+      updatedAt: '2026-06-20T01:00:00.000Z',
+      versions: [
+        {
+          id: 'screen-v2',
+          relativePath: '.kun-design/doc/screen/v2.html',
+          createdAt: '2026-06-20T01:00:00.000Z',
+          summary: 'Broken draft'
+        },
+        {
+          id: 'screen-v1',
+          relativePath: '.kun-design/doc/screen/v1.html',
+          createdAt,
+          summary: 'Stable draft'
+        }
+      ],
+      previewStatus: 'error' as const,
+      node
+    }
+    const canvas = artifact('canvas', 'canvas')
+    const doc: DesignDocument = {
+      id: 'doc',
+      title: 'Doc',
+      createdAt,
+      updatedAt: createdAt,
+      order: 0,
+      artifacts: [canvas, html],
+      activeArtifactId: canvas.id
+    }
+    useDesignWorkspaceStore.setState({
+      documents: [doc],
+      activeDocumentId: 'doc',
+      artifacts: doc.artifacts,
+      activeArtifactId: canvas.id
+    })
+    writeWorkspaceFile.mockClear()
+
+    try {
+      useDesignWorkspaceStore.getState().selectArtifactVersion('screen', 'screen-v1')
+      vi.advanceTimersByTime(400)
+
+      const updated = useDesignWorkspaceStore.getState().artifacts.find((a) => a.id === 'screen')
+      expect(updated).toMatchObject({
+        relativePath: '.kun-design/doc/screen/v1.html',
+        updatedAt: createdAt,
+        previewStatus: 'pending',
+        node
+      })
+      expect(updated?.versions.map((version) => version.id)).toEqual(['screen-v2', 'screen-v1'])
+      expect(buildHtmlSiblingManifest(useDesignWorkspaceStore.getState().artifacts, null)[0]).toMatchObject({
+        htmlPath: '.kun-design/doc/screen/v1.html',
+        summary: 'Stable draft'
+      })
+      expect(writeWorkspaceFile).toHaveBeenCalledWith(expect.objectContaining({
+        path: '.kun-design/doc/screen/meta.json',
+        workspaceRoot: '/workspace',
+        content: expect.stringContaining('"previewStatus": "pending"')
+      }))
+      expect(writeWorkspaceFile).toHaveBeenCalledWith(expect.objectContaining({
+        path: '.kun-design/doc/screen/meta.json',
+        content: expect.stringContaining('"height": 1720')
+      }))
+      expect(writeWorkspaceFile).toHaveBeenCalledWith(expect.objectContaining({
+        path: '.kun-design/documents.json',
+        workspaceRoot: '/workspace',
+        content: expect.stringContaining('"activeDocumentId": "doc"')
+      }))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('duplicates a board-hidden HTML artifact as a visible board screen', async () => {
+    const sourceNode = {
+      x: 120,
+      y: 240,
+      width: 390,
+      height: 844,
+      sizeMode: 'auto' as const,
+      boardHidden: true
+    }
+    const source = {
+      ...artifact('hidden-screen', 'html'),
+      title: 'Hidden screen',
+      node: sourceNode
+    }
+    const canvas = artifact('canvas', 'canvas')
+    const doc: DesignDocument = {
+      id: 'doc',
+      title: 'Doc',
+      createdAt,
+      updatedAt: createdAt,
+      order: 0,
+      artifacts: [canvas, source],
+      activeArtifactId: canvas.id
+    }
+    const readWorkspaceFile = vi.fn(async (request: ReadWorkspaceFileRequest) =>
+      request.path.endsWith('/DESIGN.md')
+        ? { ok: true as const, content: '# Hidden screen notes' }
+        : { ok: true as const, content: '<html><body>Hidden</body></html>' }
+    )
+    vi.stubGlobal('window', { kunGui: { writeWorkspaceFile, readWorkspaceFile } })
+    useDesignWorkspaceStore.setState({
+      documents: [doc],
+      activeDocumentId: 'doc',
+      artifacts: doc.artifacts,
+      activeArtifactId: canvas.id
+    })
+
+    await useDesignWorkspaceStore.getState().duplicateArtifact(source.id)
+
+    const copy = useDesignWorkspaceStore
+      .getState()
+      .artifacts.find((item) => item.id !== source.id && item.title === 'Hidden screen copy')
+    expect(copy?.node).toMatchObject({
+      x: 164,
+      y: 284,
+      width: 390,
+      height: 844,
+      sizeMode: 'auto',
+      boardHidden: false
+    })
+    expect(readWorkspaceFile).toHaveBeenCalledWith(expect.objectContaining({
+      path: source.relativePath,
+      workspaceRoot: '/workspace'
+    }))
+    expect(writeWorkspaceFile).toHaveBeenCalledWith(expect.objectContaining({
+      path: expect.stringMatching(/^\.kun-design\/doc\/.+\/v1\.html$/),
+      workspaceRoot: '/workspace',
+      content: '<html><body>Hidden</body></html>'
+    }))
+    expect(writeWorkspaceFile).toHaveBeenCalledWith(expect.objectContaining({
+      path: expect.stringMatching(/^\.kun-design\/doc\/.+\/DESIGN\.md$/),
+      workspaceRoot: '/workspace',
+      content: '# Hidden screen notes'
+    }))
+    expect(writeWorkspaceFile).toHaveBeenCalledWith(expect.objectContaining({
+      path: expect.stringMatching(/^\.kun-design\/doc\/.+\/meta\.json$/),
+      content: expect.stringContaining('"boardHidden": false')
+    }))
+  })
+
+  it('still duplicates HTML artifacts when the source design notes are missing', async () => {
+    const source = {
+      ...artifact('screen-without-notes', 'html'),
+      title: 'No notes'
+    }
+    const canvas = artifact('canvas', 'canvas')
+    const doc: DesignDocument = {
+      id: 'doc',
+      title: 'Doc',
+      createdAt,
+      updatedAt: createdAt,
+      order: 0,
+      artifacts: [canvas, source],
+      activeArtifactId: canvas.id
+    }
+    const readWorkspaceFile = vi.fn(async (request: ReadWorkspaceFileRequest) =>
+      request.path.endsWith('/DESIGN.md')
+        ? { ok: false as const, error: 'missing' }
+        : { ok: true as const, content: '<html><body>No notes</body></html>' }
+    )
+    vi.stubGlobal('window', { kunGui: { writeWorkspaceFile, readWorkspaceFile } })
+    useDesignWorkspaceStore.setState({
+      documents: [doc],
+      activeDocumentId: 'doc',
+      artifacts: doc.artifacts,
+      activeArtifactId: canvas.id
+    })
+
+    await useDesignWorkspaceStore.getState().duplicateArtifact(source.id)
+
+    const copy = useDesignWorkspaceStore
+      .getState()
+      .artifacts.find((item) => item.id !== source.id && item.title === 'No notes copy')
+    expect(copy).toBeDefined()
+    expect(writeWorkspaceFile).toHaveBeenCalledWith(expect.objectContaining({
+      path: expect.stringMatching(/^\.kun-design\/doc\/.+\/v1\.html$/),
+      content: '<html><body>No notes</body></html>'
+    }))
+    expect(
+      writeWorkspaceFile.mock.calls.some(([request]) =>
+        (request as WriteWorkspaceFileRequest).path.endsWith('/DESIGN.md')
+      )
+    ).toBe(false)
+  })
+
   it('uses app-target preview proportions for newly prepared HTML turns', () => {
     useDesignWorkspaceStore.getState().setDesignTarget('app')
     const result = useDesignWorkspaceStore.getState().prepareHtmlTurn('Create a habit tracker')
@@ -153,6 +426,52 @@ describe('design workspace store', () => {
       width: 300,
       height: 640
     })
+  })
+
+  it('preserves existing HTML artifact node when upserting metadata without a node', () => {
+    const existing = {
+      ...artifact('screen', 'html'),
+      title: 'Measured screen',
+      node: {
+        x: 120,
+        y: 240,
+        width: 390,
+        height: 2100,
+        sizeMode: 'manual' as const,
+        boardHidden: true,
+        viewMode: 'preview' as const
+      }
+    }
+    const canvas = artifact('canvas', 'canvas')
+    const doc: DesignDocument = {
+      id: 'doc',
+      title: 'Doc',
+      createdAt,
+      updatedAt: createdAt,
+      order: 0,
+      artifacts: [canvas, existing],
+      activeArtifactId: canvas.id
+    }
+    useDesignWorkspaceStore.setState({
+      documents: [doc],
+      activeDocumentId: 'doc',
+      artifacts: doc.artifacts,
+      activeArtifactId: canvas.id
+    })
+
+    useDesignWorkspaceStore.getState().upsertArtifact({
+      ...artifact('screen', 'html'),
+      title: 'Measured screen renamed',
+      updatedAt: '2026-06-20T01:00:00.000Z'
+    })
+
+    const updated = useDesignWorkspaceStore.getState().artifacts.find((item) => item.id === 'screen')
+    expect(updated?.title).toBe('Measured screen renamed')
+    expect(updated?.node).toEqual(existing.node)
+    expect(writeWorkspaceFile).toHaveBeenCalledWith(expect.objectContaining({
+      path: '.kun-design/doc/screen/meta.json',
+      content: expect.stringContaining('"height": 2100')
+    }))
   })
 
   it('persists the design target from both quick toggle and context updates', () => {

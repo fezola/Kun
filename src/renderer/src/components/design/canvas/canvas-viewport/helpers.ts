@@ -137,6 +137,66 @@ export function boundsForShapeIds(doc: CanvasDocument, ids: readonly string[]): 
   return { x: minX, y: minY, width: Math.max(1, maxX - minX), height: Math.max(1, maxY - minY) }
 }
 
+export function filterShapeIdsPresentInDocument(
+  doc: CanvasDocument,
+  ids: Iterable<string>
+): string[] {
+  return [...ids].filter((id) => Boolean(doc.objects[id]))
+}
+
+export function resolveCanvasSelectionAfterDocumentSync(
+  doc: CanvasDocument,
+  state: {
+    selectedIds: Iterable<string>
+    editingId: string | null
+    hoverTargetId: string | null
+  }
+): {
+  selectedIds: string[]
+  editingId: string | null
+  hoverTargetId: string | null
+} {
+  return {
+    selectedIds: filterShapeIdsPresentInDocument(doc, state.selectedIds),
+    editingId: state.editingId && doc.objects[state.editingId] ? state.editingId : null,
+    hoverTargetId: state.hoverTargetId && doc.objects[state.hoverTargetId] ? state.hoverTargetId : null
+  }
+}
+
+export function resolveHtmlFrameOverlayInteractionState(
+  doc: CanvasDocument,
+  selectedIds: ReadonlySet<string>,
+  state: {
+    interactiveId: string | null
+    editingId: string | null
+    overlayAvailable?: boolean
+    mountableFrameIds?: ReadonlySet<string>
+  }
+): {
+  interactiveId: string | null
+  editingId: string | null
+} {
+  if (state.overlayAvailable === false) {
+    return { interactiveId: null, editingId: null }
+  }
+  const canKeep = (id: string | null): id is string => {
+    if (!id || !selectedIds.has(id)) return false
+    if (state.mountableFrameIds && !state.mountableFrameIds.has(id)) return false
+    const shape = doc.objects[id]
+    return Boolean(shape?.visible && isHtmlFrame(shape))
+  }
+  return {
+    interactiveId: canKeep(state.interactiveId) ? state.interactiveId : null,
+    editingId: canKeep(state.editingId) ? state.editingId : null
+  }
+}
+
+export function shouldResetCanvasTransientInteractionAfterDocumentSync(
+  removedShapeIds: readonly string[]
+): boolean {
+  return removedShapeIds.length > 0
+}
+
 const toolFactories: Record<CanvasTool, () => CanvasToolHandler> = {
   select: createSelectTool,
   rect: createRectTool,
@@ -155,4 +215,3 @@ export function createCanvasTool(tool: CanvasTool, surface: 'design' | 'code'): 
   if (tool === 'image') return createAiImageTool({ openAssistant: surface === 'design' })
   return toolFactories[tool]()
 }
-

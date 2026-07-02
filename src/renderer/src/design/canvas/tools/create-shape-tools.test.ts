@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { useCanvasSelectionStore } from '../canvas-selection-store'
 import { useCanvasShapeStore } from '../canvas-shape-store'
-import { createEmptyDocument } from '../canvas-types'
+import { createEmptyDocument, createHtmlFrameShape } from '../canvas-types'
 import { useCanvasUndoStore } from '../canvas-undo-store'
 import { useCanvasViewportStore } from '../canvas-viewport-store'
-import { setScreenArtifactFactory } from '../screen-artifact-bridge'
+import { setScreenArtifactFactory, setScreenCreationFactory } from '../screen-artifact-bridge'
 import { executeOps } from '../shape-ops'
 import { useDesignWorkspaceStore } from '../../design-workspace-store'
 import { createDrawTool } from './draw-tool'
@@ -31,6 +31,7 @@ beforeEach(() => {
     useCanvasViewportStore.getState().toggleSnap()
   }
   setScreenArtifactFactory(() => null)
+  setScreenCreationFactory(null)
   useDesignWorkspaceStore.setState({ designContext: { designTarget: 'web' } })
   useCanvasViewportStore.getState().setActiveTool('rect')
 })
@@ -126,6 +127,42 @@ describe('shape creation tools', () => {
     expect(shape.htmlArtifactId).toBe('artifact-screen')
     expect(useCanvasViewportStore.getState().activeTool).toBe('select')
     expect(useCanvasSelectionStore.getState().activeSnapGuides).toEqual([])
+  })
+
+  it('finalizes drawn screen frames through the linked screen creation factory', () => {
+    const requests: Array<{ preparePreview?: boolean }> = []
+    setScreenCreationFactory((request) => {
+      requests.push(request)
+      const shape = createHtmlFrameShape(request.name, request.x, request.y, 'artifact-linked', request.devicePreset)
+      shape.width = request.width
+      shape.height = request.height
+      useCanvasShapeStore.getState().addShape(shape)
+      return { artifactId: 'artifact-linked', shapeId: shape.id }
+    })
+    const tool = createScreenTool()
+
+    tool.onPointerDown(pointer(0, 0))
+    tool.onPointerMove(pointer(96, 37))
+
+    const preview = useCanvasShapeStore.getState().document.objects[selectedShapeId()]
+    expect(preview).toMatchObject({ type: 'frame', width: 100, height: 40 })
+    expect(preview.htmlArtifactId).toBeUndefined()
+
+    tool.onPointerUp(pointer(96, 37))
+
+    const shape = useCanvasShapeStore.getState().document.objects[selectedShapeId()]
+    expect(shape).toMatchObject({
+      type: 'frame',
+      x: 0,
+      y: 0,
+      width: 100,
+      height: 40,
+      htmlArtifactId: 'artifact-linked',
+      devicePreset: 'desktop'
+    })
+    expect(useCanvasShapeStore.getState().document.objects[preview.id]).toBeUndefined()
+    expect(useCanvasViewportStore.getState().activeTool).toBe('select')
+    expect(requests[0]?.preparePreview).toBe(true)
   })
 
   it('click-creates app-sized screen frames when the design target is app', () => {

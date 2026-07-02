@@ -11,7 +11,7 @@ const node: DesignArtifactNode = {
 }
 
 describe('resizeDesignArtifactNode', () => {
-  it('resizes east while keeping height auto-measured', () => {
+  it('resizes east into manual sizing', () => {
     expect(
       resizeDesignArtifactNode({
         node,
@@ -24,11 +24,11 @@ describe('resizeDesignArtifactNode', () => {
       y: 120,
       width: 660,
       height: 340,
-      sizeMode: 'auto'
+      sizeMode: 'manual'
     })
   })
 
-  it('resizes west from the opposite edge', () => {
+  it('resizes west from the opposite edge into manual sizing', () => {
     expect(
       resizeDesignArtifactNode({
         node,
@@ -41,7 +41,7 @@ describe('resizeDesignArtifactNode', () => {
       y: 120,
       width: 360,
       height: 340,
-      sizeMode: 'auto'
+      sizeMode: 'manual'
     })
   })
 

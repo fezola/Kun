@@ -2,7 +2,7 @@ import { useCanvasSelectionStore } from '../canvas-selection-store'
 import { useCanvasShapeStore } from '../canvas-shape-store'
 import { useCanvasViewportStore } from '../canvas-viewport-store'
 import { createHtmlFrameShape } from '../canvas-types'
-import { getScreenArtifactFactory } from '../screen-artifact-bridge'
+import { getScreenArtifactFactory, getScreenCreationFactory } from '../screen-artifact-bridge'
 import { defaultDevicePresetForDesignTarget, defaultFrameSizeForDesignTarget } from '../../design-context'
 import { useDesignWorkspaceStore } from '../../design-workspace-store'
 import type { CanvasPointerEvent, CanvasToolHandler } from './tool-types'
@@ -21,25 +21,27 @@ export function createScreenTool(): CanvasToolHandler {
     cursor: 'crosshair',
 
     onPointerDown(e: CanvasPointerEvent) {
+      const creationFactory = getScreenCreationFactory()
       drawing = true
       startX = e.canvasX
       startY = e.canvasY
 
+      const designTarget = useDesignWorkspaceStore.getState().designContext.designTarget
+      const devicePreset = defaultDevicePresetForDesignTarget(designTarget)
+      clickCreateSize = defaultFrameSizeForDesignTarget(designTarget)
       const factory = getScreenArtifactFactory()
-      const artifactId = factory?.('Screen') ?? null
+      const artifactId = creationFactory ? '__screen_preview__' : factory?.('Screen') ?? null
       if (!artifactId) {
         drawing = false
         return
       }
-
-      const designTarget = useDesignWorkspaceStore.getState().designContext.designTarget
-      const devicePreset = defaultDevicePresetForDesignTarget(designTarget)
-      clickCreateSize = defaultFrameSizeForDesignTarget(designTarget)
       const shape = createHtmlFrameShape('Screen', e.canvasX, e.canvasY, artifactId, devicePreset)
+      if (creationFactory) delete shape.htmlArtifactId
       shape.width = 0
       shape.height = 0
       previewId = shape.id
-      creationUndo = addShapeForCreation(shape)
+      creationUndo = creationFactory ? null : addShapeForCreation(shape)
+      if (creationFactory) useCanvasShapeStore.getState().addShape(shape, undefined, { skipUndo: true })
       useCanvasSelectionStore.getState().select([shape.id])
     },
 
@@ -57,10 +59,27 @@ export function createScreenTool(): CanvasToolHandler {
       if (shape && shape.width < 2 && shape.height < 2) {
         useCanvasShapeStore.getState().updateShape(previewId, clickCreateSize, true)
       }
+      const finalShape = useCanvasShapeStore.getState().getShape(previewId)
+      const creationFactory = getScreenCreationFactory()
+      if (creationFactory && finalShape) {
+        useCanvasShapeStore.getState().deleteShape(previewId, { skipUndo: true })
+        const created = creationFactory({
+          name: finalShape.name || 'Screen',
+          x: finalShape.x,
+          y: finalShape.y,
+          width: finalShape.width,
+          height: finalShape.height,
+          devicePreset: finalShape.devicePreset ?? defaultDevicePresetForDesignTarget(
+            useDesignWorkspaceStore.getState().designContext.designTarget
+          ),
+          preparePreview: true
+        })
+        if (created) useCanvasSelectionStore.getState().select([created.shapeId])
+      }
 
       useCanvasViewportStore.getState().setActiveTool('select')
       useCanvasSelectionStore.getState().setSnapGuides([])
-      commitCreatedShapeUndo(creationUndo, 'create-screen')
+      if (!creationFactory) commitCreatedShapeUndo(creationUndo, 'create-screen')
       previewId = null
       creationUndo = null
     }

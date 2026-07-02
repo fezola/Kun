@@ -4,7 +4,7 @@ import {
   reconstructArtifact,
   serializeArtifactMeta
 } from './design-artifact-persistence'
-import { defaultDesignArtifactNode, type DesignArtifact } from './design-types'
+import { currentDesignArtifactVersion, defaultDesignArtifactNode, type DesignArtifact } from './design-types'
 
 describe('design artifact persistence', () => {
   it('keeps old artifact meta valid when node placement is absent', () => {
@@ -38,7 +38,16 @@ describe('design artifact persistence', () => {
       versions: [{ id: 'draft-v1', relativePath: '.kun-design/draft/v1.html', createdAt, summary: '' }],
       designMdPath: '.kun-design/draft/DESIGN.md',
       previewStatus: 'ready',
-      node: { x: 120, y: 240, width: 512, height: 384, sizeMode: 'auto', favorite: true, viewMode: 'code' },
+      node: {
+        x: 120,
+        y: 240,
+        width: 512,
+        height: 384,
+        sizeMode: 'auto',
+        favorite: true,
+        boardHidden: true,
+        viewMode: 'code'
+      },
       prototypeLinks: [
         {
           targetTitle: 'Signup',
@@ -62,6 +71,68 @@ describe('design artifact persistence', () => {
     expect(parsed?.direction).toEqual(artifact.direction)
     expect(parsed?.designMdPath).toBe('.kun-design/draft/DESIGN.md')
     expect(parsed?.previewStatus).toBe('ready')
+  })
+
+  it('keeps persisted version order while exposing the current relativePath version', () => {
+    const createdAt = '2026-06-20T00:00:00.000Z'
+    const parsed = parseArtifactMeta(
+      JSON.stringify({
+        id: 'draft',
+        kind: 'html',
+        title: 'Draft',
+        relativePath: '.kun-design/draft/v1.html',
+        createdAt,
+        updatedAt: createdAt,
+        versions: [
+          {
+            id: 'draft-v2',
+            relativePath: '.kun-design/draft/v2.html',
+            createdAt: '2026-06-20T01:00:00.000Z',
+            summary: 'Newer experiment'
+          },
+          {
+            id: 'draft-v1',
+            relativePath: '.kun-design/draft/v1.html',
+            createdAt,
+            summary: 'Selected stable version'
+          }
+        ]
+      }),
+      'draft'
+    )
+
+    expect(parsed?.versions.map((version) => version.id)).toEqual(['draft-v2', 'draft-v1'])
+    expect(parsed ? currentDesignArtifactVersion(parsed)?.summary : '').toBe('Selected stable version')
+  })
+
+  it('adds a current version entry when old meta omits the active relativePath', () => {
+    const createdAt = '2026-06-20T00:00:00.000Z'
+    const parsed = parseArtifactMeta(
+      JSON.stringify({
+        id: 'draft',
+        kind: 'html',
+        title: 'Draft',
+        relativePath: '.kun-design/draft/v3.html',
+        createdAt,
+        updatedAt: createdAt,
+        versions: [
+          {
+            id: 'draft-v2',
+            relativePath: '.kun-design/draft/v2.html',
+            createdAt,
+            summary: 'Old version'
+          }
+        ]
+      }),
+      'draft'
+    )
+
+    expect(parsed?.versions[0]).toMatchObject({
+      id: 'draft-v3',
+      relativePath: '.kun-design/draft/v3.html',
+      summary: ''
+    })
+    expect(parsed?.versions[1]?.id).toBe('draft-v2')
   })
 
   it('adds a default node when reconstructing legacy artifact folders', () => {

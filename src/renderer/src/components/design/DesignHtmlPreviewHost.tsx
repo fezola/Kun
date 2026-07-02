@@ -28,6 +28,7 @@ export type DesignHtmlPreviewWebviewElement = HTMLElement & {
 }
 
 export type DesignHtmlPreviewState = {
+  relativePath: string
   fileUrl: string
   revision: number
   renderState: DesignPreviewRenderState
@@ -127,6 +128,7 @@ export function useDesignHtmlPreview({
   const lastLoadedRevisionRef = useRef(-1)
   const zoomRef = useRef(zoom)
   const [webviewMountNonce, setWebviewMountNonce] = useState(0)
+  const [previewRelativePath, setPreviewRelativePath] = useState('')
   const [fileUrl, setFileUrl] = useState('')
   const [revision, setRevision] = useState(0)
   const [error, setError] = useState('')
@@ -153,6 +155,7 @@ export function useDesignHtmlPreview({
     const startedAt = Date.now()
 
     setFileUrl('')
+    setPreviewRelativePath('')
     setRevision(0)
     setError('')
     setRenderState('transient')
@@ -176,6 +179,7 @@ export function useDesignHtmlPreview({
           if (cancelled) return
           if (res.ok) {
             setError('')
+            setPreviewRelativePath(path)
             setFileUrl(res.fileUrl)
             cleanupWatch?.()
             cleanupWatch = startDesignHtmlPreviewWatch({
@@ -306,6 +310,7 @@ export function useDesignHtmlPreview({
   }, [applyZoomFactor, webviewMountNonce, webviewUrl, zoom])
 
   const state = useMemo<DesignHtmlPreviewState>(() => ({
+    relativePath: previewRelativePath,
     fileUrl,
     revision,
     renderState,
@@ -313,7 +318,7 @@ export function useDesignHtmlPreview({
     error,
     ready,
     webviewUrl
-  }), [error, fileUrl, hasRenderableContent, ready, renderState, revision, webviewUrl])
+  }), [error, fileUrl, hasRenderableContent, previewRelativePath, ready, renderState, revision, webviewUrl])
 
   const executeScript = useCallback((code: string): Promise<unknown> | null => {
     return executeDesignHtmlPreviewScript(webviewRef.current, code)

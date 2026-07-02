@@ -88,7 +88,7 @@ import {
 } from '../design/design-html-quality'
 import { buildImplementDesignPrompt } from '../design/design-implement-prompt'
 import { looksLikeStandaloneImageAssetPrompt } from '../design/design-image-intent'
-import { createDesignArtifactId, type DesignArtifact } from '../design/design-types'
+import { createDesignArtifactId, currentDesignArtifactVersion, type DesignArtifact } from '../design/design-types'
 import {
   defaultFrameSizeForDesignTarget,
   formatDesignSystemMarkdown,
@@ -117,6 +117,7 @@ import { snapshotCanvas } from '../design/canvas/canvas-snapshot'
 import {
   designComposerContextChips,
   designHtmlElementContextTarget,
+  resolveDesignComposerScreenFrameTarget,
   designSelectedContextLocations,
   designTargetContextChip,
   resolveDesignComposerContextTargets
@@ -2077,7 +2078,7 @@ export function Workbench(): ReactElement {
 
   const sendDesignPrompt = (
     value: string,
-    options?: { displayText?: string; source?: DesignPromptSource }
+    options?: { displayText?: string; source?: DesignPromptSource; screenShapeId?: string }
   ): void => {
     const text = value.trim()
     const source = options?.source ?? 'user'
@@ -2170,7 +2171,22 @@ export function Workbench(): ReactElement {
         selectedIds: selectedShapeIds,
         suppressedIds: designContextSuppressedIds
       })
-      const visibleTargets = elementTarget ? [elementTarget, ...baseVisibleTargets] : baseVisibleTargets
+      const explicitScreenTarget = resolveDesignComposerScreenFrameTarget({
+        artifacts: latestDesignState.artifacts,
+        canvasDocument: canvasDoc,
+        shapeId: options?.screenShapeId,
+        suppressedIds: designContextSuppressedIds
+      })
+      const visibleTargets = explicitScreenTarget
+        ? [
+            explicitScreenTarget,
+            ...baseVisibleTargets.filter((target) =>
+              target.kind !== 'html-screen-frame' || target.shape.id !== explicitScreenTarget.shape.id
+            )
+          ]
+        : elementTarget
+          ? [elementTarget, ...baseVisibleTargets]
+          : baseVisibleTargets
       const primaryTarget = visibleTargets[0] ?? null
       const isScreenTarget = primaryTarget?.kind === 'html-screen-frame'
       if (isScreenTarget) {
@@ -2193,7 +2209,8 @@ export function Workbench(): ReactElement {
         const prep = latestDesignState.prepareHtmlTurn(promptText, {
           artifactId: primaryTarget.artifact.id,
           forceNew: false,
-          activate: false
+          activate: false,
+          reusePendingInitial: true
         })
         artifactRelativePath = prep.relativePath
         basePath = prep.basePath
@@ -2269,7 +2286,7 @@ export function Workbench(): ReactElement {
           if (shape && isHtmlFrame(shape) && shape.id !== selectedFrame?.id) {
             const linked = manifestState.artifacts.find((a) => a.id === shape.htmlArtifactId)
             if (linked) {
-              const summary = linked.versions[0]?.summary?.trim()
+              const summary = currentDesignArtifactVersion(linked)?.summary?.trim()
               screenManifest.push({
                 name: shape.name,
                 width: shape.width,
@@ -4174,7 +4191,7 @@ export function Workbench(): ReactElement {
                 useCanvasSelectionStore.getState().select([shapeId])
                 // Prefer the agent's expanded screen brief over the raw user prompt.
                 const screenPrompt = brief?.trim() || userPrompt || 'Design this screen'
-                setTimeout(() => sendDesignPrompt(screenPrompt), 300)
+                sendDesignPrompt(screenPrompt, { screenShapeId: shapeId })
               }}
               onRuntimeQualityFindings={handleDesignRuntimeQualityFindings}
               onRequestQualityRepair={handleDesignQualityRepairRequest}

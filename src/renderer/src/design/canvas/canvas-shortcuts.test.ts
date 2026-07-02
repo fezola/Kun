@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { createEmptyDocument } from './canvas-types'
+import { createEmptyDocument, createHtmlFrameShape } from './canvas-types'
 import { handleCanvasKeyDown, handleCanvasKeyUp } from './canvas-shortcuts'
 import { useCanvasSelectionStore } from './canvas-selection-store'
 import { useCanvasShapeStore } from './canvas-shape-store'
@@ -51,6 +51,12 @@ function addFrameWithChild(): { frameId: string; childId: string } {
     }
   ]).affectedIds[0]
   return { frameId, childId }
+}
+
+function addHtmlFrame(): string {
+  const shape = createHtmlFrameShape('Login Screen', 0, 0, 'artifact-login', 'mobile')
+  useCanvasShapeStore.getState().addShape(shape)
+  return shape.id
 }
 
 function rootChildren(): string[] {
@@ -175,6 +181,25 @@ describe('canvas keyboard shortcuts', () => {
     })
   })
 
+  it('cmd+d does not duplicate a linked html artifact id', () => {
+    const frameId = addHtmlFrame()
+    useCanvasSelectionStore.getState().select([frameId])
+
+    handleCanvasKeyDown(eventFor('d', { metaKey: true }))
+
+    const doc = useCanvasShapeStore.getState().document
+    const cloneFrameId = Array.from(useCanvasSelectionStore.getState().selectedIds)[0]
+
+    expect(cloneFrameId).not.toBe(frameId)
+    expect(doc.objects[frameId].htmlArtifactId).toBe('artifact-login')
+    expect(doc.objects[cloneFrameId]).toMatchObject({
+      type: 'frame',
+      name: 'Login Screen copy',
+      devicePreset: 'mobile'
+    })
+    expect(doc.objects[cloneFrameId].htmlArtifactId).toBeUndefined()
+  })
+
   it('cmd+c/v pastes a copied selection subtree as one undoable change', () => {
     const { frameId, childId } = addFrameWithChild()
     useCanvasSelectionStore.getState().select([frameId])
@@ -215,6 +240,48 @@ describe('canvas keyboard shortcuts', () => {
     expect(doc.objects[pastedFrameId]).toBeDefined()
     expect(doc.objects[pastedChildId]).toBeDefined()
     expect(Array.from(useCanvasSelectionStore.getState().selectedIds)).toEqual([pastedFrameId])
+  })
+
+  it('cmd+c/v pastes linked html frames as plain frames', () => {
+    const frameId = addHtmlFrame()
+    useCanvasSelectionStore.getState().select([frameId])
+
+    expect(handleCanvasKeyDown(eventFor('c', { metaKey: true }))).toBe(true)
+    expect(handleCanvasKeyDown(eventFor('v', { metaKey: true }))).toBe(true)
+
+    const doc = useCanvasShapeStore.getState().document
+    const pastedFrameId = Array.from(useCanvasSelectionStore.getState().selectedIds)[0]
+
+    expect(pastedFrameId).not.toBe(frameId)
+    expect(doc.objects[frameId].htmlArtifactId).toBe('artifact-login')
+    expect(doc.objects[pastedFrameId]).toMatchObject({
+      type: 'frame',
+      name: 'Login Screen copy',
+      devicePreset: 'mobile',
+      x: 24,
+      y: 24
+    })
+    expect(doc.objects[pastedFrameId].htmlArtifactId).toBeUndefined()
+  })
+
+  it('cmd+x/v keeps the html artifact link when moving a linked frame', () => {
+    const frameId = addHtmlFrame()
+    useCanvasSelectionStore.getState().select([frameId])
+
+    expect(handleCanvasKeyDown(eventFor('x', { metaKey: true }))).toBe(true)
+    expect(useCanvasShapeStore.getState().document.objects[frameId]).toBeUndefined()
+    expect(handleCanvasKeyDown(eventFor('v', { metaKey: true }))).toBe(true)
+
+    const doc = useCanvasShapeStore.getState().document
+    const pastedFrameId = Array.from(useCanvasSelectionStore.getState().selectedIds)[0]
+
+    expect(pastedFrameId).not.toBe(frameId)
+    expect(doc.objects[pastedFrameId]).toMatchObject({
+      type: 'frame',
+      name: 'Login Screen copy',
+      devicePreset: 'mobile',
+      htmlArtifactId: 'artifact-login'
+    })
   })
 
   it('cmd+x cuts editable roots to the shape clipboard as one undoable change', () => {

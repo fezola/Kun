@@ -71,6 +71,22 @@ export function groupDesignArtifacts(
   return grouped
 }
 
+export function collectAgentDrawingArtifactIds(
+  artifacts: readonly DesignArtifact[],
+  grouped: Pick<GroupedDesignArtifacts, 'directions' | 'archivedDirections'>,
+  screenLinkedIds: ReadonlySet<string>
+): Set<string> {
+  const ids = new Set<string>()
+  for (const direction of [...grouped.directions, ...grouped.archivedDirections]) {
+    for (const artifact of direction.artifacts) ids.add(artifact.id)
+  }
+  for (const id of screenLinkedIds) ids.add(id)
+  for (const artifact of artifacts) {
+    if (artifact.kind === 'html' && artifact.node?.boardHidden) ids.add(artifact.id)
+  }
+  return ids
+}
+
 export function canImplementDesignArtifact(
   artifact: DesignArtifact | null | undefined
 ): artifact is DesignArtifact & { kind: 'html' } {

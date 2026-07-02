@@ -6,7 +6,7 @@ import { useCanvasSelectionStore } from './canvas-selection-store'
 import { useCanvasViewportStore } from './canvas-viewport-store'
 import { useDesignSystemStore } from './design-system-store'
 import { useDesignWorkspaceStore } from '../design-workspace-store'
-import { createEmptyDocument, type CanvasShape } from './canvas-types'
+import { createEmptyDocument, createHtmlFrameShape, type CanvasShape } from './canvas-types'
 import { createDefaultShape, shapeGeometry, type Rect } from './canvas-types'
 import { takeLastLintFindings } from './design-lint'
 import { resolveTokenPatch } from './design-system-types'
@@ -357,6 +357,19 @@ describe('define-component + instantiate', () => {
     const r = executeOps([{ op: 'instantiate', name: 'Nope', at: { x: 0, y: 0 } }])
     expect(r.ok).toBe(false)
     expect(r.errors[0].code).toBe('INVALID_OP')
+  })
+
+  it('does not copy linked HTML artifact ids into component instances', () => {
+    const frame = createHtmlFrameShape('Linked screen', 0, 0, 'artifact-login', 'mobile')
+    useCanvasShapeStore.getState().addShape(frame)
+    const frameId = frame.id
+    executeOps([{ op: 'define-component', name: 'LinkedScreenCard', fromId: frameId, slots: [] }])
+
+    const r = executeOps([{ op: 'instantiate', name: 'LinkedScreenCard', at: { x: 500, y: 0 } }])
+
+    expect(r.ok).toBe(true)
+    expect(getShape(frameId)?.htmlArtifactId).toBe('artifact-login')
+    expect(getShape(r.affectedIds[0])?.htmlArtifactId).toBeUndefined()
   })
 })
 

@@ -77,6 +77,25 @@ describe('buildHtmlSiblingManifest', () => {
     })
   })
 
+  it('uses the summary for the artifact current relativePath, not just versions[0]', () => {
+    const artifacts = [
+      htmlArtifact({
+        id: 'a',
+        title: 'Home',
+        relativePath: '.kun-design/a/v1.html',
+        versions: [
+          { id: 'a-v2', relativePath: '.kun-design/a/v2.html', createdAt: 'x2', summary: 'Newer experiment' },
+          { id: 'a-v1', relativePath: '.kun-design/a/v1.html', createdAt: 'x1', summary: 'Selected stable draft' }
+        ]
+      })
+    ]
+
+    expect(buildHtmlSiblingManifest(artifacts, null)[0]).toMatchObject({
+      htmlPath: '.kun-design/a/v1.html',
+      summary: 'Selected stable draft'
+    })
+  })
+
   it('skips non-html artifacts and respects the limit', () => {
     const artifacts = [
       htmlArtifact({ id: 'a' }),

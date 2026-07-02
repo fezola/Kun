@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { shapeGuestExtraction } from './design-token-extract'
+import { shapeGuestExtraction, TOKEN_EXTRACT_GUEST_SRC } from './design-token-extract'
 
 describe('shapeGuestExtraction', () => {
   it('tags colors with inferred roles and keeps source order', () => {
@@ -45,5 +45,11 @@ describe('shapeGuestExtraction', () => {
     })
     expect(out.colors).toHaveLength(1)
     expect(out.colors[0].role).toBe('primary')
+  })
+
+  it('keeps guest extraction failures inside the webview script', () => {
+    const execute = new Function(`return ${TOKEN_EXTRACT_GUEST_SRC}`)
+    expect(() => execute()).not.toThrow()
+    expect(execute()).toBeNull()
   })
 })

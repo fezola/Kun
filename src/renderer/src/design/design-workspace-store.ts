@@ -10,7 +10,12 @@ import {
 } from './design-artifact-persistence'
 import { deleteDocumentDir, flushDocumentsIndex, persistDocumentsIndex } from './design-document-persistence'
 import { defaultPreviewNodeSizeForDesignTarget, hashDesignSystem, normalizeDesignTarget } from './design-context'
-import { createDesignArtifactId, createDesignDocumentId, defaultDesignArtifactNode } from './design-types'
+import {
+  createDesignArtifactId,
+  createDesignDocumentId,
+  currentDesignArtifactVersion,
+  defaultDesignArtifactNode
+} from './design-types'
 import type { DesignArtifact, DesignDocument } from './design-types'
 import type { DesignWorkspaceState } from './design-workspace-store-types'
 import {
@@ -194,6 +199,8 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
         applyToActiveDoc(
           state,
           (artifacts) => {
+            const existingIndex = artifacts.findIndex((item) => item.id === artifact.id)
+            const existing = existingIndex >= 0 ? artifacts[existingIndex] : undefined
             const withDefaults =
               artifact.kind === 'html'
                 ? { ...artifact, designMdPath: artifact.designMdPath ?? artifactDesignMdPathOf(artifact.relativePath) }
@@ -201,14 +208,16 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
             const defaultNode =
               withDefaults.kind === 'html'
                 ? {
-                    ...defaultDesignArtifactNode(artifacts.length),
+                    ...defaultDesignArtifactNode(existingIndex >= 0 ? existingIndex : artifacts.length),
                     ...defaultPreviewNodeSizeForDesignTarget(state.designContext.designTarget)
                   }
-                : defaultDesignArtifactNode(artifacts.length)
+                : defaultDesignArtifactNode(existingIndex >= 0 ? existingIndex : artifacts.length)
             const nextArtifact = withDefaults.node
               ? withDefaults
+              : existing?.node
+                ? { ...withDefaults, node: existing.node }
               : { ...withDefaults, node: defaultNode }
-            return artifacts.some((item) => item.id === artifact.id)
+            return existing
               ? artifacts.map((item) => (item.id === artifact.id ? nextArtifact : item))
               : [nextArtifact, ...artifacts]
           },
@@ -392,6 +401,7 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
       )
       const updated = get().artifacts.find((item) => item.id === artifactId)
       if (updated) persistArtifactMeta(get().workspaceRoot, updated)
+      persistIndex()
     },
 
     duplicateArtifact: async (artifactId) => {
@@ -420,8 +430,18 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
         .writeWorkspaceFile({ path: relativePath, workspaceRoot, content: read.content })
         .catch(() => null)
       if (!write || !write.ok) return
+      const sourceDesignMdPath = source.designMdPath ?? artifactDesignMdPathOf(source.relativePath)
+      const designNotes = await window.kunGui
+        .readWorkspaceFile({ path: sourceDesignMdPath, workspaceRoot })
+        .catch(() => null)
+      if (designNotes?.ok) {
+        await window.kunGui
+          .writeWorkspaceFile({ path: designMdPath, workspaceRoot, content: designNotes.content })
+          .catch(() => null)
+      }
       const sourceNode =
         source.node ?? defaultDesignArtifactNode(state.artifacts.findIndex((item) => item.id === source.id))
+      const sourceSummary = currentDesignArtifactVersion(source)?.summary ?? ''
       get().upsertArtifact({
         id: copyId,
         kind: 'html',
@@ -429,10 +449,10 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
         relativePath,
         createdAt,
         updatedAt: createdAt,
-        versions: [{ id: `${copyId}-v1`, relativePath, createdAt, summary: source.versions[0]?.summary ?? '' }],
+        versions: [{ id: `${copyId}-v1`, relativePath, createdAt, summary: sourceSummary }],
         designMdPath,
         previewStatus: 'ready',
-        node: { ...sourceNode, x: sourceNode.x + 44, y: sourceNode.y + 44 }
+        node: { ...sourceNode, x: sourceNode.x + 44, y: sourceNode.y + 44, boardHidden: false }
       })
     },
 
@@ -443,12 +463,18 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
             if (item.id !== artifactId) return item
             const version = item.versions.find((candidate) => candidate.id === versionId)
             if (!version) return item
-            return { ...item, relativePath: version.relativePath, updatedAt: version.createdAt }
+            return {
+              ...item,
+              relativePath: version.relativePath,
+              updatedAt: version.createdAt,
+              ...(item.kind === 'html' ? { previewStatus: 'pending' as const } : {})
+            }
           })
         )
       )
       const updated = get().artifacts.find((item) => item.id === artifactId)
       if (updated) persistArtifactMeta(get().workspaceRoot, updated)
+      persistIndex()
     },
 
     setDesignIntentMode: (mode) => set({ designIntentMode: mode }),
@@ -509,6 +535,38 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
       // Only HTML artifacts can be iterated; a canvas/other active artifact starts a fresh draft.
       const activeHtml = !options.forceNew && target?.kind === 'html' ? target : null
       const createdAt = new Date().toISOString()
+
+      if (
+        activeHtml &&
+        options.reusePendingInitial &&
+        activeHtml.previewStatus === 'pending' &&
+        activeHtml.versions.length === 1 &&
+        activeHtml.versions[0]?.relativePath === activeHtml.relativePath
+      ) {
+        const designMdPath = activeHtml.designMdPath ?? artifactDesignMdPathOf(activeHtml.relativePath)
+        set((state) =>
+          applyToActiveDoc(state, (artifacts) =>
+            artifacts.map((item) =>
+              item.id === activeHtml.id
+                ? {
+                    ...item,
+                    updatedAt: createdAt,
+                    designMdPath,
+                    previewStatus: 'pending' as const,
+                    versions: item.versions.map((version) =>
+                      version.id === activeHtml.versions[0]?.id ? { ...version, summary: text } : version
+                    )
+                  }
+                : item
+            )
+          )
+        )
+        if (options.activate !== false) get().setActiveArtifact(activeHtml.id)
+        const updated = get().artifacts.find((item) => item.id === activeHtml.id)
+        if (updated) persistArtifactMeta(get().workspaceRoot, updated)
+        persistIndex()
+        return { artifactId: activeHtml.id, relativePath: activeHtml.relativePath, designMdPath }
+      }
 
       if (activeHtml) {
         const versionN = activeHtml.versions.length + 1

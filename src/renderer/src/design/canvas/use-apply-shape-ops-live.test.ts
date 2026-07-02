@@ -6,9 +6,10 @@ import {
   latestGeneratedImageRelativePathForTurn,
   looksLikeExistingCanvasImageEditRequest,
   replayActiveCanvasTurn,
-  resolveGeneratedImageFallbackTarget
+  resolveGeneratedImageFallbackTarget,
+  takeNextReadyScreenGeneration
 } from './use-apply-shape-ops-live'
-import { createDefaultShape, createEmptyDocument } from './canvas-types'
+import { createDefaultShape, createEmptyDocument, createHtmlFrameShape } from './canvas-types'
 
 describe('replayActiveCanvasTurn', () => {
   it('replays existing tool blocks and streaming text when enabled mid-turn', () => {
@@ -337,5 +338,61 @@ describe('generated image canvas fallback helpers', () => {
         userText: '换个颜色的鞋'
       })
     ).toBeNull()
+  })
+})
+
+describe('screen generation queue helpers', () => {
+  it('waits while a chat turn is active without consuming the queue', () => {
+    const document = createEmptyDocument()
+    const frame = createHtmlFrameShape('Home', 0, 0, 'artifact-home', 'desktop')
+    document.objects[frame.id] = frame
+    const queue = [{ shapeId: frame.id, userPrompt: 'make a home screen' }]
+
+    expect(takeNextReadyScreenGeneration({
+      pendingScreens: queue,
+      document,
+      currentTurnId: 'turn-running'
+    })).toBeNull()
+    expect(queue).toHaveLength(1)
+  })
+
+  it('skips deleted or non-html frames and returns the next live html screen', () => {
+    const document = createEmptyDocument()
+    const plainFrame = createDefaultShape('frame', 0, 0)
+    const htmlFrame = createHtmlFrameShape('Settings', 0, 0, 'artifact-settings', 'desktop')
+    document.objects[plainFrame.id] = plainFrame
+    document.objects[htmlFrame.id] = htmlFrame
+    const queue = [
+      { shapeId: 'deleted-screen', userPrompt: 'deleted' },
+      { shapeId: plainFrame.id, userPrompt: 'plain frame' },
+      { shapeId: htmlFrame.id, userPrompt: 'settings', brief: 'Settings screen' }
+    ]
+
+    expect(takeNextReadyScreenGeneration({
+      pendingScreens: queue,
+      document,
+      currentTurnId: null
+    })).toEqual({ shapeId: htmlFrame.id, userPrompt: 'settings', brief: 'Settings screen' })
+    expect(queue).toEqual([])
+  })
+
+  it('skips html frames whose artifact link no longer exists', () => {
+    const document = createEmptyDocument()
+    const removedArtifactFrame = createHtmlFrameShape('Deleted', 0, 0, 'artifact-deleted', 'desktop')
+    const liveArtifactFrame = createHtmlFrameShape('Live', 0, 0, 'artifact-live', 'desktop')
+    document.objects[removedArtifactFrame.id] = removedArtifactFrame
+    document.objects[liveArtifactFrame.id] = liveArtifactFrame
+    const queue = [
+      { shapeId: removedArtifactFrame.id, userPrompt: 'deleted' },
+      { shapeId: liveArtifactFrame.id, userPrompt: 'live' }
+    ]
+
+    expect(takeNextReadyScreenGeneration({
+      pendingScreens: queue,
+      document,
+      currentTurnId: null,
+      htmlArtifactIds: new Set(['artifact-live'])
+    })).toEqual({ shapeId: liveArtifactFrame.id, userPrompt: 'live' })
+    expect(queue).toEqual([])
   })
 })

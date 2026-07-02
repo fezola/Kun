@@ -1,6 +1,5 @@
-import { memo, useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { Brush, Check, Monitor, PenLine } from 'lucide-react'
-import { useCanvasShapeStore } from '../../../../design/canvas/canvas-shape-store'
 import type { CanvasShape } from '../../../../design/canvas/canvas-types'
 import type { DesignHtmlElementContext } from '../../../../design/design-composer-context'
 import { inferDesignArtifactFoundationRole } from '../../../../design/design-types'
@@ -21,18 +20,18 @@ import { HtmlFrameQualityControl } from './HtmlFrameQualityControl'
 import {
   AI_CURSOR_TTL_MS,
   AI_SECTION_QUERY,
-  FRAME_AUTO_GROW_THRESHOLD,
-  HTML_FRAME_CONTENT_SIZE_QUERY,
-  buildHtmlFrameScrollbarSuppressionScript,
-  htmlFrameAllowsWidthAutoGrow,
   htmlFrameDrawingActive,
   htmlFrameOverlayPointerEvents,
-  htmlFrameShouldApplyScrollbarSuppression,
+  htmlFramePreviewAsyncEpochMatches,
+  htmlFrameShouldClearElementContextOnEditingChange,
+  htmlFrameShouldCropVisualHeight,
+  htmlFrameShouldPromotePreviewToReady,
   htmlFrameVisualCanvasHeight,
   htmlFrameWebviewPartition,
-  resolveHtmlFrameMeasurementDecision,
-  shouldAutoResizeHtmlFrame
+  shouldAutoResizeHtmlFrame,
+  type HtmlFramePreviewAsyncEpoch
 } from './html-frame-helpers'
+import { useHtmlFrameAutoSize } from './use-html-frame-auto-size'
 type ScreenOverlayProps = {
   shape: CanvasShape
   workspaceRoot: string
@@ -80,16 +79,14 @@ function ScreenOverlayInner({
   const [aiCursor, setAiCursor] = useState<HtmlFrameAiCursor | null>(null)
   const aiFadeTimerRef = useRef<number>(0)
   const firstRevisionRef = useRef<number | null>(null)
+  const aiCursorFileUrlRef = useRef('')
   const qualitySignatureRef = useRef('')
-  const measurementTimersRef = useRef<number[]>([])
+  const latestEditingRef = useRef(editing)
+  const onUseElementAsContextRef = useRef(onUseElementAsContext)
+  const previewAsyncEpochRef = useRef<HtmlFramePreviewAsyncEpoch | null>(null)
   const [qualityChecked, setQualityChecked] = useState(false)
   const [qualityFindings, setQualityFindings] = useState<DesignHtmlQualityFinding[]>([])
   const [qualityDetailsOpen, setQualityDetailsOpen] = useState(false)
-  const [measuredContentSize, setMeasuredContentSize] = useState<{
-    width: number
-    height: number
-  } | null>(null)
-  const [suppressDocumentScrollbars, setSuppressDocumentScrollbars] = useState(false)
   const artifact = useDesignWorkspaceStore((s) =>
     s.artifacts.find((a) => a.id === shape.htmlArtifactId)
   )
@@ -143,6 +140,45 @@ function ScreenOverlayInner({
     onError: reportPreviewError,
     onRevision: clearPreviewError
   })
+  const previewAsyncEpoch = useMemo<HtmlFramePreviewAsyncEpoch | null>(() => {
+    if (!artifact?.id || artifactKind !== 'html' || !artifactRelativePath || !preview.webviewUrl) return null
+    if (preview.relativePath !== artifactRelativePath) return null
+    return {
+      shapeId: shape.id,
+      artifactId: artifact.id,
+      artifactRelativePath,
+      previewWebviewUrl: preview.webviewUrl,
+      previewRevision: preview.revision,
+      webviewMountNonce
+    }
+  }, [
+    artifact?.id,
+    artifactKind,
+    artifactRelativePath,
+    preview.relativePath,
+    preview.revision,
+    preview.webviewUrl,
+    shape.id,
+    webviewMountNonce
+  ])
+  const { measuredContentSize } = useHtmlFrameAutoSize({
+    shape,
+    artifact,
+    artifactKind,
+    foundationRole,
+    autoResizeEnabled,
+    previewWebviewUrl: preview.webviewUrl,
+    previewRevision: preview.revision,
+    webview,
+    webviewMountNonce,
+    executeScript
+  })
+  useEffect(() => {
+    onUseElementAsContextRef.current = onUseElementAsContext
+  }, [onUseElementAsContext])
+  useEffect(() => {
+    previewAsyncEpochRef.current = previewAsyncEpoch
+  }, [previewAsyncEpoch])
   const previewError = localPreviewError || preview.error
   const handleDoubleClick = useCallback(
     (e: React.MouseEvent) => {
@@ -160,6 +196,7 @@ function ScreenOverlayInner({
       const x = rect.width > 0 ? ((event.clientX - rect.left) / rect.width) * canvasWidth : 0
       const y = rect.height > 0 ? ((event.clientY - rect.top) / rect.height) * canvasHeight : 0
       const selectionQuery = executeScript(`(() => {
+        try {
           const x = ${JSON.stringify(x)}
           const y = ${JSON.stringify(y)}
           const escapeCss = (value) => {
@@ -206,6 +243,12 @@ function ScreenOverlayInner({
               height: Math.round(bounds.height)
             }
           }
+        } catch (error) {
+          return {
+            ok: false,
+            message: error instanceof Error ? error.message : String(error)
+          }
+        }
         })()`)
       if (!selectionQuery) return
       void selectionQuery
@@ -268,8 +311,6 @@ function ScreenOverlayInner({
   useEffect(() => {
     setLocalPreviewError('')
     setSelectedElementRect(null)
-    setMeasuredContentSize(null)
-    setSuppressDocumentScrollbars(false)
   }, [artifact?.id, artifact?.relativePath, shape.id])
   useEffect(() => {
     qualitySignatureRef.current = ''
@@ -281,16 +322,29 @@ function ScreenOverlayInner({
     if (!active || interactive) setQualityDetailsOpen(false)
   }, [active, interactive])
   // Leaving 修改 mode drops the picked element + its AI context so the rail clears.
+  // A non-editing frame mounting must not clear another frame's active element
+  // context, so only clear on an actual editing -> not-editing transition.
   useEffect(() => {
-    if (editing) return
+    const wasEditing = latestEditingRef.current
+    latestEditingRef.current = editing
+    if (!htmlFrameShouldClearElementContextOnEditingChange({ wasEditing, editing })) return
     setSelectedElementRect(null)
-    onUseElementAsContext?.(null)
-  }, [editing, onUseElementAsContext])
+    onUseElementAsContextRef.current?.(null)
+  }, [editing])
+  useEffect(
+    () => () => {
+      if (latestEditingRef.current) onUseElementAsContextRef.current?.(null)
+    },
+    []
+  )
   const queryAiCursor = useCallback(() => {
+    const epoch = previewAsyncEpochRef.current
+    if (!epoch) return
     const query = executeScript(AI_SECTION_QUERY)
     if (!query) return
     void query
       .then((value) => {
+        if (!htmlFramePreviewAsyncEpochMatches(epoch, previewAsyncEpochRef.current)) return
         if (!value || typeof value !== 'object') return
         const v = value as Record<string, unknown>
         if (
@@ -320,7 +374,14 @@ function ScreenOverlayInner({
   // the cursor onto it. A static design never bumps past the baseline → no cursor.
   useEffect(() => {
     if (!preview.fileUrl) {
+      aiCursorFileUrlRef.current = ''
       firstRevisionRef.current = null
+      setAiCursor(null)
+      return
+    }
+    if (aiCursorFileUrlRef.current !== preview.fileUrl) {
+      aiCursorFileUrlRef.current = preview.fileUrl
+      firstRevisionRef.current = preview.revision
       setAiCursor(null)
       return
     }
@@ -345,118 +406,26 @@ function ScreenOverlayInner({
   // This keeps the transparent generating surface up for the whole write so the
   // canvas updates live without an opaque white frame appearing mid-stream.
   useEffect(() => {
-    if (!artifact?.id || artifact.previewStatus !== 'pending') return
-    if (preview.renderState !== 'renderable' || drawingActive) return
+    if (!artifact?.id) return
+    if (!htmlFrameShouldPromotePreviewToReady({
+      previewStatus: artifact.previewStatus,
+      previewRenderState: preview.renderState,
+      drawingActive,
+      artifactRelativePath,
+      previewRelativePath: preview.relativePath
+    })) {
+      return
+    }
     setArtifactPreviewStatus(artifact.id, 'ready')
-  }, [artifact?.id, artifact?.previewStatus, preview.renderState, drawingActive, setArtifactPreviewStatus])
-
-  useEffect(() => {
-    if (!preview.webviewUrl) return
-    const shouldSuppressScrollbars = htmlFrameShouldApplyScrollbarSuppression({
-      autoResizeEnabled,
-      suppressScrollbars: suppressDocumentScrollbars
-    })
-    void executeScript(
-      buildHtmlFrameScrollbarSuppressionScript(shouldSuppressScrollbars)
-    )?.catch(() => undefined)
-  }, [autoResizeEnabled, executeScript, preview.revision, suppressDocumentScrollbars, webviewMountNonce, preview.webviewUrl])
-
-  useEffect(() => {
-    if (autoResizeEnabled) return
-    setSuppressDocumentScrollbars(false)
-  }, [autoResizeEnabled])
-
-  const measureContentSize = useCallback((): void => {
-    if (!artifact?.id || artifactKind !== 'html') return
-    const measurement = executeScript(HTML_FRAME_CONTENT_SIZE_QUERY)
-    if (!measurement) return
-    void measurement
-      .then((value) => {
-        const decision = resolveHtmlFrameMeasurementDecision(value)
-        if (!decision) return
-        const store = useCanvasShapeStore.getState()
-        const current = store.document.objects[shape.id]
-        if (!current) return
-        // Track the measured content height in BOTH directions. A grow-only rule
-        // would leave the frame stuck at the tallest intermediate height ever seen
-        // while the agent streamed the HTML, so once the final (shorter) layout
-        // lands the frame keeps the leftover space as a big white band below the
-        // content. Follow the real content height rather than grow-only history.
-        const { nextWidth, nextHeight, suppressScrollbars } = decision
-        const shouldSuppressScrollbars = htmlFrameShouldApplyScrollbarSuppression({
-          autoResizeEnabled,
-          suppressScrollbars
-        })
-        setMeasuredContentSize({ width: nextWidth, height: nextHeight })
-        setSuppressDocumentScrollbars(shouldSuppressScrollbars)
-        // A <webview> navigation replaces the guest document, so an already-true
-        // React state value is not enough to keep the injected style alive across
-        // streamed file reloads. Apply it to the CURRENT document immediately after
-        // every measurement; the state/effect path still covers explicit toggles.
-        void executeScript(
-          buildHtmlFrameScrollbarSuppressionScript(shouldSuppressScrollbars)
-        )?.catch(() => undefined)
-        if (!autoResizeEnabled) return
-        const widthChanged =
-          htmlFrameAllowsWidthAutoGrow(foundationRole) &&
-          Math.abs(nextWidth - current.width) > FRAME_AUTO_GROW_THRESHOLD
-        const heightChanged = Math.abs(nextHeight - current.height) > FRAME_AUTO_GROW_THRESHOLD
-        if (!widthChanged && !heightChanged) return
-        const patch = {
-          ...(widthChanged ? { width: nextWidth } : {}),
-          ...(heightChanged ? { height: nextHeight } : {})
-        }
-        store.updateShape(shape.id, patch, true)
-        useDesignWorkspaceStore.getState().updateArtifactNode(artifact.id, {
-          x: Math.round(current.x),
-          y: Math.round(current.y),
-          width: widthChanged ? nextWidth : Math.round(current.width),
-          height: heightChanged ? nextHeight : Math.round(current.height),
-          sizeMode: 'auto',
-          viewMode: artifact.node?.viewMode ?? 'preview'
-        })
-      })
-      .catch(() => undefined)
   }, [
     artifact?.id,
-    artifact?.node?.sizeMode,
-    artifact?.node?.viewMode,
     artifact?.previewStatus,
-    artifactKind,
-    autoResizeEnabled,
-    executeScript,
-    foundationRole,
-    parallelState?.status,
-    shape.id
+    artifactRelativePath,
+    preview.relativePath,
+    preview.renderState,
+    drawingActive,
+    setArtifactPreviewStatus
   ])
-
-  const queueContentMeasurement = useCallback((): void => {
-    for (const timer of measurementTimersRef.current) window.clearTimeout(timer)
-    measurementTimersRef.current = [180, 700, 1400].map((delay) =>
-      window.setTimeout(measureContentSize, delay)
-    )
-  }, [measureContentSize])
-
-  useEffect(
-    () => () => {
-      for (const timer of measurementTimersRef.current) window.clearTimeout(timer)
-      measurementTimersRef.current = []
-    },
-    []
-  )
-
-  useEffect(() => {
-    if (!preview.webviewUrl) return
-    const wv = webview
-    if (!wv) return
-    wv.addEventListener('dom-ready', queueContentMeasurement)
-    wv.addEventListener('did-finish-load', queueContentMeasurement)
-    queueContentMeasurement()
-    return () => {
-      wv.removeEventListener('dom-ready', queueContentMeasurement)
-      wv.removeEventListener('did-finish-load', queueContentMeasurement)
-    }
-  }, [canvasHeight, canvasWidth, queueContentMeasurement, preview.revision, webview, webviewMountNonce, preview.webviewUrl])
 
   useEffect(() => {
     if (!preview.webviewUrl || artifactKind !== 'html' || !artifact?.id || !artifactRelativePath) return
@@ -468,11 +437,14 @@ function ScreenOverlayInner({
       window.clearTimeout(timer)
       timer = window.setTimeout(() => {
         if (cancelled) return
+        const epoch = previewAsyncEpochRef.current
+        if (!epoch) return
         const audit = executeScript(buildDesignRuntimeQualityAuditScript())
         if (!audit) return
         void audit
           .then((value) => {
             if (cancelled) return
+            if (!htmlFramePreviewAsyncEpochMatches(epoch, previewAsyncEpochRef.current)) return
             const findings = normalizeRuntimeQualityFindings(value)
             setQualityChecked(true)
             setQualityFindings(findings)
@@ -512,7 +484,8 @@ function ScreenOverlayInner({
     executeScript,
     webview,
     webviewMountNonce,
-    preview.webviewUrl
+    preview.webviewUrl,
+    preview.revision
   ])
 
   if (screenWidth < 20 || screenHeight < 20) return <></>
@@ -529,7 +502,7 @@ function ScreenOverlayInner({
   const visualCanvasHeight = htmlFrameVisualCanvasHeight(
     canvasHeight,
     measuredContentSize?.height ?? null,
-    transparentGeneratingSurface
+    htmlFrameShouldCropVisualHeight({ transparentGeneratingSurface, autoResizeEnabled })
   )
   const visualScreenHeight = (visualCanvasHeight / canvasHeight) * screenHeight
   return (

@@ -1,4 +1,8 @@
-import type { DesignArtifact } from './design-types'
+import {
+  currentDesignArtifactVersion,
+  designArtifactVersionLabel,
+  type DesignArtifact
+} from './design-types'
 import { formatDesignContextLines, type DesignContext } from './design-context'
 
 type SelectedContextLine = {
@@ -25,8 +29,8 @@ function originalBrief(artifact: DesignArtifact): string {
   return fallback(artifact.versions[artifact.versions.length - 1]?.summary, artifact.title)
 }
 
-function versionLabel(artifact: DesignArtifact): string {
-  return `v${Math.max(1, artifact.versions.length)}`
+function currentVersionLabel(artifact: DesignArtifact): string {
+  return designArtifactVersionLabel(currentDesignArtifactVersion(artifact), Math.max(1, artifact.versions.length))
 }
 
 function formatSelectedContext(context: readonly SelectedContextLine[] | undefined): string {
@@ -48,12 +52,12 @@ function formatPersistedDesignContext(ctx: DesignContext | undefined): string {
 export function buildDesignArtifactMarkdown(options: BuildDesignArtifactMarkdownOptions): string {
   const { artifact, designMdPath, currentTurn } = options
   const updatedAt = options.updatedAt ?? new Date().toISOString()
-  const currentVersion = artifact.versions[0]
+  const currentVersion = currentDesignArtifactVersion(artifact)
   const versionRows =
     artifact.versions.length > 0
       ? artifact.versions
           .map((version, index) => {
-            const label = `v${artifact.versions.length - index}`
+            const label = designArtifactVersionLabel(version, Math.max(1, artifact.versions.length - index))
             return `- ${label}: \`${version.relativePath}\` - ${fallback(version.summary, 'No summary')}`
           })
           .join('\n')
@@ -64,7 +68,7 @@ export function buildDesignArtifactMarkdown(options: BuildDesignArtifactMarkdown
 - Artifact id: \`${artifact.id}\`
 - Source HTML path: \`${artifact.relativePath}\`
 - Design notes file: \`${designMdPath}\`
-- Latest version: ${versionLabel(artifact)}${currentVersion ? ` (\`${currentVersion.relativePath}\`)` : ''}
+- Current version: ${currentVersionLabel(artifact)}${currentVersion ? ` (\`${currentVersion.relativePath}\`)` : ''}
 - Updated: ${updatedAt}
 
 ## Original Brief
