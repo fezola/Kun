@@ -1,13 +1,12 @@
 /**
  * Feature flags for the design workspace.
  *
- * `DESIGN_CANVAS_ENABLED` gates the Figma-style SVG design canvas
- * (`kind: 'canvas'` artifacts — the ShapeOps editor, the canvas layers panel,
- * the canvas section in the sidebar, and the "新建画布" entry point). It is
- * hidden while the canvas is still under development; all of the underlying
- * code is intact, so flipping this back to `true` restores the feature.
+ * Design mode now centers on the unified Figma-style board: HTML screen frames
+ * are normal canvas frames linked to `kind: 'html'` artifacts, and every HTML
+ * preview surface shares the same webview preview host.
  *
- * The HTML design flow (DesignProjectCanvas, artifact previews, implement →
- * code) is unaffected by this flag.
+ * `DESIGN_CANVAS_ENABLED` is kept only as a compatibility gate for older
+ * sidebar/canvas entry points that still check it. It must not be used to bring
+ * back the legacy standalone project preview surface.
  */
 export const DESIGN_CANVAS_ENABLED: boolean = false

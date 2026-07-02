@@ -1,7 +1,6 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type Ref } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { AlertTriangle, ArrowLeft, CheckCircle2, ExternalLink, Layers3, Play, Sparkles, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { startDesignHtmlPreviewWatch } from '../../../design/design-preview-file'
 import {
   buildPrototypeNavigationCaptureScript,
   extractPrototypeHashRouteHref,
@@ -18,10 +17,7 @@ import {
   shouldInitializePrototypePlayerCurrentId
 } from '../../../design/prototype-player'
 import type { DesignArtifact } from '../../../design/design-types'
-
-type WebviewElement = HTMLElement & {
-  executeJavaScript?: (code: string) => Promise<unknown>
-}
+import { useDesignHtmlPreview } from '../DesignHtmlPreviewHost'
 
 type WebviewNavigateEvent = Event & {
   url?: string
@@ -64,14 +60,8 @@ function PrototypePlayerOverlayInner({
   const { t } = useTranslation('common')
   const [currentId, setCurrentId] = useState<string | null>(null)
   const [history, setHistory] = useState<string[]>([])
-  const [fileUrl, setFileUrl] = useState('')
-  const [revision, setRevision] = useState(0)
-  const [error, setError] = useState('')
   const [missingHref, setMissingHref] = useState('')
-  const webviewRef = useRef<WebviewElement | null>(null)
   const wasOpenRef = useRef(false)
-  const webviewReadyRef = useRef(false)
-  const loadedWebviewUrlRef = useRef('')
 
   const initialCurrentId = useMemo(
     () => (open ? resolveInitialPrototypeArtifactId(artifacts, initialArtifactId) : null),
@@ -106,6 +96,12 @@ function PrototypePlayerOverlayInner({
     [viewportFrame]
   )
   const viewportLabel = `${viewportFrame.width} x ${viewportFrame.height}`
+  const preview = useDesignHtmlPreview({
+    workspaceRoot,
+    relativePath: currentArtifact?.relativePath,
+    enabled: Boolean(open && workspaceRoot && currentArtifact),
+    partition: 'kun-proto'
+  })
 
   useEffect(() => {
     if (!open) {
@@ -127,45 +123,6 @@ function PrototypePlayerOverlayInner({
     setMissingHref('')
   }, [artifacts, currentId, initialCurrentId, open])
 
-  useEffect(() => {
-    let cancelled = false
-    let cleanupWatch: (() => void) | null = null
-    setFileUrl('')
-    setRevision(0)
-    setError('')
-
-    if (!open || !workspaceRoot || !currentArtifact) return
-    if (typeof window.kunGui?.authorizeWritePrototype !== 'function') {
-      setError(t('designPrototypeAuthorizeMissing', 'Prototype preview is unavailable.'))
-      return
-    }
-
-    void window.kunGui
-      .authorizeWritePrototype({ path: currentArtifact.relativePath, workspaceRoot })
-      .then((res) => {
-        if (cancelled) return
-        if (!res.ok) {
-          setError(res.message)
-          return
-        }
-        setFileUrl(res.fileUrl)
-        cleanupWatch = startDesignHtmlPreviewWatch({
-          workspaceRoot,
-          path: currentArtifact.relativePath,
-          onRevision: setRevision,
-          onError: setError
-        })
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err))
-      })
-
-    return () => {
-      cancelled = true
-      cleanupWatch?.()
-    }
-  }, [currentArtifact, open, t, workspaceRoot])
-
   const goTo = useCallback(
     (artifactId: string): void => {
       const state = { currentId: activeCurrentId, history, missingHref }
@@ -185,17 +142,13 @@ function PrototypePlayerOverlayInner({
     setCurrentId(next.currentId)
   }, [activeCurrentId, history, missingHref])
 
-  const webviewUrl = fileUrl ? `${fileUrl}${fileUrl.includes('?') ? '&' : '?'}rev=${revision}` : ''
-
   useEffect(() => {
-    const webview = webviewRef.current
+    const webview = preview.webview
+    const webviewUrl = preview.state.webviewUrl
+    const fileUrl = preview.state.fileUrl
     if (!open || !webviewUrl || !fileUrl || !webview) return
-    if (loadedWebviewUrlRef.current !== webviewUrl) {
-      webviewReadyRef.current = false
-      loadedWebviewUrlRef.current = webviewUrl
-    }
 
-    const injectNavigationCapture = (): void => {
+    const injectNavigationCapture = (ready = preview.state.ready): void => {
       const executeJavaScript =
         typeof webview.executeJavaScript === 'function'
           ? webview.executeJavaScript.bind(webview)
@@ -204,7 +157,7 @@ function PrototypePlayerOverlayInner({
         !shouldInjectPrototypeNavigationCapture({
           open,
           webviewUrl,
-          webviewReady: webviewReadyRef.current,
+          webviewReady: ready,
           hasExecuteJavaScript: Boolean(executeJavaScript)
         })
       ) {
@@ -216,8 +169,7 @@ function PrototypePlayerOverlayInner({
     }
 
     const markWebviewReady = (): void => {
-      webviewReadyRef.current = true
-      injectNavigationCapture()
+      injectNavigationCapture(true)
     }
 
     const handleNavigate: EventListener = (event): void => {
@@ -252,7 +204,17 @@ function PrototypePlayerOverlayInner({
       webview.removeEventListener('will-navigate', handleNavigate)
       webview.removeEventListener('did-navigate-in-page', handleNavigate)
     }
-  }, [fileUrl, goBack, goTo, links, open, webviewUrl])
+  }, [
+    goBack,
+    goTo,
+    links,
+    open,
+    preview.state.fileUrl,
+    preview.state.ready,
+    preview.state.webviewUrl,
+    preview.webview,
+    preview.webviewMountNonce
+  ])
 
   const requestMissingScreen = useCallback((): void => {
     const promptValues = prototypeMissingScreenPromptValues(currentArtifact, missingHref)
@@ -307,23 +269,16 @@ function PrototypePlayerOverlayInner({
                 className="relative max-h-full max-w-full overflow-hidden rounded-[8px] border border-ds-border bg-white shadow-[0_12px_40px_rgba(15,23,42,0.12)]"
                 style={viewportFrameStyle}
               >
-                {webviewUrl ? (
-                  <webview
-                    key={fileUrl}
-                    ref={webviewRef as Ref<WebviewElement>}
-                    src={webviewUrl}
-                    partition="kun-proto"
-                    webpreferences="contextIsolation=yes,nodeIntegration=no,sandbox=yes"
-                    className="h-full w-full border-0"
-                  />
+                {preview.state.webviewUrl ? (
+                  preview.renderWebview({ className: 'h-full w-full border-0' })
                 ) : (
                   <div className="flex h-full items-center justify-center text-[13px] text-ds-faint">
-                    {error || t('designCanvasLoading')}
+                    {preview.state.error || t('designCanvasLoading')}
                   </div>
                 )}
-                {error && webviewUrl ? (
+                {preview.state.error && preview.state.webviewUrl ? (
                   <div className="absolute inset-x-3 top-3 rounded-[8px] border border-red-200 bg-white/92 px-3 py-2 text-[12px] text-red-600 shadow-sm backdrop-blur">
-                    {error}
+                    {preview.state.error}
                   </div>
                 ) : null}
               </div>

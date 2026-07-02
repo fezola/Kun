@@ -124,7 +124,7 @@ let trayActionUnsubscribe: (() => void) | null = null
 
 export function createNavigationActions(
   { set, get, sseAbortRef }: StoreActionContext
-): Pick<ChatState, 'openCode' | 'openWrite' | 'ensureWriteThreadForWorkspace' | 'createWriteThread' | 'selectWriteThread' | 'ensureDesignThreadForWorkspace' | 'createDesignThread' | 'probeRuntime' | 'boot' | 'chooseWorkspace' | 'selectWorkspaceRoot' | 'clearWorkspace' | 'deleteWorkspace' | 'refreshThreads' | 'setThreadSearch' | 'setShowArchivedThreads'> {
+): Pick<ChatState, 'openCode' | 'openWrite' | 'openDesign' | 'ensureWriteThreadForWorkspace' | 'createWriteThread' | 'selectWriteThread' | 'ensureDesignThreadForWorkspace' | 'createDesignThread' | 'probeRuntime' | 'boot' | 'chooseWorkspace' | 'selectWorkspaceRoot' | 'clearWorkspace' | 'deleteWorkspace' | 'refreshThreads' | 'setThreadSearch' | 'setShowArchivedThreads'> {
   return {
   openCode: async () => {
     const state = get()
@@ -159,6 +159,29 @@ export function createNavigationActions(
     set({
       ...clearedThreadSelection(),
       route: 'chat',
+      watchTurnCompletion: nextWatch
+    })
+    syncTurnCompletionPoll(set, get)
+  },
+
+  openDesign: () => {
+    const state = get()
+    if (isDesignThreadId(state.activeThreadId)) {
+      set({ route: 'design' })
+      return
+    }
+
+    const nextWatch = { ...state.watchTurnCompletion }
+    if (state.activeThreadId && state.busy) {
+      nextWatch[state.activeThreadId] = true
+      watchTurnCompletionNotification(state.activeThreadId)
+    }
+    sseAbortRef.current?.abort()
+    sseAbortRef.current = null
+    clearBusyWatchdog()
+    set({
+      ...clearedThreadSelection(),
+      route: 'design',
       watchTurnCompletion: nextWatch
     })
     syncTurnCompletionPoll(set, get)

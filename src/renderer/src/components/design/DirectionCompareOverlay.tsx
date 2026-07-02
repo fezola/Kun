@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState, type Ref } from 'react'
+import { memo, useEffect, useMemo, useState } from 'react'
 import { GitCompareArrows, ListFilter, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import {
@@ -6,11 +6,7 @@ import {
   type DesignDirectionGroup
 } from '../../design/design-artifact-actions'
 import type { DesignArtifact } from '../../design/design-types'
-import { startDesignHtmlPreviewWatch } from '../../design/design-preview-file'
-
-type WebviewElement = HTMLElement & {
-  executeJavaScript?: (code: string) => Promise<unknown>
-}
+import { useDesignHtmlPreview } from './DesignHtmlPreviewHost'
 
 type Props = {
   open: boolean
@@ -26,71 +22,31 @@ type DirectionPreviewProps = {
 
 function DirectionPreview({ workspaceRoot, artifact }: DirectionPreviewProps) {
   const { t } = useTranslation('common')
-  const [fileUrl, setFileUrl] = useState('')
-  const [revision, setRevision] = useState(0)
-  const [error, setError] = useState('')
-  const webviewRef = useRef<WebviewElement | null>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    let cleanupWatch: (() => void) | null = null
-    setFileUrl('')
-    setRevision(0)
-    setError('')
-
-    if (!workspaceRoot || !artifact || artifact.kind !== 'html') return
-    if (typeof window.kunGui?.authorizeWritePrototype !== 'function') {
-      setError(t('designDirectionCompareUnavailable'))
-      return
-    }
-
-    void window.kunGui
-      .authorizeWritePrototype({ path: artifact.relativePath, workspaceRoot })
-      .then((res) => {
-        if (cancelled) return
-        if (!res.ok) {
-          setError(res.message)
-          return
-        }
-        setFileUrl(res.fileUrl)
-        cleanupWatch = startDesignHtmlPreviewWatch({
-          workspaceRoot,
-          path: artifact.relativePath,
-          onRevision: setRevision,
-          onError: setError
-        })
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err))
-      })
-
-    return () => {
-      cancelled = true
-      cleanupWatch?.()
-    }
-  }, [artifact, t, workspaceRoot])
-
-  const webviewUrl = fileUrl ? `${fileUrl}${fileUrl.includes('?') ? '&' : '?'}rev=${revision}` : ''
+  const partitionId = artifact?.id
+    ?.trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80)
+  const preview = useDesignHtmlPreview({
+    workspaceRoot,
+    relativePath: artifact?.kind === 'html' ? artifact.relativePath : undefined,
+    enabled: Boolean(workspaceRoot && artifact?.kind === 'html'),
+    partition: `kun-direction-compare-${partitionId || 'empty'}`
+  })
 
   return (
     <div className="relative min-h-0 flex-1 overflow-hidden rounded-[8px] border border-ds-border bg-white">
-      {webviewUrl ? (
-        <webview
-          key={webviewUrl}
-          ref={webviewRef as Ref<WebviewElement>}
-          src={webviewUrl}
-          partition="kun-direction-compare"
-          webpreferences="contextIsolation=yes,nodeIntegration=no,sandbox=yes"
-          className="h-full w-full border-0"
-        />
+      {preview.state.webviewUrl ? (
+        preview.renderWebview({ className: 'h-full w-full border-0' })
       ) : (
         <div className="flex h-full min-h-[260px] items-center justify-center px-4 text-center text-[13px] text-ds-faint">
-          {error || t('designCanvasLoading')}
+          {preview.state.error || t('designCanvasLoading')}
         </div>
       )}
-      {error && webviewUrl ? (
+      {preview.state.error && preview.state.webviewUrl ? (
         <div className="absolute inset-x-3 top-3 rounded-[8px] border border-red-200 bg-white/92 px-3 py-2 text-[12px] text-red-600 shadow-sm backdrop-blur">
-          {error}
+          {preview.state.error}
         </div>
       ) : null}
     </div>

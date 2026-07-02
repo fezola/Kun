@@ -8,13 +8,13 @@ import {
   htmlFrameOverlayPointerEvents,
   htmlFrameShouldApplyScrollbarSuppression,
   htmlFrameWebviewPartition,
-  htmlFrameWebviewZoomFactor,
   htmlFrameShouldSuppressDocumentScrollbars,
   htmlFrameVisualCanvasHeight,
   resolveHtmlFrameMeasurementDecision,
   shouldAutoResizeHtmlFrame,
   shouldRenderHtmlFrameWebview
 } from './HtmlFrameOverlay'
+import { designHtmlPreviewWebviewZoomFactor as htmlFrameWebviewZoomFactor } from '../DesignHtmlPreviewHost'
 import { inferDesignArtifactFoundationRole } from '../../../design/design-types'
 
 class FakeHTMLElement {

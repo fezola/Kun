@@ -241,6 +241,33 @@ describe('chat-store navigation workspace selection', () => {
     expect(harness.state.route).toBe('chat')
     expect(harness.selectThread).toHaveBeenCalledWith('thr_code')
   })
+
+  it('openDesign does not keep a code thread active in Design mode', () => {
+    const harness = buildHarness()
+    harness.state.activeThreadId = 'thr_code'
+    harness.state.route = 'chat'
+    harness.state.busy = true
+    harness.state.blocks = [
+      { kind: 'user', id: 'u1', text: 'hello' },
+      { kind: 'assistant', id: 'a1', text: 'How can I help?' }
+    ]
+    harness.state.threads = [
+      thread({
+        id: 'thr_code',
+        title: 'Code task',
+        workspace: '/Users/zxy/project'
+      })
+    ]
+
+    harness.actions.openDesign()
+
+    expect(harness.state.route).toBe('design')
+    expect(harness.state.activeThreadId).toBeNull()
+    expect(harness.state.blocks).toEqual([])
+    expect(harness.state.busy).toBe(false)
+    expect(harness.state.watchTurnCompletion).toEqual({ thr_code: true })
+    expect(harness.selectThread).not.toHaveBeenCalled()
+  })
 })
 
 describe('onClawChannelActivity routes through subscribeThreadEventsLive (not selectThread)', () => {
