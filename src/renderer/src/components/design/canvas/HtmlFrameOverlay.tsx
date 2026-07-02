@@ -271,11 +271,26 @@ export function htmlFrameOverlayPointerEvents({
   return interactive || editing ? 'auto' : 'none'
 }
 
+/**
+ * While a page is actively generating, `shape.height` (the store's frame size)
+ * only catches up to the streamed content a beat AFTER each measurement — this
+ * crops the VISUAL box down to what's actually been measured so the frame
+ * doesn't flash a big blank band while waiting for that store update to land.
+ *
+ * This must NOT apply once the page is settled/ready: `FrameShape`'s SVG
+ * background always paints at the raw (uncropped) `shape.height`, so cropping
+ * the webview overlay smaller than that — using a measurement that can be
+ * stale — leaves the SVG's white background visible below a short webview
+ * (exactly the "白布" symptom). It also silently overrides manual resizing:
+ * dragging a settled frame taller than its last measurement would otherwise
+ * never visually grow past that measurement, since this always takes the min.
+ */
 export function htmlFrameVisualCanvasHeight(
   canvasHeight: number,
-  measuredContentHeight: number | null
+  measuredContentHeight: number | null,
+  cropToMeasured: boolean
 ): number {
-  if (!measuredContentHeight) return canvasHeight
+  if (!cropToMeasured || !measuredContentHeight) return canvasHeight
   return Math.max(FRAME_AUTO_GROW_MIN_HEIGHT, Math.min(canvasHeight, measuredContentHeight))
 }
 
@@ -1063,7 +1078,8 @@ function ScreenOverlayInner({
   const transparentGeneratingSurface = placeholderPreview || drawingActive
   const visualCanvasHeight = htmlFrameVisualCanvasHeight(
     canvasHeight,
-    measuredContentSize?.height ?? null
+    measuredContentSize?.height ?? null,
+    transparentGeneratingSurface
   )
   const visualScreenHeight = (visualCanvasHeight / canvasHeight) * screenHeight
   const QualityIcon =

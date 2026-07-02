@@ -187,14 +187,25 @@ describe('HtmlFrameOverlay webview native zoom factor', () => {
 
 describe('HtmlFrameOverlay visual crop policy', () => {
   it('keeps the full frame visible before measurement', () => {
-    expect(htmlFrameVisualCanvasHeight(844, null)).toBe(844)
+    expect(htmlFrameVisualCanvasHeight(844, null, true)).toBe(844)
   })
 
-  it('crops frames to measured content even while the preview is generating', () => {
-    expect(htmlFrameVisualCanvasHeight(844, 260)).toBe(260)
-    expect(htmlFrameVisualCanvasHeight(844, 240)).toBe(240)
-    expect(htmlFrameVisualCanvasHeight(844, 80)).toBe(180)
-    expect(htmlFrameVisualCanvasHeight(844, 1200)).toBe(844)
+  it('crops frames to measured content while the preview is generating', () => {
+    expect(htmlFrameVisualCanvasHeight(844, 260, true)).toBe(260)
+    expect(htmlFrameVisualCanvasHeight(844, 240, true)).toBe(240)
+    expect(htmlFrameVisualCanvasHeight(844, 80, true)).toBe(180)
+    expect(htmlFrameVisualCanvasHeight(844, 1200, true)).toBe(844)
+  })
+
+  it('does not crop a settled/ready frame, even with a stale or smaller measurement', () => {
+    // Once generation has finished, FrameShape's SVG background always paints at
+    // the raw shape.height. Cropping the webview overlay smaller than that using
+    // a (possibly stale) measurement would leave the SVG's white background
+    // visible below a short webview, and would silently defeat manual resizing
+    // (dragging a settled frame taller would otherwise never visually grow past
+    // whatever was last measured).
+    expect(htmlFrameVisualCanvasHeight(844, 260, false)).toBe(844)
+    expect(htmlFrameVisualCanvasHeight(3200, 800, false)).toBe(3200)
   })
 })
 
