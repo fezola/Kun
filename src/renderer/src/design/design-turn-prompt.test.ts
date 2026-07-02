@@ -349,17 +349,17 @@ describe('design turn prompt', () => {
       canvasSnapshot
     })
 
-    // The intent-triage lanes are hoisted ABOVE the add_screen vocabulary so the
+    // The intent-triage lanes are hoisted ABOVE the screen-creation vocabulary so the
     // model commits to the image-edit lane before screen creation can pre-empt it.
     const lanesAt = prompt.indexOf('FIRST classify the request')
-    const addScreenAt = prompt.indexOf('"action": "add_screen"')
+    const createScreenAt = prompt.indexOf('`design_create_screen`')
     expect(lanesAt).toBeGreaterThanOrEqual(0)
-    expect(addScreenAt).toBeGreaterThan(lanesAt)
+    expect(createScreenAt).toBeGreaterThan(lanesAt)
 
     expect(prompt).toContain('EDIT AN EXISTING IMAGE')
-    expect(prompt).toContain('MUST NOT use `add_screen` / `add-screen`')
+    expect(prompt).toContain('MUST NOT use `design_create_screen` / `add-screen`')
     expect(prompt).toContain('把这张图改成…')
-    expect(prompt).toContain('do NOT `add_screen` / `add-screen` — edit that image instead')
+    expect(prompt).toContain('do NOT create a screen / add-screen')
 
     // Deterministic prior: the renderer pre-classifies the single selected filled
     // image and states it up front (with the exact id + path), hoisted ABOVE the
@@ -488,12 +488,12 @@ describe('design turn prompt', () => {
     expect(prompt).toContain('Available shapes: "Card" (s_1)')
   })
 
-  it('canvas turn prompt frames screen creation as a design_canvas tool call', () => {
+  it('canvas turn prompt frames screen creation as a dedicated design tool call', () => {
     const prompt = buildCodeCanvasTurnPrompt({ workspaceRoot: '/ws' })
-    expect(prompt).toContain('calling the `design_canvas` tool')
+    expect(prompt).toContain('dedicated design tools')
     expect(prompt).toContain('do not ask the user to manually create a canvas first')
-    expect(prompt).toContain('{ "action": "add_screen"')
-    expect(prompt).toContain('call the real `design_canvas` tool')
+    expect(prompt).toContain('`design_create_screen`')
+    expect(prompt).toContain('call the real design tools')
     expect(prompt).not.toContain('```design_canvas')
   })
 

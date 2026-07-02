@@ -6,6 +6,7 @@ import {
   applyCanvasOpsSince,
   applyShapeOpsFromText,
   extractCanvasOpBlocksFromValue,
+  isDesignCanvasToolName,
   setLastCanvasOpErrors,
   takeLastCanvasOpErrors
 } from './apply-shape-ops'
@@ -230,6 +231,19 @@ describe('extractCanvasOpBlocksFromValue (tool result payloads)', () => {
         name: 'Home'
       })
     ).toEqual([[{ op: 'add-screen', name: 'Home' }]])
+  })
+
+  it('recognizes dedicated design tools and extracts their ops payloads', () => {
+    expect(isDesignCanvasToolName('design_system_template')).toBe(true)
+    expect(isDesignCanvasToolName('design_update_shapes')).toBe(true)
+    expect(isDesignCanvasToolName('bash')).toBe(false)
+    expect(
+      extractCanvasOpBlocksFromValue({
+        ok: true,
+        tool: 'design_system_template',
+        ops: [{ op: 'design-system-template', operation: 'create', name: 'Kit' }]
+      })
+    ).toEqual([[{ op: 'design-system-template', operation: 'create', name: 'Kit' }]])
   })
 })
 

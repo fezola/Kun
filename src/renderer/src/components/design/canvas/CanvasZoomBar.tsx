@@ -84,7 +84,7 @@ function CanvasZoomBarInner() {
   const redo = useCallback(() => useCanvasShapeStore.getState().redo(), [])
 
   const btnBase =
-    'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors disabled:cursor-not-allowed disabled:opacity-35'
+    'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-colors disabled:cursor-not-allowed disabled:opacity-35'
   const btnNormal = 'text-ds-muted hover:bg-ds-hover hover:text-ds-ink dark:hover:bg-white/10'
   const pill =
     'rounded-full border border-ds-border bg-white/82 shadow-[0_12px_34px_rgba(20,47,95,0.10)] backdrop-blur-2xl dark:bg-ds-card/84 dark:shadow-none'
@@ -179,7 +179,7 @@ function CanvasZoomBarInner() {
 
         <button
           type="button"
-          className="inline-flex h-8 min-w-[3rem] items-center justify-center rounded-lg px-2 text-[13px] font-semibold tabular-nums text-ds-muted transition-colors hover:bg-ds-hover hover:text-ds-ink dark:hover:bg-white/10"
+          className="inline-flex h-7 min-w-[2.75rem] items-center justify-center rounded-lg px-2 text-[12px] font-semibold tabular-nums text-ds-muted transition-colors hover:bg-ds-hover hover:text-ds-ink dark:hover:bg-white/10"
           onClick={() => setMenuOpen((o) => !o)}
           title={t('canvasZoomIn')}
         >

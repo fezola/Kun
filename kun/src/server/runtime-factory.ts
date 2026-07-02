@@ -15,7 +15,7 @@ import { CapabilityRegistry } from '../adapters/tool/capability-registry.js'
 import { createAgentSdkRuntime } from '../runtime/agent-sdk/agent-sdk-runtime-factory.js'
 import { buildGoalLocalTools } from '../adapters/tool/goal-tools.js'
 import { buildTodoLocalTools } from '../adapters/tool/todo-tools.js'
-import { createDesignCanvasTool } from '../adapters/tool/design-canvas-tool.js'
+import { buildDesignCanvasLocalTools } from '../adapters/tool/design-canvas-tool.js'
 import { LocalToolHost, buildDefaultLocalTools } from '../adapters/tool/local-tool-host.js'
 import { buildMcpToolProviders } from '../adapters/tool/mcp-tool-provider.js'
 import { buildMemoryToolProviders } from '../adapters/tool/memory-tool-provider.js'
@@ -318,7 +318,7 @@ export async function createKunServeRuntime(
     available: true,
     // Safe to include in child runs: the tool is still gated per turn by
     // `context.guiDesignCanvas`, so only design-canvas child turns see it.
-    tools: [createDesignCanvasTool()]
+    tools: buildDesignCanvasLocalTools()
   }
   const baseToolProviders = [
     {

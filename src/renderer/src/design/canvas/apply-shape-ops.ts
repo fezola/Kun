@@ -1,5 +1,18 @@
 import { executeOps, type OpError } from './shape-ops'
 
+export const DESIGN_CANVAS_TOOL_NAMES = new Set([
+  'design_canvas',
+  'design_create_screen',
+  'design_update_shapes',
+  'design_arrange',
+  'design_system_template',
+  'design_validate'
+])
+
+export function isDesignCanvasToolName(name: unknown): boolean {
+  return typeof name === 'string' && DESIGN_CANVAS_TOOL_NAMES.has(name)
+}
+
 /**
  * Last turn's canvas-op errors, stashed by the apply hook and taken by the next
  * canvas turn so the agent SEES what failed (bad shape id, schema-invalid op,

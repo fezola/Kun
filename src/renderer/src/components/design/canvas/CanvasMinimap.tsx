@@ -8,8 +8,8 @@ import { useCanvasSelectionStore } from '../../../design/canvas/canvas-selection
 import { useCanvasShapeStore } from '../../../design/canvas/canvas-shape-store'
 import { useCanvasViewportStore } from '../../../design/canvas/canvas-viewport-store'
 
-const MINIMAP_WIDTH = 184
-const MINIMAP_HEIGHT = 124
+const MINIMAP_WIDTH = 160
+const MINIMAP_HEIGHT = 108
 
 function CanvasMinimapInner() {
   const { t } = useTranslation('common')

@@ -315,6 +315,23 @@ function workspaceFileTargetKey(target: WorkspaceFileTarget | null | undefined):
   if (!target?.path) return ''
   return `${target.workspaceRoot ?? ''}\n${target.path}`.replaceAll('\\', '/').toLowerCase()
 }
+
+type DesignPromptSource = 'user' | 'auto-quality-repair' | 'manual-quality-repair'
+
+function designAutoRepairArtifactKey(artifactId: string | undefined): string {
+  const normalized = artifactId?.trim()
+  return normalized ? `artifact:${normalized}` : ''
+}
+
+function designAutoRepairPayloadKey(payload: DesignRuntimeQualityPayload): string {
+  const artifactKey = designAutoRepairArtifactKey(payload.artifactId)
+  if (artifactKey) return artifactKey
+  const path = payload.artifactRelativePath.trim().replaceAll('\\', '/')
+  if (path) return `path:${path}`
+  const shapeId = payload.shapeId?.trim()
+  return shapeId ? `shape:${shapeId}` : ''
+}
+
 const DESKTOP_SHORTCUT_COMMANDS: Partial<Record<KeyboardShortcutCommandId, DesktopCommand>> = {
   quit: 'quit',
   undo: 'undo',
@@ -693,6 +710,8 @@ export function Workbench(): ReactElement {
   const runtimeConnectionRef = useRef(runtimeConnection)
   const writeAssistantOpen = useWriteWorkspaceStore((s) => s.assistantOpen)
   const setWriteAssistantOpen = useWriteWorkspaceStore((s) => s.setAssistantOpen)
+  const designAssistantOpen = useDesignWorkspaceStore((s) => s.canvasAssistantOpen)
+  const setDesignAssistantOpen = useDesignWorkspaceStore((s) => s.setCanvasAssistantOpen)
   const designImplementOpen = useDesignWorkspaceStore((s) => s.implementOpen)
   const designImplementTitle = useDesignWorkspaceStore((s) => s.implementTitle)
   const designArtifacts = useDesignWorkspaceStore((s) => s.artifacts)
@@ -731,6 +750,16 @@ export function Workbench(): ReactElement {
     },
     []
   )
+
+  const clearDesignAutoRepairScope = useCallback((scopeKey: string): void => {
+    if (!scopeKey) return
+    designAutoRepairSentRef.current.delete(scopeKey)
+    const pending = designAutoRepairPendingRef.current.get(scopeKey)
+    if (pending) {
+      window.clearTimeout(pending)
+      designAutoRepairPendingRef.current.delete(scopeKey)
+    }
+  }, [])
 
   const rawDesignContextTargets = useMemo(
     () => {
@@ -980,6 +1009,8 @@ export function Workbench(): ReactElement {
     toggleTerminal,
   } = useWorkbenchLayout({
     activeThreadId,
+    designAssistantOpen,
+    designImplementOpen,
     latestAutoOpenDevPreviewUrl,
     latestDevPreviewUrl,
     route,
@@ -1861,8 +1892,12 @@ export function Workbench(): ReactElement {
     })()
   }
 
-  const sendDesignPrompt = (value: string, options?: { displayText?: string }): void => {
+  const sendDesignPrompt = (
+    value: string,
+    options?: { displayText?: string; source?: DesignPromptSource }
+  ): void => {
     const text = value.trim()
+    const source = options?.source ?? 'user'
     const attachments = composerAttachments
     const attachmentIds = attachments.map((attachment) => attachment.id)
     if (!text && attachmentIds.length === 0) return
@@ -1876,6 +1911,7 @@ export function Workbench(): ReactElement {
       setError(t('workspaceRequiredToCreateThread'))
       return
     }
+    setDesignAssistantOpen(true)
     // Route a from-scratch "generate" brief through the foundation-first
     // multi-page pipeline (design.md → design system → logo → pages) instead of a
     // single free-form canvas turn. "From scratch" = the board has no pages yet
@@ -1931,6 +1967,7 @@ export function Workbench(): ReactElement {
       let selectedFrame: CanvasShape | null = null
       let htmlFrameContext: DesignFrameContext | undefined
       let target: 'html' | 'canvas' | 'screen' = 'canvas'
+      let targetAutoRepairKey = ''
 
       const canvasDoc = useCanvasShapeStore.getState().document
       const selectedShapeIds = useCanvasSelectionStore.getState().selectedIds
@@ -1967,6 +2004,7 @@ export function Workbench(): ReactElement {
 
       if (isScreenTarget) {
         target = 'screen'
+        targetAutoRepairKey = designAutoRepairArtifactKey(primaryTarget.artifact.id)
         const prep = latestDesignState.prepareHtmlTurn(promptText, {
           artifactId: primaryTarget.artifact.id,
           forceNew: false,
@@ -1978,6 +2016,7 @@ export function Workbench(): ReactElement {
         designNotesPath = prep.designMdPath
       } else if (primaryTarget?.kind === 'html-element') {
         target = 'html'
+        targetAutoRepairKey = designAutoRepairArtifactKey(primaryTarget.artifact.id)
         const prep = latestDesignState.prepareHtmlTurn(promptText, {
           artifactId: primaryTarget.artifact.id,
           forceNew: false,
@@ -1995,6 +2034,7 @@ export function Workbench(): ReactElement {
         useDesignWorkspaceStore.getState().setDesignIntentMode('modify')
       } else if (primaryTarget?.kind === 'html-artifact') {
         target = 'html'
+        targetAutoRepairKey = designAutoRepairArtifactKey(primaryTarget.artifact.id)
         const prep = latestDesignState.prepareHtmlTurn(promptText, {
           artifactId: primaryTarget.artifact.id,
           forceNew: false,
@@ -2020,6 +2060,7 @@ export function Workbench(): ReactElement {
         })
         useDesignWorkspaceStore.getState().setDesignIntentMode('generate')
       }
+      if (source === 'user') clearDesignAutoRepairScope(targetAutoRepairKey)
       useDesignWorkspaceStore.getState().setActiveArtifact(boardArtifact.id)
 
       // Build screen manifest for cross-screen context
@@ -2199,15 +2240,17 @@ export function Workbench(): ReactElement {
     const repairFindings = mergeDesignHtmlQualityFindings(findings)
     if (repairFindings.length === 0) return
     const codes = repairFindings.map((finding) => finding.code).sort()
-    const key = `${mode}:${payload.artifactId}|${codes.join(',')}`
-    if (mode === 'auto' && designAutoRepairSentRef.current.has(key)) return
+    const autoScopeKey = designAutoRepairPayloadKey(payload)
+    const key = mode === 'auto' ? autoScopeKey : `manual:${autoScopeKey || 'unknown'}|${codes.join(',')}`
+    if (!key) return
+    if (mode === 'auto' && designAutoRepairSentRef.current.has(autoScopeKey)) return
     if (mode === 'manual') {
       const lastSentAt = designQualityRepairLastSentRef.current.get(key) ?? 0
       if (Date.now() - lastSentAt < 3000) return
     }
 
     const trigger = (attempt: number): void => {
-      if (mode === 'auto' && designAutoRepairSentRef.current.has(key)) return
+      if (mode === 'auto' && designAutoRepairSentRef.current.has(autoScopeKey)) return
       const canRun =
         routeRef.current === 'design' &&
         runtimeConnectionRef.current === 'ready' &&
@@ -2224,9 +2267,17 @@ export function Workbench(): ReactElement {
       }
 
       if (mode === 'auto') {
-        designAutoRepairSentRef.current.add(key)
+        designAutoRepairSentRef.current.add(autoScopeKey)
       } else {
         designQualityRepairLastSentRef.current.set(key, Date.now())
+        if (autoScopeKey) {
+          designAutoRepairSentRef.current.add(autoScopeKey)
+          const autoPending = designAutoRepairPendingRef.current.get(autoScopeKey)
+          if (autoPending) {
+            window.clearTimeout(autoPending)
+            designAutoRepairPendingRef.current.delete(autoScopeKey)
+          }
+        }
       }
       const pending = designAutoRepairPendingRef.current.get(key)
       if (pending) {
@@ -2249,7 +2300,12 @@ export function Workbench(): ReactElement {
         mode === 'auto'
           ? `Auto-repair design quality: ${codes.join(', ')}`
           : `Repair design quality: ${codes.join(', ')}`
-      window.setTimeout(() => sendDesignPrompt(prompt, { displayText }), 120)
+      window.setTimeout(() => {
+        sendDesignPrompt(prompt, {
+          displayText,
+          source: mode === 'auto' ? 'auto-quality-repair' : 'manual-quality-repair'
+        })
+      }, 120)
     }
 
     trigger(0)
@@ -3250,6 +3306,7 @@ export function Workbench(): ReactElement {
 
   const openDesignMode = (): void => {
     setConnectPhoneSidebarOpen(false)
+    setDesignAssistantOpen(false)
     openDesign()
   }
 
@@ -3401,6 +3458,16 @@ export function Workbench(): ReactElement {
       setWriteAssistantOpen(false)
       return
     }
+    if (route === 'design') {
+      const designState = useDesignWorkspaceStore.getState()
+      if (designState.implementOpen) {
+        designState.closeImplementPanel()
+        setDesignAssistantOpen(true)
+      } else {
+        setDesignAssistantOpen(false)
+      }
+      return
+    }
     if (rightPanelMode === 'file') setOpenFilePreviewTargets([])
     setRightPanelMode(null)
     setFilePreviewTarget(null)
@@ -3488,7 +3555,90 @@ export function Workbench(): ReactElement {
         />
         <div className="h-full min-h-0 shrink-0" style={{ width: rightSidebarWidth }}>
           <Suspense fallback={<div className="h-full w-full bg-ds-sidebar" />}>
-            {route === 'write' && writeAssistantOpen ? (
+            {route === 'design' && designImplementOpen ? (
+              <DesignImplementPanel
+                title={designImplementTitle}
+                workspaceRoot={workspaceRoot}
+                input={input}
+                setInput={setInput}
+                mode={composerMode}
+                setMode={setComposerMode}
+                busy={busy}
+                runtimeConnection={runtimeConnection}
+                activeThreadId={activeThreadId}
+                blocks={blocks}
+                liveReasoning={liveReasoning}
+                liveAssistant={liveAssistant}
+                composerModel={composerModel}
+                composerProviderId={composerProviderId}
+                composerPickList={composerPickList}
+                composerModelGroups={composerModelGroups}
+                composerReasoningEffort={composerReasoningEffort}
+                setComposerModel={setComposerModel}
+                setComposerReasoningEffort={setComposerReasoningEffort}
+                queuedMessages={queuedMessages}
+                removeQueuedMessage={removeQueuedMessage}
+                attachments={composerAttachments}
+                attachmentUploadEnabled={attachmentUploadEnabled}
+                attachmentUploadBusy={attachmentUploadBusy}
+                attachmentUploadError={attachmentUploadError}
+                onPickAttachments={(files) => void handlePickAttachments(files)}
+                onPasteClipboardImage={(options) => void handlePasteClipboardImage(options)}
+                onRemoveAttachment={removeComposerAttachment}
+                onSend={handleSend}
+                onInterrupt={(options) => void interrupt(options)}
+                onRetryConnection={() => void probeRuntime('user', { restart: true })}
+                onOpenSettings={() => openSettings('agents')}
+                onConfigureProviders={() => openSettings('providers')}
+                onClose={closeRightPanel}
+                className="h-full max-h-full w-full"
+              />
+            ) : route === 'design' && designAssistantOpen ? (
+              <DesignAIRail
+                input={input}
+                setInput={setInput}
+                mode={composerMode}
+                setMode={setComposerMode}
+                busy={busy}
+                runtimeConnection={runtimeConnection}
+                activeThreadId={activeThreadId}
+                blocks={blocks}
+                liveReasoning={liveReasoning}
+                liveAssistant={liveAssistant}
+                composerModel={designAssistantModel}
+                composerProviderId={resolvedDesignAssistantProviderId}
+                composerPickList={designAssistantPickList}
+                composerModelGroups={composerModelGroups}
+                composerReasoningEffort={composerReasoningEffort}
+                setComposerModel={setDesignAssistantModel}
+                setComposerReasoningEffort={setComposerReasoningEffort}
+                queuedMessages={queuedMessages}
+                removeQueuedMessage={removeQueuedMessage}
+                attachments={composerAttachments}
+                attachmentUploadEnabled={attachmentUploadEnabled}
+                attachmentUploadBusy={attachmentUploadBusy}
+                attachmentUploadError={attachmentUploadError}
+                contextChips={designContextChips}
+                onPickAttachments={(files) => void handlePickAttachments(files)}
+                onPasteClipboardImage={(options) => void handlePasteClipboardImage(options)}
+                onRemoveAttachment={removeComposerAttachment}
+                onRemoveContextChip={removeDesignContextChip}
+                onSend={() => sendDesignPrompt(input)}
+                onInterrupt={(options) => void interrupt(options)}
+                onRetryConnection={() => void probeRuntime('user', { restart: true })}
+                onOpenSettings={(section) => openSettings((section ?? 'design') as never)}
+                onConfigureProviders={() => openSettings('providers')}
+                onNewConversation={() => {
+                  const designStore = useDesignWorkspaceStore.getState()
+                  const root = designStore.workspaceRoot || workspaceRoot
+                  if (root) void createDesignThread(root, designStore.ensureActiveDocument())
+                }}
+                designThreads={designThreads}
+                onSwitchThread={(id) => void switchDesignThread(id)}
+                onCollapse={closeRightPanel}
+                className="h-full max-h-full w-full"
+              />
+            ) : route === 'write' && writeAssistantOpen ? (
               <WriteAssistantPanel
                 input={input}
                 setInput={setInput}
@@ -3814,90 +3964,7 @@ export function Workbench(): ReactElement {
                 />
               )
             })()}
-            {designImplementOpen ? (
-              <div className="pointer-events-none absolute bottom-3 right-3 top-3 z-[70] flex w-[min(400px,calc(100%-1.5rem))] max-w-full">
-                <DesignImplementPanel
-                  title={designImplementTitle}
-                  workspaceRoot={workspaceRoot}
-                  input={input}
-                  setInput={setInput}
-                  mode={composerMode}
-                  setMode={setComposerMode}
-                  busy={busy}
-                  runtimeConnection={runtimeConnection}
-                  activeThreadId={activeThreadId}
-                  blocks={blocks}
-                  liveReasoning={liveReasoning}
-                  liveAssistant={liveAssistant}
-                  composerModel={composerModel}
-                  composerProviderId={composerProviderId}
-                  composerPickList={composerPickList}
-                  composerModelGroups={composerModelGroups}
-                  composerReasoningEffort={composerReasoningEffort}
-                  setComposerModel={setComposerModel}
-                  setComposerReasoningEffort={setComposerReasoningEffort}
-                  queuedMessages={queuedMessages}
-                  removeQueuedMessage={removeQueuedMessage}
-                  attachments={composerAttachments}
-                  attachmentUploadEnabled={attachmentUploadEnabled}
-                  attachmentUploadBusy={attachmentUploadBusy}
-                  attachmentUploadError={attachmentUploadError}
-                  onPickAttachments={(files) => void handlePickAttachments(files)}
-                  onPasteClipboardImage={(options) => void handlePasteClipboardImage(options)}
-                  onRemoveAttachment={removeComposerAttachment}
-                  onSend={handleSend}
-                  onInterrupt={(options) => void interrupt(options)}
-                  onRetryConnection={() => void probeRuntime('user', { restart: true })}
-                  onOpenSettings={() => openSettings('agents')}
-                  onConfigureProviders={() => openSettings('providers')}
-                  onClose={() => useDesignWorkspaceStore.getState().closeImplementPanel()}
-                  className="pointer-events-auto h-full w-full overflow-hidden rounded-[28px] border border-ds-border bg-white/86 shadow-[0_26px_72px_rgba(20,47,95,0.16)] backdrop-blur-2xl dark:bg-ds-canvas/92"
-                />
-              </div>
-            ) : (
-              <DesignAIRail
-                input={input}
-                setInput={setInput}
-                mode={composerMode}
-                setMode={setComposerMode}
-                busy={busy}
-                runtimeConnection={runtimeConnection}
-                activeThreadId={activeThreadId}
-                blocks={blocks}
-                liveReasoning={liveReasoning}
-                liveAssistant={liveAssistant}
-                composerModel={designAssistantModel}
-                composerProviderId={resolvedDesignAssistantProviderId}
-                composerPickList={designAssistantPickList}
-                composerModelGroups={composerModelGroups}
-                composerReasoningEffort={composerReasoningEffort}
-                setComposerModel={setDesignAssistantModel}
-                setComposerReasoningEffort={setComposerReasoningEffort}
-                queuedMessages={queuedMessages}
-                removeQueuedMessage={removeQueuedMessage}
-                attachments={composerAttachments}
-                attachmentUploadEnabled={attachmentUploadEnabled}
-                attachmentUploadBusy={attachmentUploadBusy}
-                attachmentUploadError={attachmentUploadError}
-                contextChips={designContextChips}
-                onPickAttachments={(files) => void handlePickAttachments(files)}
-                onPasteClipboardImage={(options) => void handlePasteClipboardImage(options)}
-                onRemoveAttachment={removeComposerAttachment}
-                onRemoveContextChip={removeDesignContextChip}
-                onSend={() => sendDesignPrompt(input)}
-                onInterrupt={(options) => void interrupt(options)}
-                onRetryConnection={() => void probeRuntime('user', { restart: true })}
-                onOpenSettings={(section) => openSettings((section ?? 'design') as never)}
-                onConfigureProviders={() => openSettings('providers')}
-                onNewConversation={() => {
-                  const designStore = useDesignWorkspaceStore.getState()
-                  const root = designStore.workspaceRoot || workspaceRoot
-                  if (root) void createDesignThread(root, designStore.ensureActiveDocument())
-                }}
-                designThreads={designThreads}
-                onSwitchThread={(id) => void switchDesignThread(id)}
-              />
-            )}
+            {renderRightPanel()}
           </div>
         ) : route === 'write' ? (
           <Suspense fallback={<WorkbenchPaneFallback />}>

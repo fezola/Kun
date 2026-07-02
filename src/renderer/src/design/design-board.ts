@@ -107,7 +107,10 @@ function frameMatchesNode(shape: CanvasShape, node: DesignArtifactNode): boolean
 
 function frameNodeSizeMode(shape: CanvasShape, artifact: DesignArtifact): DesignArtifactNode['sizeMode'] {
   const current = artifact.node
-  if (!current) return 'manual'
+  // A freshly generated screen has no node yet: default to 'auto' so the frame
+  // keeps following its real content height. Only an explicit vertical resize
+  // (which breaks frameMatchesNode) promotes it to 'manual' and locks the size.
+  if (!current) return 'auto'
   return current.sizeMode === 'auto' && frameMatchesNode(shape, current) ? 'auto' : 'manual'
 }
 

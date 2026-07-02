@@ -30,6 +30,7 @@ const PREVIEW_FAST_POLL_MS = 6_000
 const PREVIEW_MAX_WAIT_MS = 300_000
 const FRAME_AUTO_GROW_THRESHOLD = 12
 const FRAME_AUTO_GROW_MAX_HEIGHT = 12_000
+const FRAME_AUTO_GROW_MIN_HEIGHT = 180
 
 const CONTENT_SIZE_QUERY = `(() => {
   const html = document.documentElement
@@ -467,11 +468,16 @@ function ScreenOverlayInner({
         const store = useCanvasShapeStore.getState()
         const current = store.document.objects[shape.id]
         if (!current) return
-        const nextHeight = Math.min(
-          FRAME_AUTO_GROW_MAX_HEIGHT,
-          Math.max(current.height, Math.ceil(measured.height))
+        // Track the measured content height in BOTH directions. A grow-only rule
+        // would leave the frame stuck at the tallest intermediate height ever seen
+        // while the agent streamed the HTML, so once the final (shorter) layout
+        // lands the frame keeps the leftover space as a big white band below the
+        // content. Mirroring DesignProjectCanvas, follow the real content height.
+        const nextHeight = Math.max(
+          FRAME_AUTO_GROW_MIN_HEIGHT,
+          Math.min(FRAME_AUTO_GROW_MAX_HEIGHT, Math.ceil(measured.height))
         )
-        if (nextHeight <= current.height + FRAME_AUTO_GROW_THRESHOLD) return
+        if (Math.abs(nextHeight - current.height) <= FRAME_AUTO_GROW_THRESHOLD) return
         store.updateShape(shape.id, { height: nextHeight }, true)
         useDesignWorkspaceStore.getState().updateArtifactNode(artifact.id, {
           x: Math.round(current.x),

@@ -105,7 +105,7 @@ function CanvasToolbarInner({
   }, [imageImportBusy, setFileError, t, vbox, workspaceRoot])
 
   const iconBtnBase =
-    'inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-45'
+    'inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-45'
   const btnActive = 'bg-[#1f2733] text-white shadow-[0_6px_16px_rgba(15,23,42,0.22)]'
   const btnInactive =
     'text-ds-muted hover:bg-ds-hover hover:text-ds-ink dark:hover:bg-white/10'
@@ -113,7 +113,7 @@ function CanvasToolbarInner({
 
   return (
     <div className="relative pointer-events-auto">
-      <div className="flex flex-col items-center gap-1 rounded-full border border-ds-border bg-white/82 px-1.5 py-2 shadow-[0_16px_42px_rgba(20,47,95,0.13)] backdrop-blur-2xl dark:bg-ds-card/84 dark:shadow-none">
+      <div className="flex flex-col items-center gap-1 rounded-full border border-ds-border bg-white/82 px-1.5 py-1.5 shadow-[0_16px_42px_rgba(20,47,95,0.13)] backdrop-blur-2xl dark:bg-ds-card/84 dark:shadow-none">
         {tools.map((tool) => (
           <button
             key={tool.id}
@@ -123,7 +123,7 @@ function CanvasToolbarInner({
             title={t(tool.labelKey)}
             aria-label={t(tool.labelKey)}
           >
-            <tool.icon className="h-[18px] w-[18px]" strokeWidth={1.9} />
+            <tool.icon className="h-4 w-4" strokeWidth={1.9} />
           </button>
         ))}
 
@@ -135,7 +135,7 @@ function CanvasToolbarInner({
           title={t('canvasToolUploadImage')}
           aria-label={t('canvasToolUploadImage')}
         >
-          <ImagePlus className="h-[18px] w-[18px]" strokeWidth={1.9} />
+          <ImagePlus className="h-4 w-4" strokeWidth={1.9} />
         </button>
 
         <div className={divider} />
@@ -147,7 +147,7 @@ function CanvasToolbarInner({
           title={t('designContextLabel')}
           aria-label={t('designContextLabel')}
         >
-          <Palette className="h-[18px] w-[18px]" strokeWidth={1.9} />
+          <Palette className="h-4 w-4" strokeWidth={1.9} />
         </button>
 
         <button
@@ -157,7 +157,7 @@ function CanvasToolbarInner({
           title={t('canvasToolCritique')}
           aria-label={t('canvasToolCritique')}
         >
-          <ShieldCheck className="h-[18px] w-[18px]" strokeWidth={1.9} />
+          <ShieldCheck className="h-4 w-4" strokeWidth={1.9} />
         </button>
 
         <button
@@ -167,7 +167,7 @@ function CanvasToolbarInner({
           title={t('canvasToolAssistant')}
           aria-label={t('canvasToolAssistant')}
         >
-          <Sparkles className="h-[18px] w-[18px]" strokeWidth={1.9} />
+          <Sparkles className="h-4 w-4" strokeWidth={1.9} />
         </button>
 
         <button
@@ -178,7 +178,7 @@ function CanvasToolbarInner({
           title={t('designPrototypePlay')}
           aria-label={t('designPrototypePlay')}
         >
-          <Play className="h-[18px] w-[18px]" strokeWidth={1.9} />
+          <Play className="h-4 w-4" strokeWidth={1.9} />
         </button>
       </div>
       {contextOpen ? (

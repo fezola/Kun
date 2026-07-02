@@ -642,13 +642,13 @@ function buildCanvasTurnPrompt(options: DesignTurnOptions): string {
   const editHint = deriveSelectedImageEditHint(snapshot)
   const editHintLines = editHint
     ? [
-        `IMPORTANT PRIOR — the user has EXACTLY ONE filled image selected (id "${editHint.id}", imageUrl \`${editHint.imageUrl}\`). Unless they EXPLICITLY ask for a NEW page / screen / 页面, this is the EDIT AN EXISTING IMAGE lane: call generate_image with reference_image_paths: ["${editHint.imageUrl}"], then update_shapes that SAME shape's imageUrl. Do NOT add_screen / add-screen and do NOT write or edit HTML.`,
+        `IMPORTANT PRIOR — the user has EXACTLY ONE filled image selected (id "${editHint.id}", imageUrl \`${editHint.imageUrl}\`). Unless they EXPLICITLY ask for a NEW page / screen / 页面, this is the EDIT AN EXISTING IMAGE lane: call generate_image with reference_image_paths: ["${editHint.imageUrl}"], then call design_update_shapes to update that SAME shape's imageUrl. Do NOT call design_create_screen / add-screen and do NOT write or edit HTML.`,
         ''
       ]
     : []
   const selectionLines = formatSelectedShapesLines(snapshot)
   const lines = [
-    'Kun is asking you to operate the design canvas by calling the `design_canvas` tool.',
+    'Kun is asking you to operate the design canvas with the dedicated design tools.',
     `Workspace: ${options.workspaceRoot}`,
     '',
     ...errorLines,
@@ -657,23 +657,29 @@ function buildCanvasTurnPrompt(options: DesignTurnOptions): string {
     ...selectionLines,
     'How to respond:',
     '- Reply with a short plain-text plan (1-3 sentences) describing what you will do.',
-    '- Then call the real `design_canvas` tool one or more times. Do not emit markdown/fenced JSON blocks and do not ask the user to manually create a canvas first.',
-    '- NEVER paste raw HTML into assistant text and NEVER put HTML/`write`/`content` payloads inside `design_canvas` — it only accepts the actions listed below. Screen HTML is written by the system via Write/Edit tools after `add_screen`.',
+    '- Then call the real design tools one or more times. Choose the dedicated tool that matches the lane below; use legacy `design_canvas` only for backwards-compatible simple calls.',
+    '- Do not emit markdown/fenced JSON blocks and do not ask the user to manually create a canvas first.',
+    '- NEVER paste raw HTML into assistant text and NEVER put HTML/`write`/`content` payloads inside design tools. Screen HTML is written by the system via Write/Edit tools after a screen frame is created.',
     '- The renderer validates each tool call, applies it atomically (one undo entry per call), and visually highlights the affected shapes for ~1s.',
     '- RENDER LIVE: each tool call is executed as soon as its tool result returns — not at the end of your reply. So emit MANY focused calls progressively as you build (a frame, then its children, then the next section), instead of one giant batch. Keep them flowing so the user watches the design materialize piece by piece. Never bundle the whole design into a single call — stream it.',
-    '- You can drive several parts of the layout in the same turn: fire successive `design_canvas` calls back to back (each lands immediately), so independent sections of the draft fill in one after another without waiting for a round trip.',
+    '- You can drive several parts of the layout in the same turn: fire successive design tool calls back to back (each lands immediately), so independent sections of the draft fill in one after another without waiting for a round trip.',
     '',
     'FIRST classify the request and commit to ONE lane (do not mix lanes):',
-    '- EDIT AN EXISTING IMAGE — the user wants to change/edit/restyle/redo/recolor/fix/transform a picture that is ALREADY on the canvas, and the snapshot has a SELECTED `image` shape carrying an `imageUrl`. Phrasings like "change X into Y", "把这张图改成…", "改成 X", or "改一下这张图" all land here when the selected picture is the thing being changed. → call `generate_image` with `reference_image_paths` set to that `imageUrl`, then `update_shapes` that same shape (full rules under "Editing or restyling an EXISTING image" below). In this lane you MUST NOT use `add_screen` / `add-screen` and MUST NOT write or edit any HTML file.',
+    '- EDIT AN EXISTING IMAGE — the user wants to change/edit/restyle/redo/recolor/fix/transform a picture that is ALREADY on the canvas, and the snapshot has a SELECTED `image` shape carrying an `imageUrl`. Phrasings like "change X into Y", "把这张图改成…", "改成 X", or "改一下这张图" all land here when the selected picture is the thing being changed. → call `generate_image` with `reference_image_paths` set to that `imageUrl`, then `design_update_shapes` that same shape (full rules under "Editing or restyling an EXISTING image" below). In this lane you MUST NOT use `design_create_screen` / `add-screen` and MUST NOT write or edit any HTML file.',
     '- FILL AN EMPTY SLOT — a selected empty holder / frame / rect (no `imageUrl`) needs a fresh picture. → `generate_image` from text only, then place it (see "Filling a selected panel" below).',
-    '- BUILD OR REDESIGN A SCREEN — the user wants a new page / screen / UI mockup ("做个页面", "设计一个…", "基于这张图做个落地页"). → call `design_canvas` with `action: "add_screen"`; the system generates its HTML afterwards. A selected image in this lane is only a visual reference — do NOT overwrite it.',
-    '- EDIT THE CANVAS — add, move, align, restyle, group, or annotate shapes. → use the structural ops below.',
+    '- BUILD OR REDESIGN A SCREEN — the user wants a new page / screen / UI mockup ("做个页面", "设计一个…", "基于这张图做个落地页"). → call `design_create_screen`; the system generates its HTML afterwards. A selected image in this lane is only a visual reference — do NOT overwrite it.',
+    '- CREATE OR UPDATE A DESIGN SYSTEM — the user asks for a unified template, theme, style guide, design system, tokens, palette, typography, or "make pages consistent". → call `design_system_template` first, then use `design_validate`.',
+    '- EDIT THE CANVAS — add, move, restyle, group, annotate, or replace images. → use `design_update_shapes` with the structural ops below.',
+    '- ARRANGE THE WHITEBOARD — align, distribute, stack, grid, or responsive reflow existing objects. → use `design_arrange` instead of hand-writing many move ops.',
     'When a filled `image` is selected and the verb is change/edit-like, choose EDIT AN EXISTING IMAGE over BUILD OR REDESIGN A SCREEN.',
     '',
-    '`design_canvas` tool-call schema:',
-    '- { "action": "create_board", "title"? }  // optional; the app keeps one active board per design document',
-    '- { "action": "add_screen", "name": "Screen Name", "brief"?, "x"?, "y"?, "width"?, "height"?, "devicePreset"?: "mobile"|"tablet"|"desktop" }  // creates a screen frame; omitted x/y are placed in the user\'s current viewport; the system auto-generates its HTML content afterwards',
-    '- { "action": "update_shapes", "ops": [ ShapeOp, ... ] }  // edits vector layers/images on the active board',
+    'Dedicated design tool schemas:',
+    '- `design_create_screen`: { "name": "Screen Name", "brief"?, "x"?, "y"?, "width"?, "height"?, "devicePreset"?: "mobile"|"tablet"|"desktop" } OR { "screens": [ ... ] }. Omitted x/y are placed in the current viewport; the system auto-generates HTML afterwards.',
+    '- `design_update_shapes`: { "ops": [ ShapeOp, ... ] }. Edits vector layers/images on the active board.',
+    '- `design_arrange`: { "operation": "align"|"distribute"|"stack"|"grid"|"responsive_reflow", ... }. Use for layout mechanics and whiteboard cleanup.',
+    '- `design_system_template`: { "operation": "create"|"update"|"apply"|"validate", "name"?, "seedColor"?, "mode"?: "light"|"dark"|"both", "template"?: "app"|"saas"|"game"|"editor"|"mobile"|"portfolio", "tone"?: "clean"|"playful"|"premium"|"technical"|"editorial", "targetIds"?, "x"?, "y"? }. Creates a reusable style-kit board and writes token bindings, like a real design-system template.',
+    '- `design_validate`: {}. Runs design-system lint so the next turn sees off-token colors, contrast issues, and tap-target problems.',
+    '- Legacy `design_canvas`: { "action": "create_board"|"add_screen"|"update_shapes", ... } remains accepted, but prefer the dedicated tools above.',
     '',
     'ShapeOp vocabulary for `update_shapes.ops` (each op is a JSON object inside the array):',
     '- { "op": "add", "shape": { "type": "rect"|"ellipse"|"text"|"frame"|"group"|"image"|"arrow"|"line"|"draw", "name"?, "x"?, "y"?, "width"?, "height"?, "rotation"?, "fills"?, "strokes"?, "cornerRadius"?, "shadows"?, "blendMode"?, "layout"?, "constraints"?, "textContent"?, "fontSize"?, "fontFamily"?, "fontColor"?, "textAlign"?: "left"|"center"|"right", "lineHeight"?, "clipContent"?, "imageUrl"?, "points"?, "arrowheadStart"?, "arrowheadEnd"? }, "parentId"? }',
@@ -690,7 +696,7 @@ function buildCanvasTurnPrompt(options: DesignTurnOptions): string {
     '- { "op": "ungroup", "id": "<group-id>" }  // dissolve a group/frame, lifting its children up one level',
     '- { "op": "set-style", "ids": ["<id>",...], "style": { "fills"?, "strokes"?, "cornerRadius"?, "opacity"?, "shadows"?, "blendMode"?, "fontColor"?, "fontSize"?, "fontFamily"?, "fontWeight"?, "textAlign"?, "lineHeight"? } }  // apply ONE style to many shapes at once — use this instead of N separate update ops',
     '- { "op": "auto-layout", "id": "<frame-or-group-id>", "layout": { "direction": "horizontal"|"vertical", "gap"?, "padding"?, "paddingTop"?, "paddingRight"?, "paddingBottom"?, "paddingLeft"?, "primaryAlign"?: "start"|"center"|"end"|"space-between", "counterAlign"?: "start"|"center"|"end" } }  // flex-style; children reflow automatically with even gap/padding. Add "clear": true to remove it.',
-    '- { "op": "add-screen", "name": "Screen Name", "x"?, "y"?, "width"?, "height"?, "devicePreset"?: "mobile"|"tablet"|"desktop" }  // legacy alias accepted inside `update_shapes`; prefer `action: "add_screen"`',
+    '- { "op": "add-screen", "name": "Screen Name", "x"?, "y"?, "width"?, "height"?, "devicePreset"?: "mobile"|"tablet"|"desktop" }  // legacy alias accepted inside `design_update_shapes`; prefer `design_create_screen`',
     '',
     'Design-system ops (use these for cohesion + batch — they make "change the brand color" or "12 identical cards" one call instead of N edits):',
     '- { "op": "define-token", "name": "brand/primary", "kind": "color"|"gradient"|"type"|"space"|"radius"|"shadow", "value": <by kind> }  // color: "#3b82d8"; gradient: a full gradient fill; type: { fontSize?, fontWeight?, fontFamily?, lineHeight?, textAlign?, fontColor? }; space/radius: a number; shadow: a shadows array. Redefining an existing token re-flows every shape bound to it.',
@@ -716,11 +722,11 @@ function buildCanvasTurnPrompt(options: DesignTurnOptions): string {
     '- `blendMode`: any CSS mix-blend-mode ("multiply", "screen", "overlay", …) for compositing.',
     '',
     'Rules:',
-    '- Use `add_screen` ONLY when the user actually wants a new page / screen (the BUILD OR REDESIGN A SCREEN lane). If a filled `image` is selected and the user asked to change / edit / restyle it, do NOT `add_screen` / `add-screen` — edit that image instead. `add_screen` only creates the frame placeholder; the system will AUTOMATICALLY generate the HTML content for the screen in a follow-up step. Do NOT call write/edit tools to create HTML files in this turn.',
+    '- Use `design_create_screen` ONLY when the user actually wants a new page / screen (the BUILD OR REDESIGN A SCREEN lane). If a filled `image` is selected and the user asked to change / edit / restyle it, do NOT create a screen / add-screen — edit that image instead. Screen creation only creates the frame placeholder; the system will AUTOMATICALLY generate the HTML content for the screen in a follow-up step. Do NOT call write/edit tools to create HTML files in this turn.',
     '- Coordinates are in CANVAS pixels (not screen pixels); 1 unit ≈ 1px at 100% zoom.',
     '- ALL coordinates are ABSOLUTE — including shapes inside a frame or group. `parentId` sets logical grouping only; it does NOT offset coordinates. To place a child at the top-left of a frame at (200, 100), give the child x≈200, y≈100 (not 0, 0). The snapshot positions below are likewise absolute. For new screen frames, omit x/y unless the user asked for a precise placement; the app will place them in the user\'s current viewport.',
     '- The snapshot includes `placement`: current `viewBox`, whole-board `contentBounds`, existing `occupiedFrames`, and `recommendedSlots` for new 1280x800 screens. Use it as the whiteboard map.',
-    '- For `add_screen`, prefer omitting `x`/`y` so the system chooses the current empty viewport slot. If you must set explicit coordinates, copy a `placement.recommendedSlots[...]` rect or align deliberately with `placement.occupiedFrames`; do not invent far-off, negative, or overlapping coordinates.',
+    '- For `design_create_screen`, prefer omitting `x`/`y` so the system chooses the current empty viewport slot. If you must set explicit coordinates, copy a `placement.recommendedSlots[...]` rect or align deliberately with `placement.occupiedFrames`; do not invent far-off, negative, or overlapping coordinates.',
     '- Refer to shapes by their `id` from the snapshot below. New shapes you add get auto-named uniquely per parent.',
     '- Prefer composing larger features as a frame containing children (use add for the frame, then add children with `parentId`); position each child within the frame’s absolute bounds.',
     '- Keep batches focused — one batch per logical change so undo granularity stays useful.',
@@ -735,7 +741,7 @@ function buildCanvasTurnPrompt(options: DesignTurnOptions): string {
     'Placing a generated image on the canvas:',
     '- Call the `generate_image` tool to create the picture (pass an `aspect_ratio` matching the box you want).',
     '- Read the saved file path from the tool result (`output.files[0].relativePath`, e.g. `.deepseekgui-images/img-….png`).',
-    '- Then call `design_canvas` with `action: "update_shapes"` and an `add` op with `"type": "image"` and `"imageUrl": "<that relativePath>"` plus `x`/`y`/`width`/`height` for placement. The canvas renders the workspace file automatically.',
+    '- Then call `design_update_shapes` with an `add` op with `"type": "image"` and `"imageUrl": "<that relativePath>"` plus `x`/`y`/`width`/`height` for placement. The canvas renders the workspace file automatically.',
     '- To replace an existing image, `update` that shape\'s `imageUrl` instead of adding another.',
     '',
     'Filling a selected panel or an AI image holder (do this BEFORE scattering new image boxes):',
@@ -749,7 +755,7 @@ function buildCanvasTurnPrompt(options: DesignTurnOptions): string {
     '- Only `add` a free-floating new image box when there is no suitable selected target or holder.',
     '',
     'Editing or restyling an EXISTING image (image-to-image with a reference):',
-    '- Trigger: the user asks to modify, edit, restyle, redo, transform, recolor, enhance, fix, or otherwise change a picture that is ALREADY in the canvas — including "change X into Y" / "把这张图改成…" / "改成 X" where the selected picture is the thing being changed — AND the snapshot shows the target `image` shape carries an `imageUrl` (a workspace-relative path like `.deepseekgui-images/…`). Selected `image` shapes with `imageUrl` are the primary target; same applies if the user names one by id/position. This is an image edit, NOT a request to build a new screen — do NOT `add_screen` / `add-screen` and do NOT write HTML for it.',
+    '- Trigger: the user asks to modify, edit, restyle, redo, transform, recolor, enhance, fix, or otherwise change a picture that is ALREADY in the canvas — including "change X into Y" / "把这张图改成…" / "改成 X" where the selected picture is the thing being changed — AND the snapshot shows the target `image` shape carries an `imageUrl` (a workspace-relative path like `.deepseekgui-images/…`). Selected `image` shapes with `imageUrl` are the primary target; same applies if the user names one by id/position. This is an image edit, NOT a request to build a new screen — do NOT call `design_create_screen` / `add-screen` and do NOT write HTML for it.',
     '- Implicit target via container: if the user selects a `frame` or `group` that contains EXACTLY ONE `image` child with an `imageUrl`, treat that child as the implicit edit target — use the child\'s `imageUrl` as the reference and `update` the child shape\'s `imageUrl` (do NOT add a new image, do NOT touch the parent frame\'s bounds). Two or more `image` children with `imageUrl` ⇒ ask the user which one (or apply the multi-reference clause below only if they explicitly asked to compose).',
     '- Action: call `generate_image` with `reference_image_paths: ["<that imageUrl exactly as it appears in the snapshot>"]` so the model edits the existing picture instead of inventing a fresh one. Keep `aspect_ratio` ≈ the shape\'s w:h. Then `update` THAT shape\'s `imageUrl` to the new `output.files[0].relativePath`; do NOT change its x/y/width/height.',
     '- Multiple selected images for a single composed result: pass each filled shape\'s `imageUrl` in `reference_image_paths` (cap at 4 — drop extras if there are more). The references are treated symmetrically by the model — compose freely from all of them and pick the most coherent result; the order in the array is not load-bearing. Then `update` the PRIMARY target shape\'s `imageUrl` with the new file (when the user named a specific shape, that one; otherwise the first filled `image` in the selection as it appears in the snapshot). Do not touch the other reference shapes unless the user asked you to.',
@@ -779,10 +785,9 @@ function buildCanvasTurnPrompt(options: DesignTurnOptions): string {
     lines.push('', 'Brief:', text.slice(0, WRITE_PROTOTYPE_MAX_TEXT_CHARS))
   }
   lines.push('', 'Example response shape:')
-  lines.push('I will add a 300×200 frame with a heading inside.')
-  lines.push('Then call `design_canvas` with arguments:')
+  lines.push('I will add a 300x200 frame with a heading inside.')
+  lines.push('Then call `design_update_shapes` with arguments:')
   lines.push('{')
-  lines.push('  "action": "update_shapes",')
   lines.push('  "ops": [')
   lines.push('    { "op": "add", "shape": { "type": "frame", "name": "Card", "x": 100, "y": 100, "width": 300, "height": 200 } }')
   lines.push('  ]')

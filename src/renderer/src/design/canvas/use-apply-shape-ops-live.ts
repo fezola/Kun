@@ -6,6 +6,7 @@ import {
   applyCanvasOpBlocks,
   applyCanvasOpsSince,
   extractCanvasOpBlocksFromValue,
+  isDesignCanvasToolName,
   setLastCanvasOpErrors
 } from './apply-shape-ops'
 import { useCanvasSelectionStore } from './canvas-selection-store'
@@ -122,7 +123,7 @@ export function useApplyShapeOpsLive(
 
     const applyToolBlock = (block: ToolBlock): void => {
       if (appliedToolBlockIds.has(block.id)) return
-      if (block.meta?.toolName !== 'design_canvas') return
+      if (!isDesignCanvasToolName(block.meta?.toolName)) return
       if (block.status !== 'success') return
       const detail = block.detail?.trim()
       if (!detail) return

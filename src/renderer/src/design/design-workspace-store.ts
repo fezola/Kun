@@ -265,7 +265,7 @@ function readPersistedCanvasAssistantOpen(): boolean {
   const value = readBrowserStorageItem(CANVAS_ASSISTANT_OPEN_KEY)
   if (value === '1') return true
   if (value === '0') return false
-  return !readPersistedAiRailCollapsed()
+  return false
 }
 
 function readPersistedCanvasInspectorPinned(): boolean {

@@ -5,8 +5,7 @@ import {
   Layers,
   Loader2,
   MessageSquare,
-  PanelLeftClose,
-  PanelLeftOpen,
+  PanelRightClose,
   Plus,
   Sparkles,
   StopCircle,
@@ -63,10 +62,8 @@ type Props = {
   onNewConversation: () => void
   designThreads: NormalizedThread[]
   onSwitchThread: (threadId: string) => void
-}
-
-function isNarrowViewport(): boolean {
-  return typeof window !== 'undefined' && window.matchMedia('(max-width: 1023px)').matches
+  onCollapse: () => void
+  className?: string
 }
 
 function DesignAIRailInner({
@@ -105,18 +102,18 @@ function DesignAIRailInner({
   onConfigureProviders,
   onNewConversation,
   designThreads,
-  onSwitchThread
+  onSwitchThread,
+  onCollapse,
+  className = ''
 }: Props): ReactElement {
   const { t, i18n } = useTranslation('common')
-  const assistantOpen = useDesignWorkspaceStore((s) => s.canvasAssistantOpen)
-  const setAssistantOpen = useDesignWorkspaceStore((s) => s.setCanvasAssistantOpen)
+  const workspaceRoot = useDesignWorkspaceStore((s) => s.workspaceRoot)
   const artifacts = useDesignWorkspaceStore((s) => s.artifacts)
   const activeArtifactId = useDesignWorkspaceStore((s) => s.activeArtifactId)
   const designIntentMode = useDesignWorkspaceStore((s) => s.designIntentMode)
   const multiPageMode = useDesignWorkspaceStore((s) => s.multiPageMode)
   const setMultiPageMode = useDesignWorkspaceStore((s) => s.setMultiPageMode)
   const pagesRun = useDesignWorkspaceStore((s) => s.pagesRun)
-  const [narrowPanelOpen, setNarrowPanelOpen] = useState(false)
   const [threadListOpen, setThreadListOpen] = useState(false)
   const threadListRef = useRef<HTMLDivElement | null>(null)
   const threadPillRef = useRef<HTMLButtonElement | null>(null)
@@ -220,26 +217,9 @@ function DesignAIRailInner({
   const showContextControls =
     !viewingChildThread && (runActive || Boolean(primaryContextChip) || showMultiPageToggle)
 
-  const openAssistant = (): void => {
-    if (isNarrowViewport()) {
-      setNarrowPanelOpen(true)
-      return
-    }
-    setAssistantOpen(true)
-  }
-
-  const closeAssistant = (): void => {
-    if (isNarrowViewport()) {
-      setNarrowPanelOpen(false)
-      return
-    }
-    setAssistantOpen(false)
-  }
-
   const openChildThread = (threadId: string): void => {
     setThreadListOpen(false)
     setChildThreadId(threadId)
-    openAssistant()
   }
 
   const closeChildThread = (): void => {
@@ -249,45 +229,20 @@ function DesignAIRailInner({
     setChildError(null)
   }
 
-  const panelVisibility = `${narrowPanelOpen ? 'flex' : 'hidden'} ${
-    assistantOpen ? 'lg:flex' : 'lg:hidden'
-  }`
-  const launcherVisibility = `${narrowPanelOpen ? 'hidden' : 'flex'} ${
-    assistantOpen ? 'lg:hidden' : 'lg:flex'
-  }`
-
   return (
-    <div className="ds-no-drag pointer-events-none absolute inset-0 z-50 overflow-hidden">
-      <div
-        className={`${launcherVisibility} pointer-events-auto absolute left-3 top-[72px] z-50 items-center gap-2 rounded-full border border-ds-border-muted bg-white/82 px-2.5 py-2 text-ds-muted shadow-[0_14px_42px_rgba(20,47,95,0.12)] backdrop-blur-xl transition hover:bg-white hover:text-ds-ink dark:bg-ds-card/86`}
-      >
-        <button
-          type="button"
-          onClick={openAssistant}
-          className="flex h-9 w-9 items-center justify-center rounded-full bg-ds-card text-accent shadow-sm transition hover:bg-accent-soft"
-          title={t('designRailExpand')}
-          aria-label={t('designRailExpand')}
-        >
-          <PanelLeftOpen className="h-4 w-4" strokeWidth={1.9} />
-        </button>
-        <span className="hidden pr-1 text-[12.5px] font-semibold text-ds-muted sm:block">
-          {t('designRailTitle')}
-        </span>
-      </div>
-
-      <aside
-        className={`${panelVisibility} pointer-events-auto absolute bottom-[128px] left-3 top-[72px] z-50 w-[min(390px,calc(100%-1.5rem))] flex-col overflow-hidden rounded-[28px] border border-ds-border bg-white/78 text-ds-ink shadow-[0_26px_72px_rgba(20,47,95,0.16)] backdrop-blur-2xl dark:bg-ds-canvas/90 max-lg:bottom-[116px] max-lg:max-h-[calc(100%-188px)] lg:w-[clamp(360px,24vw,400px)]`}
-      >
-        <div className="shrink-0 border-b border-ds-border-muted/80 bg-white/68 px-3 py-3 dark:bg-ds-card/72">
+    <aside
+      className={`design-ai-panel ds-no-drag relative flex min-h-0 flex-col overflow-hidden border-l border-ds-border-muted bg-white text-ds-ink backdrop-blur-xl dark:bg-ds-canvas ${className}`}
+    >
+        <div className="shrink-0 border-b border-ds-border-muted bg-white/92 px-3 py-3 dark:bg-ds-card">
           <div className="flex min-w-0 items-center gap-2">
             <button
               type="button"
-              onClick={closeAssistant}
+              onClick={onCollapse}
               className="ds-sidebar-toggle-button shrink-0"
               title={t('designRailCollapse')}
               aria-label={t('designRailCollapse')}
             >
-              <PanelLeftClose className="h-4 w-4" strokeWidth={1.85} />
+              <PanelRightClose className="h-4 w-4" strokeWidth={1.85} />
             </button>
             <button
               ref={threadPillRef}
@@ -432,16 +387,15 @@ function DesignAIRailInner({
             </div>
           ) : null}
         </div>
-      </aside>
 
       <div
         data-design-rail-composer
-        className="pointer-events-auto absolute bottom-4 left-1/2 z-[60] w-[min(760px,calc(100%-2rem))] -translate-x-1/2 max-sm:bottom-3 max-sm:w-[calc(100%-1rem)]"
+        className="shrink-0 border-t border-ds-border-muted bg-white/92 px-4 pb-4 pt-3 dark:bg-ds-card"
       >
         {showContextControls ? (
-          <div className="mb-2 flex flex-wrap items-center justify-center gap-2">
+          <div className="mb-2 flex flex-wrap items-center gap-2">
             {pagesRun ? (
-              <div className="flex max-w-full items-center gap-2 rounded-full border border-accent/40 bg-accent/10 px-3 py-2 text-[12.5px] font-semibold text-accent shadow-[0_12px_34px_rgba(20,47,95,0.10)] backdrop-blur-xl">
+              <div className="flex max-w-full items-center gap-2 rounded-full border border-accent/40 bg-accent/10 px-3 py-2 text-[12.5px] font-semibold text-accent">
                 <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" strokeWidth={2} />
                 <span className="min-w-0 truncate">
                   {pagesRun.phase === 'generating'
@@ -468,7 +422,7 @@ function DesignAIRailInner({
             ) : (
               <>
                 {primaryContextChip ? (
-                  <div className="flex max-w-full items-center gap-2 rounded-full border border-ds-border bg-white/84 px-3 py-2 text-[12.5px] font-semibold text-ds-muted shadow-[0_12px_34px_rgba(20,47,95,0.10)] backdrop-blur-xl dark:bg-ds-card/88">
+                  <div className="flex max-w-full items-center gap-2 rounded-full border border-ds-border bg-ds-surface-subtle px-3 py-2 text-[12.5px] font-semibold text-ds-muted dark:bg-white/6">
                     <Sparkles className="h-3.5 w-3.5 shrink-0 text-accent" strokeWidth={1.8} />
                     <span className="min-w-0 truncate">{contextLabel}</span>
                     {primaryContextChip.removable !== false && onRemoveContextChip ? (
@@ -490,10 +444,10 @@ function DesignAIRailInner({
                     onClick={() => setMultiPageMode(!multiPageMode)}
                     aria-pressed={multiPageMode}
                     title={t('designPagesToggleHint')}
-                    className={`flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-2 text-[12.5px] font-semibold shadow-[0_12px_34px_rgba(20,47,95,0.10)] backdrop-blur-xl transition ${
+                    className={`flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-2 text-[12.5px] font-semibold transition ${
                       multiPageMode
                         ? 'border-accent bg-accent text-white'
-                        : 'border-ds-border bg-white/84 text-ds-muted hover:text-ds-ink dark:bg-ds-card/88'
+                        : 'border-ds-border bg-ds-surface-subtle text-ds-muted hover:text-ds-ink dark:bg-white/6'
                     }`}
                   >
                     <Layers className="h-3.5 w-3.5 shrink-0" strokeWidth={1.9} />
@@ -505,7 +459,7 @@ function DesignAIRailInner({
           </div>
         ) : null}
         {viewingChildThread ? (
-          <div className="mx-auto flex w-fit items-center gap-2 rounded-full border border-ds-border bg-white/90 px-3 py-2 text-[12.5px] font-semibold text-ds-muted shadow-[0_12px_34px_rgba(20,47,95,0.12)] backdrop-blur-xl dark:bg-ds-card/90">
+          <div className="flex w-fit max-w-full items-center gap-2 rounded-full border border-ds-border bg-ds-surface-subtle px-3 py-2 text-[12.5px] font-semibold text-ds-muted dark:bg-white/6">
             <span>{t('subagentSessionBannerTitle')}</span>
             <button
               type="button"
@@ -522,6 +476,7 @@ function DesignAIRailInner({
 
             <FloatingComposer
               variant="compact"
+              workspaceRootOverride={workspaceRoot}
               input={input}
               setInput={setInput}
               mode={mode}
@@ -548,14 +503,14 @@ function DesignAIRailInner({
               onPasteClipboardImage={onPasteClipboardImage}
               onRemoveAttachment={onRemoveAttachment}
               onRemoveContextChip={onRemoveContextChip}
-              onSend={() => { openAssistant(); onSend() }}
+              onSend={onSend}
               onInterrupt={onInterrupt}
               onConfigureProviders={onConfigureProviders}
             />
           </>
         )}
       </div>
-    </div>
+    </aside>
   )
 }
 

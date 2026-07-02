@@ -36,6 +36,7 @@ import { useDesignSystemStore } from './design-system-store'
 import { resolveTokenPatch, type DesignToken, type TokenProp } from './design-system-types'
 import type { ComponentDef, ComponentOverrides, ComponentSlot } from './design-system-types'
 import { lintDesignSystem, setLastLintFindings } from './design-lint'
+import { applyDesignSystemTemplateOp } from './design-system-template'
 
 const ShapeTypeSchema = z.enum([
   'rect',
@@ -426,6 +427,38 @@ export const ShapeOpSchema = z.discriminatedUnion('op', [
       .optional(),
     gap: z.number().min(0).optional(),
     at: z.object({ x: z.number(), y: z.number() }).optional()
+  }),
+  z.object({
+    op: z.literal('design-system-template'),
+    operation: z.enum(['create', 'update', 'apply']).default('create'),
+    name: z.string().optional(),
+    seedColor: z.string().optional(),
+    mode: z.enum(['light', 'dark', 'both']).optional(),
+    template: z.enum(['app', 'saas', 'game', 'editor', 'mobile', 'portfolio']).optional(),
+    tone: z.enum(['clean', 'playful', 'premium', 'technical', 'editorial']).optional(),
+    sections: z
+      .array(
+        z.enum([
+          'palette',
+          'typography',
+          'buttons',
+          'forms',
+          'navigation',
+          'cards',
+          'icons',
+          'states',
+          'spacing',
+          'radius',
+          'shadow'
+        ])
+      )
+      .optional(),
+    targetIds: z.array(z.string()).optional(),
+    x: z.number().optional(),
+    y: z.number().optional(),
+    width: z.number().positive().optional(),
+    height: z.number().positive().optional(),
+    dryRun: z.boolean().optional()
   }),
   z.object({ op: z.literal('lint-design-system') })
 ])
@@ -1636,6 +1669,10 @@ function executeOne(op: ShapeOp, affectedIds: Set<string>, errors: OpError[]): v
         }
         cursorY += rowH + gap
       }
+      break
+    }
+    case 'design-system-template': {
+      applyDesignSystemTemplateOp(op, affectedIds, errors)
       break
     }
     case 'lint-design-system': {

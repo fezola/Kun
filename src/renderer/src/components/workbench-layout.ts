@@ -155,6 +155,8 @@ function fitWorkbenchWidths(
 
 export function useWorkbenchLayout({
   activeThreadId,
+  designAssistantOpen,
+  designImplementOpen,
   latestAutoOpenDevPreviewUrl,
   latestDevPreviewUrl,
   route,
@@ -162,6 +164,8 @@ export function useWorkbenchLayout({
   writeAssistantOpen
 }: {
   activeThreadId: string | null
+  designAssistantOpen: boolean
+  designImplementOpen: boolean
   latestAutoOpenDevPreviewUrl: string | null
   latestDevPreviewUrl: string | null
   route: AppRoute
@@ -186,7 +190,11 @@ export function useWorkbenchLayout({
   const shellRef = useRef<HTMLDivElement | null>(null)
   const previewThreadId = useRef<string | null>(activeThreadId)
   const autoOpenedPreviewUrlRef = useRef<string | null>(null)
-  const rightPanelVisible = route === 'write' ? writeAssistantOpen : rightPanelMode !== null
+  const rightPanelVisible = route === 'write'
+    ? writeAssistantOpen
+    : route === 'design'
+      ? designAssistantOpen || designImplementOpen
+      : rightPanelMode !== null
 
   useEffect(() => {
     persistWidth(LEFT_PANEL_WIDTH_KEY, leftSidebarWidth)
@@ -247,7 +255,7 @@ export function useWorkbenchLayout({
   }, [latestAutoOpenDevPreviewUrl, route])
 
   useEffect(() => {
-    if (route !== 'write') return
+    if (route !== 'write' && route !== 'design') return
     if (rightPanelMode !== null) setRightPanelMode(null)
   }, [route, rightPanelMode])
 

@@ -63,6 +63,77 @@ describe('define-token', () => {
   })
 })
 
+describe('design-system-template', () => {
+  it('creates a reusable style-kit board with tokens and token-bound shapes', () => {
+    const r = executeOps([
+      {
+        op: 'design-system-template',
+        operation: 'create',
+        name: 'IKUN World',
+        seedColor: '#D4AF37',
+        mode: 'dark',
+        template: 'game'
+      }
+    ])
+    expect(r.ok).toBe(true)
+    expect(r.affectedIds.length).toBeGreaterThan(20)
+    expect(useDesignSystemStore.getState().getToken('brand/primary')).toEqual({
+      name: 'brand/primary',
+      kind: 'color',
+      value: '#D4AF37'
+    })
+    expect(useDesignSystemStore.getState().getComponent('Button')?.slots).toEqual([
+      { path: 'label', kind: 'text', label: 'Label' }
+    ])
+    const shapes = Object.values(useCanvasShapeStore.getState().document.objects)
+    expect(shapes.some((shape) => shape.name.includes('IKUN World Style Kit'))).toBe(true)
+    expect(shapes.some((shape) => shape.tokenBindings?.fill === 'brand/primary')).toBe(true)
+  })
+
+  it('creates paired light and dark style-kit boards with namespaced tokens', () => {
+    const r = executeOps([
+      {
+        op: 'design-system-template',
+        operation: 'create',
+        name: 'IKUN World',
+        seedColor: '#D4AF37',
+        mode: 'both',
+        x: 120,
+        y: 240
+      }
+    ])
+
+    expect(r.ok).toBe(true)
+    expect(useDesignSystemStore.getState().getToken('brand/primary')?.value).toBe('#D4AF37')
+    expect(useDesignSystemStore.getState().getToken('dark/brand/primary')?.value).toBe('#D4AF37')
+    expect(useDesignSystemStore.getState().getToken('light/brand/primary')?.value).toBe('#D4AF37')
+    const shapes = Object.values(useCanvasShapeStore.getState().document.objects)
+    expect(shapes.some((shape) => shape.name.includes('IKUN World Dark Style Kit'))).toBe(true)
+    expect(shapes.some((shape) => shape.name.includes('IKUN World Light Style Kit'))).toBe(true)
+    expect(shapes.some((shape) => shape.tokenBindings?.fill === 'dark/brand/primary')).toBe(true)
+    expect(shapes.some((shape) => shape.tokenBindings?.fill === 'light/brand/primary')).toBe(true)
+  })
+
+  it('apply operation reflows existing token-bound shapes without creating a new board', () => {
+    executeOps([{ op: 'define-token', name: 'brand/primary', kind: 'color', value: '#111111' }])
+    const id = addRect()
+    executeOps([{ op: 'apply-token', ids: [id], prop: 'fill', token: 'brand/primary' }])
+    const beforeCount = useCanvasShapeStore.getState().getAllShapeIds().length
+
+    const r = executeOps([
+      { op: 'design-system-template', operation: 'apply', seedColor: '#D4AF37' }
+    ])
+
+    expect(r.ok).toBe(true)
+    expect(useCanvasShapeStore.getState().getAllShapeIds()).toHaveLength(beforeCount)
+    expect((useCanvasShapeStore.getState().getShape(id) as CanvasShape).fills[0]).toEqual({
+      type: 'solid',
+      color: '#D4AF37',
+      opacity: 1
+    })
+  })
+})
+
 describe('apply-token', () => {
   it('binds a color token to a shape fill and records the binding', () => {
     executeOps([{ op: 'define-token', name: 'brand/primary', kind: 'color', value: '#3b82d8' }])

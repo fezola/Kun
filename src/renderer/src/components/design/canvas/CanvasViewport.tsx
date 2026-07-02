@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useCanvasShapeStore } from '../../../design/canvas/canvas-shape-store'
 import { useCanvasViewportStore } from '../../../design/canvas/canvas-viewport-store'
+import { useCanvasUiScale } from '../../../design/canvas/canvas-ui-scale'
 import { useCanvasSelectionStore } from '../../../design/canvas/canvas-selection-store'
 import { useImageAnnotationStore } from '../../../design/canvas/image-annotation-store'
 import { useCanvasUndoStore } from '../../../design/canvas/canvas-undo-store'
@@ -188,6 +189,7 @@ export function CanvasViewport({
   }, [onUseElementAsContext])
 
   const zoom = containerWidth / vbox.width
+  const uiScale = useCanvasUiScale()
   const tool = useMemo(() => toolFactories[activeTool](), [activeTool])
   const middlePanTool = useMemo(() => createHandTool(), [])
   const workspaceValue = useMemo(() => ({ workspaceRoot }), [workspaceRoot])
@@ -549,7 +551,10 @@ export function CanvasViewport({
             ) : null}
           </div>
         </div>
-        <div className="pointer-events-none absolute right-3 top-1/2 z-40 -translate-y-1/2">
+        <div
+          className="pointer-events-none absolute right-3 top-1/2 z-40 -translate-y-1/2"
+          style={{ transform: `translateY(-50%) scale(${uiScale})`, transformOrigin: 'right center' }}
+        >
           <CanvasToolbar
             workspaceRoot={workspaceRoot}
             prototypePlayable={prototypePlayable}
@@ -558,12 +563,18 @@ export function CanvasViewport({
             onRequestCanvasCritique={requestCanvasCritique}
           />
         </div>
-        <div className="pointer-events-none absolute bottom-4 right-4 z-40 hidden lg:block">
+        <div
+          className="pointer-events-none absolute bottom-4 right-4 z-40 hidden lg:block"
+          style={{ transform: `scale(${uiScale})`, transformOrigin: 'bottom right' }}
+        >
           <div className="pointer-events-auto">
             <CanvasZoomBar />
           </div>
         </div>
-        <div className="pointer-events-none absolute bottom-4 left-4 z-40 hidden md:block">
+        <div
+          className="pointer-events-none absolute bottom-4 left-4 z-40 hidden md:block"
+          style={{ transform: `scale(${uiScale})`, transformOrigin: 'bottom left' }}
+        >
           <div className="pointer-events-auto">
             <CanvasMinimap />
           </div>
