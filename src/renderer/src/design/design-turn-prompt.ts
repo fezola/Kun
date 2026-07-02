@@ -718,7 +718,7 @@ function buildCanvasTurnPrompt(options: DesignTurnOptions): string {
     '- Do NOT invent paths. If the target shape has no `imageUrl` field in the snapshot, treat it as empty and generate fresh.',
     '',
     ...formatDesignSystemLines(),
-    'Current canvas snapshot (shape ids, names, positions, `selected`/`aiImageHolder` flags, `imageUrl` for filled image shapes, `tokenBindings` for token-bound props, plus a style digest — `fill`/`stroke` (color/width)/`fontColor`/`cornerRadius` — when set, so you can MATCH the existing palette instead of guessing; if `omitted` > 0 the view is truncated — focus a frame to see the rest):',
+    'Current canvas snapshot (shape ids, names, positions, `selected`/`inView`/`nearSelection`/`aiImageHolder` flags, `imageUrl` for filled image shapes, `tokenBindings` for token-bound props, sampled absolute `points` for arrows/lines/freehand with per-shape `pointsOmitted` when extra vertices were compacted, plus a style digest — `fill`/`stroke` (color/width)/`fontColor`/`cornerRadius` — when set, so you can MATCH the existing palette instead of guessing; if `omitted` > 0 the view is truncated but selected, nearby, and viewport-visible shapes are prioritized):',
     '```json',
     snapshotJson,
     '```'

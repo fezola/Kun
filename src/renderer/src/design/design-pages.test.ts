@@ -3,6 +3,7 @@ import {
   DESIGN_PAGES_MAX,
   buildDesignPlanPrompt,
   buildHtmlSiblingManifest,
+  buildPrototypeLinksForPage,
   extractAgentDesignSummary,
   parsePagesPlan
 } from './design-pages'
@@ -171,6 +172,36 @@ describe('parsePagesPlan', () => {
     expect(parsePagesPlan('no json here')).toEqual([])
     expect(parsePagesPlan('```pages\nnot json\n```')).toEqual([])
     expect(parsePagesPlan('')).toEqual([])
+  })
+})
+
+describe('buildPrototypeLinksForPage', () => {
+  it('resolves planner links to target artifacts and local hrefs', () => {
+    const links = buildPrototypeLinksForPage(
+      {
+        title: 'Home',
+        brief: 'Landing',
+        primaryAction: 'Start trial',
+        linksTo: ['Signup', 'Dashboard', 'Signup']
+      },
+      '.kun-design/doc/home/v1.html',
+      [
+        { title: 'Home', artifactId: 'home', relativePath: '.kun-design/doc/home/v1.html' },
+        { title: 'Signup', artifactId: 'signup', relativePath: '.kun-design/doc/signup/v1.html' }
+      ]
+    )
+
+    expect(links).toEqual([
+      {
+        targetTitle: 'Signup',
+        targetArtifactId: 'signup',
+        href: '../signup/v1.html',
+        label: 'Start trial'
+      },
+      {
+        targetTitle: 'Dashboard'
+      }
+    ])
   })
 })
 

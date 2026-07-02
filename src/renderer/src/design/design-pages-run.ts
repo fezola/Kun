@@ -3,6 +3,7 @@ import { collectAssistantTextForTurn } from '../store/chat-store-runtime-helpers
 import type { ChatBlock, ToolBlock } from '../agent/types'
 import type { SendMessageOverrides } from '../store/chat-store-types'
 import { formatDesignSystemMarkdown, type DesignContext } from './design-context'
+import { buildStitchDesignMarkdown, STITCH_DESIGN_MD_PATH } from './design-md-compat'
 import {
   DESIGN_SYSTEM_MD_PATH,
   buildDesignLogoPrompt,
@@ -19,6 +20,7 @@ import {
   DESIGN_PAGES_MAX,
   buildDesignPlanPrompt,
   buildHtmlSiblingManifest,
+  buildPrototypeLinksForPage,
   extractAgentDesignSummary,
   parsePagesPlan,
   type DesignPagePlanEntry
@@ -27,12 +29,12 @@ import { prepareDesignPreviewFile } from './design-preview-file'
 import {
   buildDesignTurnPrompt,
   buildParallelDesignPagesPrompt,
-  buildPrototypeHref,
   type ParallelDesignPageJob
 } from './design-turn-prompt'
-import { createDesignArtifactId, defaultDesignArtifactNode } from './design-types'
+import { createDesignArtifactId, defaultDesignArtifactNode, type DesignDirection } from './design-types'
 import type { ParallelDesignPageState } from './design-workspace-store-types'
 import { useDesignWorkspaceStore } from './design-workspace-store'
+import { useDesignSystemStore } from './canvas/design-system-store'
 
 type SendMessageFn = (
   text: string,
@@ -94,28 +96,34 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-function normalizePlanTitle(title: string): string {
-  return title.trim().toLowerCase().replace(/\s+/g, ' ')
+function buildDirectionName(brief: string, plan: readonly DesignPagePlanEntry[]): string {
+  const fromBrief = brief
+    .trim()
+    .replace(/\s+/g, ' ')
+    .split(' ')
+    .slice(0, 5)
+    .join(' ')
+  if (fromBrief) return fromBrief.length > 48 ? `${fromBrief.slice(0, 45)}...` : fromBrief
+  return plan[0]?.title ? `${plan[0].title} direction` : 'Design direction'
 }
 
 function formatPageFlowLines(
   entry: DesignPagePlanEntry,
   currentRelativePath: string,
-  plannedPages: Array<{ title: string; relativePath: string }>
+  plannedPages: Array<{ title: string; artifactId: string; relativePath: string }>
 ): string[] {
   const lines: string[] = []
   if (entry.primaryAction?.trim()) {
     lines.push(`Primary prototype action for this page: ${entry.primaryAction.trim()}`)
   }
-  const linksTo = entry.linksTo?.map((title) => title.trim()).filter(Boolean) ?? []
-  if (linksTo.length > 0) {
+  const links = buildPrototypeLinksForPage(entry, currentRelativePath, plannedPages)
+  if (links.length > 0) {
     lines.push('Planned outgoing prototype links from this page:')
-    for (const title of linksTo) {
-      const target = plannedPages.find((page) => normalizePlanTitle(page.title) === normalizePlanTitle(title))
-      if (target) {
-        lines.push(`- "${target.title}" -> href \`${buildPrototypeHref(currentRelativePath, target.relativePath)}\``)
+    for (const link of links) {
+      if (link.href) {
+        lines.push(`- "${link.targetTitle}" -> href \`${link.href}\``)
       } else {
-        lines.push(`- "${title}" -> no matching pre-created page; do not invent a file path.`)
+        lines.push(`- "${link.targetTitle}" -> no matching pre-created page; do not invent a file path.`)
       }
     }
     lines.push('Use these exact href values for matching targets. If a target is missing, make the control local/stateful instead of linking to a non-existent file.')
@@ -617,36 +625,65 @@ export async function runDesignPages(deps: RunDesignPagesDeps): Promise<void> {
     // baseIndex already accounts for any foundation cards added above.
     const baseIndex = useDesignWorkspaceStore.getState().artifacts.length
     const planTitles = plan.map((p) => `"${p.title}"`).join(', ')
-    const created: Array<ParallelDesignPageJob & { entry: DesignPagePlanEntry }> = []
-    for (let i = 0; i < plan.length; i += 1) {
-      if (signal.cancelled) return
-      const entry = plan[i]
+    const directionCreatedAt = new Date().toISOString()
+    const direction: DesignDirection = {
+      id: createDesignArtifactId(),
+      name: buildDirectionName(deps.brief, plan),
+      status: 'active',
+      createdAt: directionCreatedAt
+    }
+    const pageDrafts = plan.map((entry, i) => {
       const id = createDesignArtifactId()
-      const relativePath = `.kun-design/${docId}/${id}/v1.html`
-      const designMdPath = `.kun-design/${docId}/${id}/DESIGN.md`
-      const createdAt = new Date().toISOString()
-      useDesignWorkspaceStore.getState().upsertArtifact({
+      return {
+        entry,
         id,
+        relativePath: `.kun-design/${docId}/${id}/v1.html`,
+        designMdPath: `.kun-design/${docId}/${id}/DESIGN.md`,
+        createdAt: new Date().toISOString(),
+        node: defaultDesignArtifactNode(baseIndex + i)
+      }
+    })
+    const plannedPages = pageDrafts.map((page) => ({
+      title: page.entry.title,
+      artifactId: page.id,
+      relativePath: page.relativePath
+    }))
+    const created: Array<ParallelDesignPageJob & { entry: DesignPagePlanEntry }> = []
+    for (const page of pageDrafts) {
+      if (signal.cancelled) return
+      const entry = page.entry
+      const prototypeLinks = buildPrototypeLinksForPage(entry, page.relativePath, plannedPages)
+      useDesignWorkspaceStore.getState().upsertArtifact({
+        id: page.id,
         kind: 'html',
         title: entry.title,
-        relativePath,
-        createdAt,
-        updatedAt: createdAt,
-        versions: [{ id: `${id}-v1`, relativePath, createdAt, summary: entry.brief }],
-        designMdPath,
+        relativePath: page.relativePath,
+        createdAt: page.createdAt,
+        updatedAt: page.createdAt,
+        versions: [
+          {
+            id: `${page.id}-v1`,
+            relativePath: page.relativePath,
+            createdAt: page.createdAt,
+            summary: entry.brief
+          }
+        ],
+        designMdPath: page.designMdPath,
         previewStatus: 'pending',
-        node: defaultDesignArtifactNode(baseIndex + i)
+        node: page.node,
+        direction,
+        ...(prototypeLinks.length > 0 ? { prototypeLinks } : {})
       })
-      const prep = await prepareDesignPreviewFile(deps.workspaceRoot, relativePath)
+      const prep = await prepareDesignPreviewFile(deps.workspaceRoot, page.relativePath)
       if (!prep.ok) {
         store.setFileError(`Design preview setup failed: ${prep.message}`)
         return
       }
       created.push({
-        artifactId: id,
+        artifactId: page.id,
         title: entry.title,
-        relativePath,
-        designMdPath,
+        relativePath: page.relativePath,
+        designMdPath: page.designMdPath,
         brief: entry.brief,
         screenManifest: [],
         entry
@@ -666,7 +703,6 @@ export async function runDesignPages(deps: RunDesignPagesDeps): Promise<void> {
     const readable = useDesignWorkspaceStore
       .getState()
       .artifacts.filter((a) => foundationBuiltIds.has(a.id) || createdIds.has(a.id))
-    const plannedPages = created.map((page) => ({ title: page.title, relativePath: page.relativePath }))
     const jobs: ParallelDesignPageJob[] = created.map((page, i) => {
       const projectContext =
         created.length > 1
@@ -746,6 +782,24 @@ export async function runDesignPages(deps: RunDesignPagesDeps): Promise<void> {
     // Land on the primary (first) page so the canvas focuses something finished.
     if (created.length > 0) {
       useDesignWorkspaceStore.getState().setActiveArtifact(created[0].artifactId)
+    }
+
+    if (!signal.cancelled) {
+      const state = useDesignWorkspaceStore.getState()
+      const activeDoc = state.documents.find((doc) => doc.id === state.activeDocumentId)
+      await writeWorkspaceTextFile(
+        deps.workspaceRoot,
+        STITCH_DESIGN_MD_PATH,
+        buildStitchDesignMarkdown({
+          title: activeDoc?.title,
+          brief: deps.brief,
+          ...(deps.designContext ? { designContext: deps.designContext } : {}),
+          designSystem: useDesignSystemStore.getState().system,
+          designSystemMdPath: designSystemRef ?? DESIGN_SYSTEM_MD_PATH,
+          ...(designMdRef ? { projectBriefPath: designMdRef } : {}),
+          artifacts: state.artifacts
+        })
+      )
     }
   } catch (error) {
     store.setFileError(error instanceof Error ? error.message : String(error))

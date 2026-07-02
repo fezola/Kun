@@ -38,12 +38,28 @@ describe('design artifact persistence', () => {
       versions: [{ id: 'draft-v1', relativePath: '.kun-design/draft/v1.html', createdAt, summary: '' }],
       designMdPath: '.kun-design/draft/DESIGN.md',
       previewStatus: 'ready',
-      node: { x: 120, y: 240, width: 512, height: 384, sizeMode: 'auto', favorite: true, viewMode: 'code' }
+      node: { x: 120, y: 240, width: 512, height: 384, sizeMode: 'auto', favorite: true, viewMode: 'code' },
+      prototypeLinks: [
+        {
+          targetTitle: 'Signup',
+          targetArtifactId: 'signup',
+          href: '../signup/v1.html',
+          label: 'Start trial'
+        }
+      ],
+      direction: {
+        id: 'dir_1',
+        name: 'Signup exploration',
+        status: 'active',
+        createdAt
+      }
     }
 
     const parsed = parseArtifactMeta(serializeArtifactMeta(artifact), 'draft')
 
     expect(parsed?.node).toEqual(artifact.node)
+    expect(parsed?.prototypeLinks).toEqual(artifact.prototypeLinks)
+    expect(parsed?.direction).toEqual(artifact.direction)
     expect(parsed?.designMdPath).toBe('.kun-design/draft/DESIGN.md')
     expect(parsed?.previewStatus).toBe('ready')
   })

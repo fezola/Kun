@@ -2,61 +2,29 @@ import { memo, useCallback, useRef, type ReactElement } from 'react'
 import type { CanvasShape, Point } from '../../../design/canvas/canvas-types'
 import { useCanvasShapeStore } from '../../../design/canvas/canvas-shape-store'
 import { useCanvasUndoStore } from '../../../design/canvas/canvas-undo-store'
+import {
+  absoluteLinearPoints,
+  normalizeAbsoluteLinearPoints,
+  removeLinearPoint,
+  snapshotLinearPoints,
+  type LinearPointPatch
+} from '../../../design/canvas/linear-point-edit'
 
 const VERTEX_R_PX = 5
 const MID_R_PX = 4
 const SELECTION_COLOR = '#3b82f6'
 
-type SnapshotPatch = {
-  x: number
-  y: number
-  width: number
-  height: number
-  points: Point[]
-}
-
-function snapshot(shape: CanvasShape): SnapshotPatch {
-  return {
-    x: shape.x,
-    y: shape.y,
-    width: shape.width,
-    height: shape.height,
-    points: (shape.points ?? []).map((p) => ({ x: p.x, y: p.y }))
-  }
-}
-
-/** Recompute axis-aligned bbox + points relative to that bbox, given absolute coords. */
-function normalizeAbs(abs: Point[]): SnapshotPatch {
-  let minX = Infinity
-  let minY = Infinity
-  let maxX = -Infinity
-  let maxY = -Infinity
-  for (const p of abs) {
-    if (p.x < minX) minX = p.x
-    if (p.y < minY) minY = p.y
-    if (p.x > maxX) maxX = p.x
-    if (p.y > maxY) maxY = p.y
-  }
-  return {
-    x: minX,
-    y: minY,
-    width: maxX - minX,
-    height: maxY - minY,
-    points: abs.map((p) => ({ x: p.x - minX, y: p.y - minY }))
-  }
-}
-
 /**
  * Excalidraw-style polyline editor for selected `arrow` / `line` shapes.
  * Solid blue dots = vertices (drag to move). Dashed dots between every pair of
  * vertices = midpoint handles: dragging one inserts a new vertex at that
- * position, so a 2-point straight line immediately becomes a 3-point polyline
- * that LinearShape smooths into a Catmull-Rom curve. The bbox + relative points
- * are recomputed on every move so the rest of the box-based machinery (select,
- * snap, properties) keeps working unchanged.
+ * position, so a 2-point straight line immediately becomes a 3-point polyline.
+ * Option/Alt-click or double-click a solid vertex to delete it when 3+ vertices
+ * exist. The bbox + relative points are recomputed on every edit so the rest of
+ * the box-based machinery (select, snap, properties) keeps working unchanged.
  */
 function LinearPointEditorInner({ shape, zoom }: { shape: CanvasShape; zoom: number }): ReactElement | null {
-  const startRef = useRef<SnapshotPatch | null>(null)
+  const startRef = useRef<LinearPointPatch | null>(null)
 
   const beginDrag = useCallback(
     (
@@ -75,12 +43,13 @@ function LinearPointEditorInner({ shape, zoom }: { shape: CanvasShape; zoom: num
       const store = useCanvasShapeStore.getState()
       const before = store.document.objects[shape.id]
       if (!before) return
-      startRef.current = snapshot(before)
+      startRef.current = snapshotLinearPoints(before)
 
       // Commit the insertion immediately for midpoint drags so the user sees
       // their grabbed dot already sitting on the polyline.
       if (seedAbs) {
-        store.updateShape(shape.id, normalizeAbs(seedAbs), true)
+        const patch = normalizeAbsoluteLinearPoints(seedAbs)
+        if (patch) store.updateShape(shape.id, patch, true)
       }
 
       const onMove = (ev: PointerEvent): void => {
@@ -91,10 +60,11 @@ function LinearPointEditorInner({ shape, zoom }: { shape: CanvasShape; zoom: num
 
         const cur = useCanvasShapeStore.getState().document.objects[shape.id]
         if (!cur || !cur.points) return
-        const abs = cur.points.map((p) => ({ x: cur.x + p.x, y: cur.y + p.y }))
+        const abs = absoluteLinearPoints(cur)
         if (movingIndex < 0 || movingIndex >= abs.length) return
         abs[movingIndex] = { x: canvasX, y: canvasY }
-        useCanvasShapeStore.getState().updateShape(shape.id, normalizeAbs(abs), true)
+        const patch = normalizeAbsoluteLinearPoints(abs)
+        if (patch) useCanvasShapeStore.getState().updateShape(shape.id, patch, true)
       }
 
       const onUp = (): void => {
@@ -104,7 +74,7 @@ function LinearPointEditorInner({ shape, zoom }: { shape: CanvasShape; zoom: num
           const after = useCanvasShapeStore.getState().document.objects[shape.id]
           if (after) {
             useCanvasUndoStore.getState().pushChange({
-              patches: [{ id: shape.id, before, after: snapshot(after) }],
+              patches: [{ id: shape.id, before, after: snapshotLinearPoints(after) }],
               label: 'edit-points'
             })
           }
@@ -117,6 +87,20 @@ function LinearPointEditorInner({ shape, zoom }: { shape: CanvasShape; zoom: num
     },
     [shape.id]
   )
+
+  const deleteVertex = useCallback((index: number): void => {
+    const store = useCanvasShapeStore.getState()
+    const beforeShape = store.document.objects[shape.id]
+    if (!beforeShape) return
+    const before = snapshotLinearPoints(beforeShape)
+    const after = removeLinearPoint(beforeShape, index)
+    if (!after) return
+    store.updateShape(shape.id, after, true)
+    useCanvasUndoStore.getState().pushChange({
+      patches: [{ id: shape.id, before, after }],
+      label: 'edit-points'
+    })
+  }, [shape.id])
 
   const pts = shape.points ?? []
   if (pts.length < 2) return null
@@ -172,9 +156,20 @@ function LinearPointEditorInner({ shape, zoom }: { shape: CanvasShape; zoom: num
           strokeWidth={sw}
           style={{ cursor: 'grab' }}
           pointerEvents="all"
-          onPointerDown={(e) =>
+          onPointerDown={(e) => {
+            if (e.altKey && pts.length > 2) {
+              e.stopPropagation()
+              e.preventDefault()
+              deleteVertex(i)
+              return
+            }
             beginDrag(e, (e.currentTarget as SVGCircleElement).ownerSVGElement, null, i)
-          }
+          }}
+          onDoubleClick={(e) => {
+            e.stopPropagation()
+            e.preventDefault()
+            deleteVertex(i)
+          }}
         />
       ))}
     </g>

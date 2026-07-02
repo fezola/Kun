@@ -129,6 +129,9 @@ describe('runDesignPages parallel fanout', () => {
     expect(fanoutPrompt).toMatch(/\\?"Community\\?" -> href `\.\.\/[a-z0-9_-]+\/v1\.html`/)
     expect(fanoutPrompt).toContain('prototype href: ../')
     expect(useDesignWorkspaceStore.getState().artifacts).toHaveLength(2)
+    const artifacts = useDesignWorkspaceStore.getState().artifacts
+    expect(new Set(artifacts.map((artifact) => artifact.direction?.id))).toHaveLength(1)
+    expect(artifacts.every((artifact) => artifact.direction?.name === 'IKUN community')).toBe(true)
     expect(useDesignWorkspaceStore.getState().pagesRun).toBeNull()
     expect(Object.values(useDesignWorkspaceStore.getState().parallelPageStates)).toHaveLength(2)
     expect(Object.values(useDesignWorkspaceStore.getState().parallelPageStates).every((state) => state.status === 'done')).toBe(true)
@@ -137,5 +140,13 @@ describe('runDesignPages parallel fanout', () => {
       return String(payload?.path ?? '').endsWith('/v1.html')
     })
     expect(htmlWrites).toHaveLength(2)
+    const projectDesignMdWrite = writeWorkspaceFile.mock.calls.find((call) => {
+      const payload = call[0] as { path?: string; content?: string } | undefined
+      return payload?.path === '.kun-design/DESIGN.md'
+    })?.[0] as { content?: string } | undefined
+    expect(projectDesignMdWrite?.content).toContain('# DESIGN.md: Doc')
+    expect(projectDesignMdWrite?.content).toContain('IKUN community')
+    expect(projectDesignMdWrite?.content).toContain('Join community')
+    expect(projectDesignMdWrite?.content).toContain('../')
   })
 })

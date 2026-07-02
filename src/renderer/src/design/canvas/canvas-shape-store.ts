@@ -14,12 +14,12 @@ type ShapeState = {
   getChildren: (parentId: string) => CanvasShape[]
   getAllShapeIds: () => string[]
 
-  addShape: (shape: CanvasShape, parentId?: string) => void
+  addShape: (shape: CanvasShape, parentId?: string, options?: { skipUndo?: boolean }) => void
   updateShape: (id: string, patch: Partial<CanvasShape>, skipUndo?: boolean) => void
-  deleteShape: (id: string) => void
+  deleteShape: (id: string, options?: { skipUndo?: boolean }) => void
   reorderShape: (id: string, newIndex: number) => void
   reparentShape: (id: string, newParentId: string, index?: number) => void
-  duplicateShape: (id: string) => string | null
+  duplicateShape: (id: string, options?: { skipUndo?: boolean }) => string | null
 
   applyPatches: (patches: ShapePatch[], direction: 'undo' | 'redo') => void
   undo: () => void
@@ -74,16 +74,18 @@ export function withDescendants(
 function deepCloneShape(
   objects: Record<string, CanvasShape>,
   id: string,
-  newParentId: string | null
+  newParentId: string | null,
+  newFrameId: string | null
 ): { clones: CanvasShape[]; rootId: string } {
   const shape = objects[id]
   if (!shape) return { clones: [], rootId: '' }
   const newId = createShapeId()
+  const childFrameId = shape.type === 'frame' ? newId : newFrameId
   const clonedChildren: string[] = []
   const allClones: CanvasShape[] = []
 
   for (const childId of shape.children) {
-    const result = deepCloneShape(objects, childId, newId)
+    const result = deepCloneShape(objects, childId, newId, childFrameId)
     clonedChildren.push(result.rootId)
     allClones.push(...result.clones)
   }
@@ -93,6 +95,7 @@ function deepCloneShape(
     id: newId,
     name: `${shape.name} copy`,
     parentId: newParentId,
+    frameId: newFrameId,
     children: clonedChildren
   }
   allClones.push(clone)
@@ -126,7 +129,7 @@ export const useCanvasShapeStore = create<ShapeState>((set, get) => ({
     return Object.keys(objects).filter((id) => id !== rootId)
   },
 
-  addShape: (shape, parentId) => {
+  addShape: (shape, parentId, options) => {
     const pid = parentId ?? get().document.rootId
     const patches: ShapePatch[] = []
 
@@ -157,7 +160,9 @@ export const useCanvasShapeStore = create<ShapeState>((set, get) => ({
       return { document: { ...s.document, objects } }
     })
 
-    useCanvasUndoStore.getState().pushChange({ patches, label: 'add-shape' })
+    if (!options?.skipUndo) {
+      useCanvasUndoStore.getState().pushChange({ patches, label: 'add-shape' })
+    }
   },
 
   updateShape: (id, patch, skipUndo) => {
@@ -187,7 +192,7 @@ export const useCanvasShapeStore = create<ShapeState>((set, get) => ({
     }
   },
 
-  deleteShape: (id) => {
+  deleteShape: (id, options) => {
     if (id === get().document.rootId) return
     const patches: ShapePatch[] = []
 
@@ -222,7 +227,9 @@ export const useCanvasShapeStore = create<ShapeState>((set, get) => ({
       return { document: { ...s.document, objects } }
     })
 
-    useCanvasUndoStore.getState().pushChange({ patches })
+    if (!options?.skipUndo) {
+      useCanvasUndoStore.getState().pushChange({ patches })
+    }
   },
 
   reorderShape: (id, newIndex) => {
@@ -287,12 +294,12 @@ export const useCanvasShapeStore = create<ShapeState>((set, get) => ({
     })
   },
 
-  duplicateShape: (id) => {
+  duplicateShape: (id, options) => {
     const s = get()
     const shape = s.document.objects[id]
     if (!shape?.parentId) return null
 
-    const { clones, rootId } = deepCloneShape(s.document.objects, id, shape.parentId)
+    const { clones, rootId } = deepCloneShape(s.document.objects, id, shape.parentId, shape.frameId)
     if (clones.length === 0) return null
 
     const patches: ShapePatch[] = []
@@ -316,7 +323,9 @@ export const useCanvasShapeStore = create<ShapeState>((set, get) => ({
     }
 
     set({ document: { ...s.document, objects } })
-    useCanvasUndoStore.getState().pushChange({ patches })
+    if (!options?.skipUndo) {
+      useCanvasUndoStore.getState().pushChange({ patches })
+    }
     return rootId
   },
 

@@ -1,4 +1,5 @@
 import type { Rect } from './canvas-types'
+import type { ResizeHandle } from './canvas-resize'
 
 export type SnapAxis = 'h' | 'v'
 
@@ -14,6 +15,11 @@ export type SnapResult = {
   /** dx/dy to apply ON TOP of the user-provided delta to fall into snap. */
   dx: number
   dy: number
+  guides: SnapGuide[]
+}
+
+export type ResizeSnapResult = {
+  bounds: Rect
   guides: SnapGuide[]
 }
 
@@ -148,4 +154,114 @@ export function findSnaps(
   }
 
   return result
+}
+
+function targetsForAxis(
+  statics: Rect[],
+  axis: SnapAxis
+): Array<{ pos: number; source: 'edge' | 'center' | 'grid' }> {
+  const targets: Array<{ pos: number; source: 'edge' | 'center' | 'grid' }> = []
+  for (const s of statics) {
+    if (axis === 'v') {
+      targets.push(
+        { pos: s.x, source: 'edge' },
+        { pos: s.x + s.width / 2, source: 'center' },
+        { pos: s.x + s.width, source: 'edge' }
+      )
+    } else {
+      targets.push(
+        { pos: s.y, source: 'edge' },
+        { pos: s.y + s.height / 2, source: 'center' },
+        { pos: s.y + s.height, source: 'edge' }
+      )
+    }
+  }
+  return targets
+}
+
+function nearestGridTarget(pos: number, gridSize: number | null): { pos: number; source: 'grid' } | null {
+  if (!gridSize || gridSize <= 0) return null
+  return { pos: Math.round(pos / gridSize) * gridSize, source: 'grid' }
+}
+
+function bestSnapForPosition(
+  pos: number,
+  axis: SnapAxis,
+  targets: Array<{ pos: number; source: 'edge' | 'center' | 'grid' }>,
+  threshold: number
+): { delta: number; guide: SnapGuide } | null {
+  let best: { delta: number; guide: SnapGuide; dist: number } | null = null
+  for (const target of targets) {
+    const delta = target.pos - pos
+    const dist = Math.abs(delta)
+    if (dist > threshold) continue
+    if (!best || dist < best.dist) {
+      best = {
+        delta,
+        dist,
+        guide: { axis, position: target.pos, source: target.source }
+      }
+    }
+  }
+  return best ? { delta: best.delta, guide: best.guide } : null
+}
+
+/**
+ * Snap a resized selection bbox by moving only the handle-controlled edge(s).
+ * Unlike move-snapping, this must not translate the whole rect: east/west
+ * handles alter width/x, north/south handles alter height/y.
+ */
+export function findResizeSnaps(
+  bounds: Rect,
+  handle: ResizeHandle,
+  statics: Rect[],
+  zoom: number,
+  gridSize: number | null = null
+): ResizeSnapResult {
+  const threshold = SNAP_THRESHOLD_PX / Math.max(zoom, 0.01)
+  const next: Rect = { ...bounds }
+  const guides: SnapGuide[] = []
+
+  const hasWest = handle === 'w' || handle === 'nw' || handle === 'sw'
+  const hasEast = handle === 'e' || handle === 'ne' || handle === 'se'
+  const hasNorth = handle === 'n' || handle === 'nw' || handle === 'ne'
+  const hasSouth = handle === 's' || handle === 'sw' || handle === 'se'
+
+  if (hasWest || hasEast) {
+    const edge = hasWest ? bounds.x : bounds.x + bounds.width
+    const targets = targetsForAxis(statics, 'v')
+    const grid = nearestGridTarget(edge, gridSize)
+    if (grid) targets.push(grid)
+    const snap = bestSnapForPosition(edge, 'v', targets, threshold)
+    if (snap) {
+      const right = next.x + next.width
+      if (hasWest) {
+        next.x = Math.min(right - 1, next.x + snap.delta)
+        next.width = Math.max(1, right - next.x)
+      } else {
+        next.width = Math.max(1, next.width + snap.delta)
+      }
+      guides.push(snap.guide)
+    }
+  }
+
+  if (hasNorth || hasSouth) {
+    const edge = hasNorth ? bounds.y : bounds.y + bounds.height
+    const targets = targetsForAxis(statics, 'h')
+    const grid = nearestGridTarget(edge, gridSize)
+    if (grid) targets.push(grid)
+    const snap = bestSnapForPosition(edge, 'h', targets, threshold)
+    if (snap) {
+      const bottom = next.y + next.height
+      if (hasNorth) {
+        next.y = Math.min(bottom - 1, next.y + snap.delta)
+        next.height = Math.max(1, bottom - next.y)
+      } else {
+        next.height = Math.max(1, next.height + snap.delta)
+      }
+      guides.push(snap.guide)
+    }
+  }
+
+  return { bounds: next, guides }
 }

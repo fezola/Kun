@@ -97,6 +97,108 @@ describe('lintDesignSystem', () => {
     const findings = lintDesignSystem(doc(), system())
     expect(findings.some((f) => f.code === 'low-contrast')).toBe(true)
   })
+
+  it('limits findings to a scoped shape subtree', () => {
+    executeOps([{ op: 'define-token', name: 'brand/primary', kind: 'color', value: '#3b82d8' }])
+    const outside = executeOps([
+      {
+        op: 'add',
+        shape: {
+          type: 'rect',
+          name: 'Outside CTA',
+          x: 0,
+          y: 0,
+          width: 100,
+          height: 50,
+          fills: [{ type: 'solid', color: '#3b82d8', opacity: 1 }]
+        }
+      }
+    ]).affectedIds[0]
+    const frame = executeOps([
+      { op: 'add', shape: { type: 'frame', name: 'Selected Screen', x: 200, y: 0, width: 300, height: 200 } }
+    ]).affectedIds[0]
+    const inside = executeOps([
+      {
+        op: 'add',
+        parentId: frame,
+        shape: {
+          type: 'rect',
+          name: 'Inside CTA',
+          x: 220,
+          y: 20,
+          width: 100,
+          height: 50,
+          fills: [{ type: 'solid', color: '#3b82d8', opacity: 1 }]
+        }
+      }
+    ]).affectedIds[0]
+
+    const findings = lintDesignSystem(doc(), system(), { scopeIds: [frame] })
+    expect(findings.map((finding) => finding.shapeId)).toContain(inside)
+    expect(findings.map((finding) => finding.shapeId)).not.toContain(outside)
+  })
+
+  it('uses out-of-scope ancestors when checking contrast for a scoped text shape', () => {
+    const frame = executeOps([
+      {
+        op: 'add',
+        shape: {
+          type: 'frame',
+          name: 'Card',
+          x: 0,
+          y: 0,
+          width: 300,
+          height: 200,
+          fills: [{ type: 'solid', color: '#ffffff', opacity: 1 }]
+        }
+      }
+    ]).affectedIds[0]
+    const text = executeOps([
+      {
+        op: 'add',
+        parentId: frame,
+        shape: {
+          type: 'text',
+          name: 'Label',
+          x: 10,
+          y: 10,
+          width: 100,
+          height: 20,
+          textContent: 'hi',
+          fontColor: '#eeeeee'
+        }
+      }
+    ]).affectedIds[0]
+
+    const findings = lintDesignSystem(doc(), system(), { scopeIds: [text] })
+    expect(findings.some((f) => f.code === 'low-contrast' && f.shapeId === text)).toBe(true)
+  })
+
+  it('skips hidden shapes and hidden subtrees', () => {
+    executeOps([{ op: 'define-token', name: 'brand/primary', kind: 'color', value: '#3b82d8' }])
+    const frame = executeOps([
+      { op: 'add', shape: { type: 'frame', name: 'Hidden Frame', x: 0, y: 0, width: 300, height: 200 } }
+    ]).affectedIds[0]
+    const child = executeOps([
+      {
+        op: 'add',
+        parentId: frame,
+        shape: {
+          type: 'rect',
+          name: 'Hidden CTA',
+          x: 10,
+          y: 10,
+          width: 100,
+          height: 50,
+          fills: [{ type: 'solid', color: '#3b82d8', opacity: 1 }]
+        }
+      }
+    ]).affectedIds[0]
+    useCanvasShapeStore.getState().updateShape(frame, { visible: false })
+
+    const findings = lintDesignSystem(doc(), system(), { scopeIds: [frame] })
+    expect(findings.map((finding) => finding.shapeId)).not.toContain(child)
+  })
 })
 
 describe('lint-design-system op stashes findings for the next turn', () => {

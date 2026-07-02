@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { findSnaps } from './canvas-snap'
+import { findResizeSnaps, findSnaps } from './canvas-snap'
 
 const r = (x: number, y: number, w: number, h: number) => ({ x, y, width: w, height: h })
 
@@ -53,5 +53,25 @@ describe('findSnaps', () => {
     // Both equidistant; first one wins (deterministic), but the dx must be valid for one of them.
     const out = findSnaps(r(4, 0, 10, 10), [r(0, 0, 10, 10), r(8, 0, 10, 10)], 1)
     expect(Math.abs(out.dx)).toBeLessThanOrEqual(4)
+  })
+})
+
+describe('findResizeSnaps', () => {
+  it('snaps the east resize edge without moving x', () => {
+    const out = findResizeSnaps(r(0, 0, 96, 40), 'e', [r(100, 0, 20, 20)], 1)
+    expect(out.bounds).toEqual({ x: 0, y: 0, width: 100, height: 40 })
+    expect(out.guides).toContainEqual({ axis: 'v', position: 100, source: 'edge' })
+  })
+
+  it('snaps the west resize edge to grid by moving x and width together', () => {
+    const out = findResizeSnaps(r(3, 0, 97, 40), 'w', [], 1, 10)
+    expect(out.bounds).toEqual({ x: 0, y: 0, width: 100, height: 40 })
+    expect(out.guides).toContainEqual({ axis: 'v', position: 0, source: 'grid' })
+  })
+
+  it('snaps the south resize edge without moving y', () => {
+    const out = findResizeSnaps(r(0, 0, 40, 97), 's', [r(0, 100, 20, 20)], 1)
+    expect(out.bounds).toEqual({ x: 0, y: 0, width: 40, height: 100 })
+    expect(out.guides).toContainEqual({ axis: 'h', position: 100, source: 'edge' })
   })
 })

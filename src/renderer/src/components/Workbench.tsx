@@ -91,6 +91,7 @@ import {
 } from '../design/design-board'
 import { useCanvasShapeStore } from '../design/canvas/canvas-shape-store'
 import { useCanvasSelectionStore } from '../design/canvas/canvas-selection-store'
+import { useCanvasViewportStore } from '../design/canvas/canvas-viewport-store'
 import { useImageAnnotationStore } from '../design/canvas/image-annotation-store'
 import {
   buildImageAnnotationPrompt,
@@ -790,7 +791,7 @@ export function Workbench(): ReactElement {
   const useDesignHtmlElementAsContext = useCallback(
     (context: DesignHtmlElementContext | null, promptSeed?: string): void => {
       setDesignHtmlElementContext(context)
-      if (context && promptSeed) {
+      if (promptSeed) {
         setInput((current) => (current.trim() ? current : promptSeed))
         requestAnimationFrame(() => {
           document.querySelector<HTMLTextAreaElement>('[data-design-rail-composer] textarea')?.focus()
@@ -1966,10 +1967,16 @@ export function Workbench(): ReactElement {
         useDesignWorkspaceStore.getState().setDesignIntentMode('modify')
       } else if (primaryTarget?.kind === 'canvas-selection') {
         target = 'canvas'
-        canvasSnapshot = snapshotCanvas(canvasDoc, canvasSelectionIds)
+        canvasSnapshot = snapshotCanvas(canvasDoc, canvasSelectionIds, {
+          maxShapes: 180,
+          viewBox: useCanvasViewportStore.getState().vbox
+        })
       } else {
         target = 'canvas'
-        canvasSnapshot = snapshotCanvas(canvasDoc, new Set())
+        canvasSnapshot = snapshotCanvas(canvasDoc, new Set(), {
+          maxShapes: 180,
+          viewBox: useCanvasViewportStore.getState().vbox
+        })
         useDesignWorkspaceStore.getState().setDesignIntentMode('generate')
       }
       useDesignWorkspaceStore.getState().setActiveArtifact(boardArtifact.id)
@@ -3125,7 +3132,11 @@ export function Workbench(): ReactElement {
     if (route === 'chat' && composerMode === 'agent' && rightPanelMode === 'canvas') {
       const snapshot = snapshotCanvas(
         useCanvasShapeStore.getState().document,
-        useCanvasSelectionStore.getState().selectedIds
+        useCanvasSelectionStore.getState().selectedIds,
+        {
+          maxShapes: 180,
+          viewBox: useCanvasViewportStore.getState().vbox
+        }
       )
       const canvasPrompt = buildCodeCanvasTurnPrompt({
         workspaceRoot,

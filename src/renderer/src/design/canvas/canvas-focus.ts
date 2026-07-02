@@ -1,6 +1,10 @@
 import { useCanvasShapeStore } from './canvas-shape-store'
+import { useCanvasSelectionStore } from './canvas-selection-store'
 import { useCanvasViewportStore } from './canvas-viewport-store'
 import { shapeGeometry } from './canvas-types'
+import { getSelectionBounds } from './canvas-hit-test'
+import { filterEditableRootShapeIds } from './canvas-editability'
+import { getCanvasDocumentContentBounds } from './canvas-placement'
 
 /**
  * Pan/zoom the viewport to frame the given shapes — but only when they aren't
@@ -43,4 +47,22 @@ export function focusViewportOnIds(ids: string[]): void {
     bounds.x + bounds.width <= v.x + v.width &&
     bounds.y + bounds.height <= v.y + v.height
   if (!inside) vp.zoomToFit(bounds, 80)
+}
+
+export function zoomCanvasToContent(padding = 40): boolean {
+  const doc = useCanvasShapeStore.getState().document
+  const bounds = getCanvasDocumentContentBounds(doc)
+  if (!bounds) return false
+  useCanvasViewportStore.getState().zoomToFit(bounds, padding)
+  return true
+}
+
+export function zoomCanvasToEditableSelection(padding = 60): boolean {
+  const doc = useCanvasShapeStore.getState().document
+  const ids = filterEditableRootShapeIds(doc, useCanvasSelectionStore.getState().selectedIds)
+  if (ids.length === 0) return false
+  const bounds = getSelectionBounds(doc.objects, new Set(ids))
+  if (!bounds) return false
+  useCanvasViewportStore.getState().zoomToFit(bounds, padding)
+  return true
 }

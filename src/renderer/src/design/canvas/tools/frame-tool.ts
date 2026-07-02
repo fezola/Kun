@@ -3,12 +3,15 @@ import { useCanvasShapeStore } from '../canvas-shape-store'
 import { useCanvasViewportStore } from '../canvas-viewport-store'
 import { createDefaultShape } from '../canvas-types'
 import type { CanvasPointerEvent, CanvasToolHandler } from './tool-types'
+import { computeSnappedCreateShapeBounds } from './create-shape-bounds'
+import { addShapeForCreation, commitCreatedShapeUndo, type CreatedShapeUndo } from './creation-undo'
 
 export function createFrameTool(): CanvasToolHandler {
   let drawing = false
   let startX = 0
   let startY = 0
   let previewId: string | null = null
+  let creationUndo: CreatedShapeUndo | null = null
 
   return {
     cursor: 'crosshair',
@@ -22,17 +25,14 @@ export function createFrameTool(): CanvasToolHandler {
       shape.width = 0
       shape.height = 0
       previewId = shape.id
-      useCanvasShapeStore.getState().addShape(shape)
+      creationUndo = addShapeForCreation(shape)
       useCanvasSelectionStore.getState().select([shape.id])
     },
 
     onPointerMove(e: CanvasPointerEvent) {
       if (!drawing || !previewId) return
-      const x = Math.min(startX, e.canvasX)
-      const y = Math.min(startY, e.canvasY)
-      const w = Math.abs(e.canvasX - startX)
-      const h = Math.abs(e.canvasY - startY)
-      useCanvasShapeStore.getState().updateShape(previewId, { x, y, width: w, height: h }, true)
+      const bounds = computeSnappedCreateShapeBounds(startX, startY, e, previewId)
+      useCanvasShapeStore.getState().updateShape(previewId, bounds, true)
     },
 
     onPointerUp() {
@@ -45,7 +45,10 @@ export function createFrameTool(): CanvasToolHandler {
       }
 
       useCanvasViewportStore.getState().setActiveTool('select')
+      useCanvasSelectionStore.getState().setSnapGuides([])
+      commitCreatedShapeUndo(creationUndo, 'create-frame')
       previewId = null
+      creationUndo = null
     }
   }
 }

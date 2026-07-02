@@ -10,12 +10,19 @@ import {
   MousePointer2,
   Palette,
   Pencil,
+  Play,
+  ShieldCheck,
   Sparkles,
   Square,
   Type as TypeIcon
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { lintDesignSystem, setLastLintFindings } from '../../../design/canvas/design-lint'
+import { filterEditableRootShapeIds } from '../../../design/canvas/canvas-editability'
 import { importWorkspaceImageToCanvas } from '../../../design/canvas/canvas-image-import'
+import { useCanvasSelectionStore } from '../../../design/canvas/canvas-selection-store'
+import { useCanvasShapeStore } from '../../../design/canvas/canvas-shape-store'
+import { useDesignSystemStore } from '../../../design/canvas/design-system-store'
 import type { CanvasTool } from '../../../design/canvas/canvas-types'
 import { useCanvasViewportStore } from '../../../design/canvas/canvas-viewport-store'
 import { useDesignWorkspaceStore } from '../../../design/design-workspace-store'
@@ -23,7 +30,10 @@ import { DesignContextPopover } from '../DesignContextPopover'
 
 type Props = {
   workspaceRoot: string
+  prototypePlayable?: boolean
+  onOpenPrototypePlayer?: () => void
   onOpenAgentSettings?: () => void
+  onRequestCanvasCritique?: (promptSeed: string) => void
 }
 
 type ToolButton = {
@@ -45,7 +55,13 @@ const tools: ToolButton[] = [
   { id: 'hand', icon: Hand, labelKey: 'canvasToolHand' }
 ]
 
-function CanvasToolbarInner({ workspaceRoot, onOpenAgentSettings }: Props) {
+function CanvasToolbarInner({
+  workspaceRoot,
+  prototypePlayable = false,
+  onOpenPrototypePlayer,
+  onOpenAgentSettings,
+  onRequestCanvasCritique
+}: Props) {
   const { t } = useTranslation('common')
   const activeTool = useCanvasViewportStore((s) => s.activeTool)
   const setActiveTool = useCanvasViewportStore((s) => s.setActiveTool)
@@ -54,6 +70,26 @@ function CanvasToolbarInner({ workspaceRoot, onOpenAgentSettings }: Props) {
   const setCanvasAssistantOpen = useDesignWorkspaceStore((s) => s.setCanvasAssistantOpen)
   const [imageImportBusy, setImageImportBusy] = useState(false)
   const [contextOpen, setContextOpen] = useState(false)
+
+  const requestCanvasCritique = useCallback((): void => {
+    const doc = useCanvasShapeStore.getState().document
+    const scopeIds = filterEditableRootShapeIds(
+      doc,
+      useCanvasSelectionStore.getState().selectedIds
+    )
+    const findings = lintDesignSystem(
+      doc,
+      useDesignSystemStore.getState().system,
+      scopeIds.length > 0 ? { scopeIds } : undefined
+    )
+    setLastLintFindings(findings)
+    setCanvasAssistantOpen(true)
+    onRequestCanvasCritique?.(
+      findings.length > 0
+        ? t('canvasCritiquePromptWithFindings', { count: findings.length })
+        : t('canvasCritiquePromptClean')
+    )
+  }, [onRequestCanvasCritique, setCanvasAssistantOpen, t])
 
   const importImage = useCallback((): void => {
     if (imageImportBusy) return
@@ -117,11 +153,32 @@ function CanvasToolbarInner({ workspaceRoot, onOpenAgentSettings }: Props) {
         <button
           type="button"
           className={`${iconBtnBase} ${btnInactive}`}
+          onClick={requestCanvasCritique}
+          title={t('canvasToolCritique')}
+          aria-label={t('canvasToolCritique')}
+        >
+          <ShieldCheck className="h-[18px] w-[18px]" strokeWidth={1.9} />
+        </button>
+
+        <button
+          type="button"
+          className={`${iconBtnBase} ${btnInactive}`}
           onClick={() => setCanvasAssistantOpen(true)}
           title={t('canvasToolAssistant')}
           aria-label={t('canvasToolAssistant')}
         >
           <Sparkles className="h-[18px] w-[18px]" strokeWidth={1.9} />
+        </button>
+
+        <button
+          type="button"
+          className={`${iconBtnBase} ${btnInactive}`}
+          onClick={onOpenPrototypePlayer}
+          disabled={!prototypePlayable || !onOpenPrototypePlayer}
+          title={t('designPrototypePlay')}
+          aria-label={t('designPrototypePlay')}
+        >
+          <Play className="h-[18px] w-[18px]" strokeWidth={1.9} />
         </button>
       </div>
       {contextOpen ? (

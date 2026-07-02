@@ -34,6 +34,29 @@ export type DesignArtifactNode = {
   viewMode?: DesignCanvasView
 }
 
+export type DesignPrototypeLink = {
+  /** Planned target screen title from the multi-page planner. */
+  targetTitle: string
+  /** Resolved artifact id when the target already exists on the board. */
+  targetArtifactId?: string
+  /** Local href that generated HTML should use for this transition. */
+  href?: string
+  /** Human-facing action label, often the page's primary action. */
+  label?: string
+}
+
+export type DesignDirectionStatus = 'active' | 'accepted' | 'archived'
+
+export type DesignDirection = {
+  /** Stable id for a named exploration branch/direction. */
+  id: string
+  /** Human-facing direction name, e.g. "Checkout revamp". */
+  name: string
+  /** Direction lifecycle for future compare/accept/archive flows. */
+  status?: DesignDirectionStatus
+  createdAt?: string
+}
+
 export type DesignArtifact = {
   id: string
   kind: DesignArtifactKind
@@ -49,6 +72,10 @@ export type DesignArtifact = {
   previewStatus?: 'pending' | 'ready' | 'error'
   /** Optional Stitch-style project-canvas placement metadata. */
   node?: DesignArtifactNode
+  /** Outgoing prototype-flow transitions to other HTML screen artifacts. */
+  prototypeLinks?: DesignPrototypeLink[]
+  /** Stitch-style named exploration branch this artifact belongs to. */
+  direction?: DesignDirection
   /** ISO time the design was handed to code; absent = not implemented yet. */
   implementedAt?: string
   /** Code thread that implemented it (provenance). */

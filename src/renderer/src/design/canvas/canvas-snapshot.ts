@@ -7,8 +7,8 @@
  *
  * The id is still included so the AI can target shapes precisely in ShapeOps.
  */
-import { fillColor, isImplicitImageSlot } from './canvas-types'
-import type { CanvasDocument, CanvasShape, Point } from './canvas-types'
+import { fillColor, isImplicitImageSlot, shapeGeometry } from './canvas-types'
+import type { CanvasDocument, CanvasShape, Point, Rect } from './canvas-types'
 
 export type CanvasSnapshotShape = {
   id: string
@@ -24,6 +24,10 @@ export type CanvasSnapshotShape = {
   htmlArtifactId?: string
   /** True when this shape is in the user's current selection (what "this"/"here" refers to). */
   selected?: boolean
+  /** True when the shape intersects the user's current visible canvas viewport. */
+  inView?: boolean
+  /** True when the shape is close to the selected shapes, preserving local context on large boards. */
+  nearSelection?: boolean
   /**
    * True when this shape is an AI image slot the agent should fill on request —
    * either explicitly marked (`aiImageHolder`) or an empty box the user has
@@ -60,7 +64,11 @@ export type CanvasSnapshotShape = {
 
   /** Linear shapes only: vertices in ABSOLUTE canvas coords. */
   points?: Point[]
+  /** Linear shapes only: number of vertices omitted from `points` to keep the snapshot compact. */
+  pointsOmitted?: number
 }
+
+const SNAPSHOT_MAX_POINTS_PER_SHAPE = 48
 
 /**
  * Compact, token-cheap style summary: only the primary visible fill/stroke plus
@@ -110,6 +118,22 @@ function styleDigest(s: CanvasShape): StyleDigest {
   return out
 }
 
+function sampledAbsolutePoints(shape: CanvasShape): Pick<CanvasSnapshotShape, 'points' | 'pointsOmitted'> {
+  const points = shape.points ?? []
+  if (points.length === 0) return {}
+  const max = SNAPSHOT_MAX_POINTS_PER_SHAPE
+  const source = points.length <= max
+    ? points
+    : Array.from({ length: max }, (_, index) => {
+        const sourceIndex = Math.round((index * (points.length - 1)) / (max - 1))
+        return points[sourceIndex]
+      })
+  return {
+    points: source.map((p) => ({ x: round(shape.x + p.x), y: round(shape.y + p.y) })),
+    ...(points.length > source.length ? { pointsOmitted: points.length - source.length } : {})
+  }
+}
+
 export type CanvasSnapshot = {
   shapeCount: number
   shapes: CanvasSnapshotShape[]
@@ -127,6 +151,8 @@ export type CanvasSnapshot = {
 export type SnapshotOptions = {
   rootFrameId?: string
   maxShapes?: number
+  viewBox?: Rect
+  selectedNeighborPadding?: number
 }
 
 export function snapshotCanvas(
@@ -139,6 +165,11 @@ export function snapshotCanvas(
   const seen = new Set<string>()
   const startId = opts?.rootFrameId && objects[opts.rootFrameId] ? opts.rootFrameId : rootId
   const startName = startId === rootId ? null : (objects[startId]?.name ?? null)
+  const viewBox = opts?.viewBox
+  const selectedNeighborPadding = opts?.selectedNeighborPadding ?? 240
+  const selectedBounds = selectedIds && selectedIds.size > 0
+    ? selectionBounds(objects, selectedIds, selectedNeighborPadding)
+    : null
 
   function walk(parentId: string, parentName: string | null): void {
     const parent = objects[parentId]
@@ -149,6 +180,9 @@ export function snapshotCanvas(
       const s = objects[childId]
       if (!s) continue
       const selected = selectedIds?.has(s.id) ?? false
+      const selrect = shapeGeometry(s).selrect
+      const inView = viewBox ? rectsIntersect(selrect, viewBox) : false
+      const nearSelection = !selected && selectedBounds ? rectsIntersect(selrect, selectedBounds) : false
       // A selected empty box is an implicit slot — the user shouldn't have to
       // mark it for the agent to fill it on request. A selected image whose
       // imageUrl is a data: URL is also effectively unreferenceable (the
@@ -177,10 +211,10 @@ export function snapshotCanvas(
           ? { tokenBindings: s.tokenBindings }
           : {}),
         ...(selected ? { selected: true } : {}),
+        ...(inView ? { inView: true } : {}),
+        ...(nearSelection ? { nearSelection: true } : {}),
         ...(isHolder ? { aiImageHolder: true } : {}),
-        ...(s.points && s.points.length > 0
-          ? { points: s.points.map((p) => ({ x: round(s.x + p.x), y: round(s.y + p.y) })) }
-          : {})
+        ...sampledAbsolutePoints(s)
       })
       if (s.children.length > 0) walk(s.id, s.name)
     }
@@ -191,9 +225,60 @@ export function snapshotCanvas(
   const max = opts?.maxShapes
   if (typeof max === 'number' && shapes.length > max) {
     const omitted = shapes.length - max
-    return { shapeCount: shapes.length, shapes: shapes.slice(0, max), omitted }
+    const prioritized = shapes
+      .map((shape, index) => ({ shape, index }))
+      .sort((a, b) => snapshotPriority(a.shape) - snapshotPriority(b.shape) || a.index - b.index)
+      .slice(0, max)
+      .map((entry) => entry.shape)
+    return { shapeCount: shapes.length, shapes: prioritized, omitted }
   }
   return { shapeCount: shapes.length, shapes }
+}
+
+function selectionBounds(
+  objects: Record<string, CanvasShape>,
+  selectedIds: ReadonlySet<string>,
+  padding: number
+): Rect | null {
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  let found = false
+  for (const id of selectedIds) {
+    const shape = objects[id]
+    if (!shape) continue
+    const selrect = shapeGeometry(shape).selrect
+    minX = Math.min(minX, selrect.x)
+    minY = Math.min(minY, selrect.y)
+    maxX = Math.max(maxX, selrect.x + selrect.width)
+    maxY = Math.max(maxY, selrect.y + selrect.height)
+    found = true
+  }
+  if (!found) return null
+  const safePadding = Math.max(0, padding)
+  return {
+    x: minX - safePadding,
+    y: minY - safePadding,
+    width: maxX - minX + safePadding * 2,
+    height: maxY - minY + safePadding * 2
+  }
+}
+
+function rectsIntersect(a: Rect, b: Rect): boolean {
+  return (
+    a.x + a.width >= b.x &&
+    a.x <= b.x + b.width &&
+    a.y + a.height >= b.y &&
+    a.y <= b.y + b.height
+  )
+}
+
+function snapshotPriority(shape: CanvasSnapshotShape): number {
+  if (shape.selected) return 0
+  if (shape.nearSelection) return 1
+  if (shape.inView) return 2
+  return 3
 }
 
 function round(n: number): number {

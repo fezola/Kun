@@ -1,5 +1,6 @@
 import type { CanvasDocument, CanvasShape, Point, Rect } from './canvas-types'
 import { pointInPolygon, shapeGeometry } from './canvas-types'
+import { isShapeEditable } from './canvas-editability'
 
 /** Shortest distance from point (px,py) to a line segment (a→b). */
 function distanceToSegment(px: number, py: number, a: Point, b: Point): number {
@@ -45,6 +46,7 @@ function shapeHits(shape: CanvasShape, px: number, py: number): boolean {
 }
 
 function hitTestChildren(
+  doc: CanvasDocument,
   objects: Record<string, CanvasShape>,
   parentId: string,
   px: number,
@@ -56,10 +58,10 @@ function hitTestChildren(
   for (let i = parent.children.length - 1; i >= 0; i--) {
     const childId = parent.children[i]
     const child = objects[childId]
-    if (!child || !child.visible) continue
+    if (!child || !isShapeEditable(doc, childId)) continue
 
     if (child.children.length > 0) {
-      const deepHit = hitTestChildren(objects, childId, px, py)
+      const deepHit = hitTestChildren(doc, objects, childId, px, py)
       if (deepHit) return deepHit
     }
 
@@ -70,7 +72,7 @@ function hitTestChildren(
 }
 
 export function hitTest(doc: CanvasDocument, px: number, py: number): string | null {
-  return hitTestChildren(doc.objects, doc.rootId, px, py)
+  return hitTestChildren(doc, doc.objects, doc.rootId, px, py)
 }
 
 function rectsIntersect(a: Rect, b: Rect): boolean {
@@ -91,7 +93,7 @@ export function hitTestAll(doc: CanvasDocument, rect: Rect): string[] {
     if (!parent) return
     for (const childId of parent.children) {
       const child = objects[childId]
-      if (!child || !child.visible || childId === rootId) continue
+      if (!child || childId === rootId || !isShapeEditable(doc, childId)) continue
       const geom = shapeGeometry(child)
       if (rectsIntersect(geom.selrect, rect)) {
         result.push(childId)

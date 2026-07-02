@@ -7,6 +7,12 @@ import type { DesignArtifact, DesignDocument } from './design-types'
 
 const createdAt = '2026-06-20T00:00:00.000Z'
 
+type WriteWorkspaceFileRequest = {
+  path: string
+  workspaceRoot?: string
+  content: string
+}
+
 function artifact(id: string, kind: DesignArtifact['kind']): DesignArtifact {
   const relativePath =
     kind === 'canvas' ? `.kun-design/doc/${id}/canvas.json` : `.kun-design/doc/${id}/v1.html`
@@ -38,7 +44,7 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
 }
 
 describe('design workspace store', () => {
-  const writeWorkspaceFile = vi.fn(async () => ({ ok: true as const }))
+  const writeWorkspaceFile = vi.fn(async (_request: WriteWorkspaceFileRequest) => ({ ok: true as const }))
 
   beforeEach(() => {
     writeWorkspaceFile.mockClear()
@@ -143,6 +149,86 @@ describe('design workspace store', () => {
 
     useDesignWorkspaceStore.getState().clearParallelPageStates()
     expect(useDesignWorkspaceStore.getState().parallelPageStates).toEqual({})
+  })
+
+  it('persists accepted and archived statuses across every artifact in a direction', () => {
+    const checkoutDirection = { id: 'dir_1', name: 'Checkout direction', status: 'active' as const }
+    const screen = {
+      ...artifact('screen', 'html'),
+      direction: checkoutDirection,
+      node: { x: 10, y: 20, width: 320, height: 240 }
+    }
+    const details = {
+      ...artifact('details', 'html'),
+      direction: checkoutDirection,
+      node: { x: 40, y: 50, width: 320, height: 240 }
+    }
+    const other = {
+      ...artifact('other', 'html'),
+      direction: { id: 'dir_2', name: 'Other direction', status: 'active' as const }
+    }
+    const doc: DesignDocument = {
+      id: 'doc',
+      title: 'Doc',
+      createdAt,
+      updatedAt: createdAt,
+      order: 0,
+      artifacts: [screen, details, other],
+      activeArtifactId: screen.id
+    }
+    useDesignWorkspaceStore.setState({
+      documents: [doc],
+      artifacts: doc.artifacts,
+      activeArtifactId: screen.id
+    })
+    writeWorkspaceFile.mockClear()
+
+    useDesignWorkspaceStore.getState().setDirectionStatus('dir_1', 'accepted')
+
+    const accepted = useDesignWorkspaceStore.getState().artifacts
+    expect(accepted.filter((item) => item.direction?.id === 'dir_1').map((item) => item.direction?.status)).toEqual([
+      'accepted',
+      'accepted'
+    ])
+    expect(accepted.filter((item) => item.direction?.id === 'dir_1').every((item) => item.node?.favorite)).toBe(true)
+    expect(accepted.find((item) => item.id === 'other')?.direction?.status).toBe('active')
+
+    let metaWrites = writeWorkspaceFile.mock.calls
+      .map(([request]) => request as { path: string; content: string })
+      .filter((request) => request.path.endsWith('/meta.json'))
+    expect(metaWrites.map((request) => request.path).sort()).toEqual([
+      '.kun-design/doc/details/meta.json',
+      '.kun-design/doc/screen/meta.json'
+    ])
+    expect(metaWrites.every((request) => request.content.includes('"status": "accepted"'))).toBe(true)
+
+    writeWorkspaceFile.mockClear()
+    useDesignWorkspaceStore.getState().setDirectionStatus('dir_1', 'archived')
+
+    expect(
+      useDesignWorkspaceStore
+        .getState()
+        .artifacts.filter((item) => item.direction?.id === 'dir_1')
+        .map((item) => item.direction?.status)
+    ).toEqual(['archived', 'archived'])
+    metaWrites = writeWorkspaceFile.mock.calls
+      .map(([request]) => request as { path: string; content: string })
+      .filter((request) => request.path.endsWith('/meta.json'))
+    expect(metaWrites.every((request) => request.content.includes('"status": "archived"'))).toBe(true)
+
+    writeWorkspaceFile.mockClear()
+    useDesignWorkspaceStore.getState().setDirectionStatus('dir_1', 'active')
+
+    expect(
+      useDesignWorkspaceStore
+        .getState()
+        .artifacts.filter((item) => item.direction?.id === 'dir_1')
+        .map((item) => item.direction?.status)
+    ).toEqual(['active', 'active'])
+    metaWrites = writeWorkspaceFile.mock.calls
+      .map(([request]) => request as { path: string; content: string })
+      .filter((request) => request.path.endsWith('/meta.json'))
+    expect(metaWrites.every((request) => request.content.includes('"status": "active"'))).toBe(true)
   })
 
   it('createDocument adds a new active 设计稿 with an empty projection', () => {

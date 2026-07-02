@@ -1,10 +1,30 @@
 import { memo, useCallback, useMemo, useState, type ReactElement, type ReactNode } from 'react'
-import { Monitor, PenLine, Pin, PinOff, Play, Smartphone, Sparkles, Tablet, X } from 'lucide-react'
+import {
+  AlignHorizontalJustifyCenter,
+  AlignHorizontalJustifyEnd,
+  AlignHorizontalJustifyStart,
+  AlignVerticalJustifyCenter,
+  AlignVerticalJustifyEnd,
+  AlignVerticalJustifyStart,
+  Columns3,
+  Monitor,
+  PenLine,
+  Pin,
+  PinOff,
+  Play,
+  Rows3,
+  Smartphone,
+  Sparkles,
+  Tablet,
+  X
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useCanvasSelectionStore } from '../../../design/canvas/canvas-selection-store'
 import { useCanvasShapeStore } from '../../../design/canvas/canvas-shape-store'
 import { useCanvasUndoStore } from '../../../design/canvas/canvas-undo-store'
 import { useImageAnnotationStore } from '../../../design/canvas/image-annotation-store'
+import { filterEditableRootShapeIds, filterEditableShapeIds } from '../../../design/canvas/canvas-editability'
+import type { AlignAxis, DistributeAxis } from '../../../design/canvas/canvas-align'
 import {
   DEFAULT_FILL,
   fillColor as resolveFillColor,
@@ -17,6 +37,7 @@ import {
   type Stroke,
   type StrokeDash
 } from '../../../design/canvas/canvas-types'
+import { executeOps } from '../../../design/canvas/shape-ops'
 import { useDesignWorkspaceStore } from '../../../design/design-workspace-store'
 import type { DesignArtifact } from '../../../design/design-types'
 
@@ -35,10 +56,12 @@ function reduceField<T>(shapes: CanvasShape[], getter: (s: CanvasShape) => T): T
 }
 
 function commitUpdate(label: string, ids: string[], patch: Partial<CanvasShape>): void {
-  if (ids.length === 0) return
+  const document = useCanvasShapeStore.getState().document
+  const editableIds = filterEditableShapeIds(document, ids)
+  if (editableIds.length === 0) return
   useCanvasUndoStore.getState().withGroup(label, () => {
     const store = useCanvasShapeStore.getState()
-    for (const id of ids) {
+    for (const id of editableIds) {
       store.updateShape(id, patch)
     }
   })
@@ -389,7 +412,14 @@ function PropertiesPanelInner({ onImplementDesign }: Props): ReactElement | null
   const setDesignIntentMode = useDesignWorkspaceStore((s) => s.setDesignIntentMode)
   const setCanvasAssistantOpen = useDesignWorkspaceStore((s) => s.setCanvasAssistantOpen)
 
-  const ids = useMemo(() => Array.from(selectedIds), [selectedIds])
+  const ids = useMemo(
+    () => filterEditableShapeIds(document, selectedIds),
+    [document, selectedIds]
+  )
+  const rootIds = useMemo(
+    () => filterEditableRootShapeIds(document, selectedIds),
+    [document, selectedIds]
+  )
   const shapes = useMemo(
     () => ids.map((id) => document.objects[id]).filter((s): s is CanvasShape => Boolean(s)),
     [ids, document]
@@ -398,6 +428,24 @@ function PropertiesPanelInner({ onImplementDesign }: Props): ReactElement | null
   const updateAll = useCallback(
     (label: string, patch: Partial<CanvasShape>) => commitUpdate(label, ids, patch),
     [ids]
+  )
+  const alignSelection = useCallback(
+    (axis: AlignAxis) => {
+      if (rootIds.length < 2) return
+      executeOps([{ op: 'align', ids: rootIds, axis }], `inspector-align-${axis}`, {
+        selectAfter: () => rootIds
+      })
+    },
+    [rootIds]
+  )
+  const distributeSelection = useCallback(
+    (axis: DistributeAxis) => {
+      if (rootIds.length < 3) return
+      executeOps([{ op: 'distribute', ids: rootIds, axis }], `inspector-distribute-${axis}`, {
+        selectAfter: () => rootIds
+      })
+    },
+    [rootIds]
   )
 
   if (shapes.length === 0) return null
@@ -493,6 +541,19 @@ function PropertiesPanelInner({ onImplementDesign }: Props): ReactElement | null
     { id: 'desktop', icon: Monitor, w: 1280, h: 800 }
   ]
 
+  const ALIGN_ACTIONS: { axis: AlignAxis; icon: typeof AlignHorizontalJustifyStart; label: string }[] = [
+    { axis: 'left', icon: AlignHorizontalJustifyStart, label: t('canvasAlignLeft') },
+    { axis: 'h-center', icon: AlignHorizontalJustifyCenter, label: t('canvasAlignHCenter') },
+    { axis: 'right', icon: AlignHorizontalJustifyEnd, label: t('canvasAlignRight') },
+    { axis: 'top', icon: AlignVerticalJustifyStart, label: t('canvasAlignTop') },
+    { axis: 'v-center', icon: AlignVerticalJustifyCenter, label: t('canvasAlignVCenter') },
+    { axis: 'bottom', icon: AlignVerticalJustifyEnd, label: t('canvasAlignBottom') }
+  ]
+  const DISTRIBUTE_ACTIONS: { axis: DistributeAxis; icon: typeof Columns3; label: string }[] = [
+    { axis: 'horizontal', icon: Columns3, label: t('canvasDistributeH') },
+    { axis: 'vertical', icon: Rows3, label: t('canvasDistributeV') }
+  ]
+
   return renderShell(
     <div className="space-y-4 pt-1">
       {/* Position & size */}
@@ -519,6 +580,41 @@ function PropertiesPanelInner({ onImplementDesign }: Props): ReactElement | null
           onCommit={(n) => updateAll('set-rotation', { rotation: ((n % 360) + 360) % 360 })}
         />
       </Section>
+
+      {rootIds.length >= 2 && (
+        <Section title={t('canvasInspectorArrange')}>
+          <div className="grid grid-cols-3 gap-1">
+            {ALIGN_ACTIONS.map(({ axis, icon: Icon, label }) => (
+              <button
+                key={axis}
+                type="button"
+                onClick={() => alignSelection(axis)}
+                title={label}
+                aria-label={label}
+                className="flex h-7 items-center justify-center rounded-[8px] bg-ds-hover/30 text-ds-muted transition hover:bg-ds-hover/70 hover:text-ds-ink"
+              >
+                <Icon className="h-3.5 w-3.5" strokeWidth={1.9} />
+              </button>
+            ))}
+          </div>
+          {rootIds.length >= 3 ? (
+            <div className="grid grid-cols-2 gap-1">
+              {DISTRIBUTE_ACTIONS.map(({ axis, icon: Icon, label }) => (
+                <button
+                  key={axis}
+                  type="button"
+                  onClick={() => distributeSelection(axis)}
+                  title={label}
+                  aria-label={label}
+                  className="flex h-7 items-center justify-center rounded-[8px] bg-ds-hover/30 text-ds-muted transition hover:bg-ds-hover/70 hover:text-ds-ink"
+                >
+                  <Icon className="h-3.5 w-3.5" strokeWidth={1.9} />
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </Section>
+      )}
 
       {singleHtmlFrame && (
         <Section title={t('canvasInspectorScreen', 'Screen')}>
