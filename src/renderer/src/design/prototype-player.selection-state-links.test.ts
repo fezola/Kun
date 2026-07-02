@@ -245,9 +245,12 @@ describe("prototype-player selection, state, and links", () => {
         orientation: 'portrait'
       })
     })
-    it('treats implicit preview-card nodes as target defaults for playback', () => {
+    it('treats implicit and auto-measured nodes as target defaults for playback', () => {
       const screen = artifact('home', 'Home', {
         node: { x: 160, y: 150, width: 300, height: 640, sizeMode: 'auto' }
+      })
+      const measuredLongPage = artifact('feed', 'Feed', {
+        node: { x: 160, y: 150, width: 2340, height: 4745, sizeMode: 'auto' }
       })
   
       expect(resolvePrototypeViewportFrame(screen, 'app')).toEqual({
@@ -255,8 +258,13 @@ describe("prototype-player selection, state, and links", () => {
         height: 844,
         orientation: 'portrait'
       })
+      expect(resolvePrototypeViewportFrame(measuredLongPage, 'web')).toEqual({
+        width: 1280,
+        height: 800,
+        orientation: 'landscape'
+      })
     })
-    it('retargets auto screen frames that still match another target default', () => {
+    it('retargets target-managed screen frames to the selected playback mode', () => {
       const previousWebDefault = artifact('home', 'Home', {
         node: { x: 80, y: 120, width: 1280, height: 800, sizeMode: 'auto' }
       })
@@ -278,9 +286,20 @@ describe("prototype-player selection, state, and links", () => {
         orientation: 'landscape'
       })
       expect(resolvePrototypeViewportFrame(manualWebSized, 'app')).toEqual({
-        width: 1280,
-        height: 800,
-        orientation: 'landscape'
+        width: 390,
+        height: 844,
+        orientation: 'portrait'
+      })
+    })
+    it('falls back from unreasonable manual document sizes during playback', () => {
+      const highDpiOrDocumentSize = artifact('home', 'Home', {
+        node: { x: 20, y: 40, width: 2340, height: 4745, sizeMode: 'manual' }
+      })
+
+      expect(resolvePrototypeViewportFrame(highDpiOrDocumentSize, 'app')).toEqual({
+        width: 390,
+        height: 844,
+        orientation: 'portrait'
       })
     })
     it('respects manually sized prototype frames during playback', () => {

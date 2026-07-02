@@ -2,6 +2,11 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProper
 import { AlertTriangle, ArrowLeft, CheckCircle2, ExternalLink, Layers3, Play, Sparkles, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import {
+  defaultFrameSizeForDesignTarget,
+  normalizeDesignTarget,
+  type DesignTarget
+} from '../../../design/design-context'
+import {
   buildPrototypeNavigationCaptureScript,
   extractPrototypeHashRouteHref,
   extractPrototypeNavigationHref,
@@ -17,6 +22,7 @@ import {
   shouldInitializePrototypePlayerCurrentId
 } from '../../../design/prototype-player'
 import type { DesignArtifact } from '../../../design/design-types'
+import { DesignTargetToggle } from '../DesignTargetToggle'
 import { useDesignHtmlPreview } from '../DesignHtmlPreviewHost'
 
 type WebviewNavigateEvent = Event & {
@@ -48,6 +54,38 @@ export function shouldInjectPrototypeNavigationCapture({
   return open && Boolean(webviewUrl) && webviewReady && hasExecuteJavaScript
 }
 
+export function buildPrototypeViewportModeScript(target: DesignTarget): string {
+  return `
+(() => {
+  try {
+    const target = ${JSON.stringify(target)};
+    const styleId = '__kunPrototypeViewportModeStyle';
+    document.documentElement.dataset.kunPrototypeViewport = target;
+    let style = document.getElementById(styleId);
+    if (!style) {
+      style = document.createElement('style');
+      style.id = styleId;
+      document.head.appendChild(style);
+    }
+    style.textContent = \`
+html[data-kun-prototype-viewport="app"],
+html[data-kun-prototype-viewport="app"] body {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+html[data-kun-prototype-viewport="app"]::-webkit-scrollbar,
+html[data-kun-prototype-viewport="app"] body::-webkit-scrollbar,
+html[data-kun-prototype-viewport="app"] *::-webkit-scrollbar {
+  width: 0 !important;
+  height: 0 !important;
+  background: transparent !important;
+}
+    \`;
+  } catch {}
+})();
+  `.trim()
+}
+
 function PrototypePlayerOverlayInner({
   open,
   workspaceRoot,
@@ -61,6 +99,7 @@ function PrototypePlayerOverlayInner({
   const [currentId, setCurrentId] = useState<string | null>(null)
   const [history, setHistory] = useState<string[]>([])
   const [missingHref, setMissingHref] = useState('')
+  const [previewTarget, setPreviewTarget] = useState<DesignTarget>(() => normalizeDesignTarget(designTarget))
   const wasOpenRef = useRef(false)
 
   const initialCurrentId = useMemo(
@@ -85,8 +124,8 @@ function PrototypePlayerOverlayInner({
     [artifacts, currentArtifact]
   )
   const viewportFrame = useMemo(
-    () => resolvePrototypeViewportFrame(currentArtifact, designTarget),
-    [currentArtifact, designTarget]
+    () => resolvePrototypeViewportFrame(currentArtifact, previewTarget),
+    [currentArtifact, previewTarget]
   )
   const viewportFrameStyle = useMemo<CSSProperties>(
     () => ({
@@ -95,13 +134,23 @@ function PrototypePlayerOverlayInner({
     }),
     [viewportFrame]
   )
-  const viewportLabel = `${viewportFrame.width} x ${viewportFrame.height}`
+  const webSize = defaultFrameSizeForDesignTarget('web')
+  const appSize = defaultFrameSizeForDesignTarget('app')
+  const previewTargetLabel = previewTarget === 'app'
+    ? t('designTargetApp', 'App')
+    : t('designTargetWeb', 'Web')
+  const viewportLabel = `${previewTargetLabel} ${viewportFrame.width} x ${viewportFrame.height}`
   const preview = useDesignHtmlPreview({
     workspaceRoot,
     relativePath: currentArtifact?.relativePath,
     enabled: Boolean(open && workspaceRoot && currentArtifact),
     partition: 'kun-proto'
   })
+
+  useEffect(() => {
+    if (!open || wasOpenRef.current) return
+    setPreviewTarget(normalizeDesignTarget(designTarget))
+  }, [designTarget, open])
 
   useEffect(() => {
     if (!open) {
@@ -166,6 +215,7 @@ function PrototypePlayerOverlayInner({
       void executeJavaScript?.(buildPrototypeNavigationCaptureScript(links)).catch(() => {
         /* Best-effort: explicit side-rail links still work if a guest blocks injection. */
       })
+      void executeJavaScript?.(buildPrototypeViewportModeScript(previewTarget)).catch(() => undefined)
     }
 
     const markWebviewReady = (): void => {
@@ -209,6 +259,7 @@ function PrototypePlayerOverlayInner({
     goTo,
     links,
     open,
+    previewTarget,
     preview.state.fileUrl,
     preview.state.ready,
     preview.state.webviewUrl,
@@ -227,7 +278,7 @@ function PrototypePlayerOverlayInner({
 
   return (
     <div className="ds-no-drag pointer-events-auto absolute inset-0 z-[70] flex items-center justify-center bg-[#111827]/32 p-5 backdrop-blur-sm">
-      <div className="flex h-[min(820px,calc(100%-2rem))] w-[min(1180px,calc(100%-2rem))] overflow-hidden rounded-[8px] border border-ds-border bg-white text-ds-ink shadow-[0_30px_90px_rgba(15,23,42,0.32)] dark:bg-ds-canvas">
+      <div className="flex h-[min(960px,calc(100%-2rem))] w-[min(1680px,calc(100%-2rem))] overflow-hidden rounded-[8px] border border-ds-border bg-white text-ds-ink shadow-[0_30px_90px_rgba(15,23,42,0.32)] dark:bg-ds-canvas">
         <main className="flex min-w-0 flex-1 flex-col bg-[#f6f8fb] dark:bg-[#111318]">
           <header className="flex h-12 shrink-0 items-center gap-2 border-b border-ds-border bg-white/82 px-3 dark:bg-ds-card/85">
             <button
@@ -253,6 +304,21 @@ function PrototypePlayerOverlayInner({
                 </div>
               ) : null}
             </div>
+            <DesignTargetToggle
+              designTarget={previewTarget}
+              hint={t('designPrototypeViewportMode', 'Prototype viewport')}
+              webDetail={t('designPrototypeViewportWebDetail', {
+                width: webSize.width,
+                height: webSize.height,
+                defaultValue: `${webSize.width} x ${webSize.height} web prototype`
+              })}
+              appDetail={t('designPrototypeViewportAppDetail', {
+                width: appSize.width,
+                height: appSize.height,
+                defaultValue: `${appSize.width} x ${appSize.height} phone prototype`
+              })}
+              onChange={setPreviewTarget}
+            />
             <button
               type="button"
               onClick={onClose}
@@ -264,9 +330,14 @@ function PrototypePlayerOverlayInner({
             </button>
           </header>
           <div className="min-h-0 flex-1 p-4">
-            <div className="flex h-full w-full items-center justify-center overflow-hidden rounded-[8px] bg-[#e9edf3] p-3 dark:bg-[#0c0f14]">
+            <div className="flex h-full w-full items-center justify-center overflow-hidden rounded-[8px] bg-[#e7ebf1] p-4 dark:bg-[#0c0f14]">
               <div
-                className="relative max-h-full max-w-full overflow-hidden rounded-[8px] border border-ds-border bg-white shadow-[0_12px_40px_rgba(15,23,42,0.12)]"
+                className={[
+                  'relative box-border max-h-full max-w-full overflow-hidden bg-white shadow-[0_12px_40px_rgba(15,23,42,0.12)]',
+                  previewTarget === 'app'
+                    ? 'rounded-[30px] border border-[#1f2937]/25 shadow-[0_18px_46px_rgba(15,23,42,0.2)] dark:border-white/12'
+                    : 'rounded-[8px] border border-ds-border'
+                ].join(' ')}
                 style={viewportFrameStyle}
               >
                 {preview.state.webviewUrl ? (

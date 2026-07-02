@@ -273,6 +273,19 @@ export function viewportFrameFromSize(size: { width: number; height: number }): 
   }
 }
 
+export function isReasonablePrototypeViewportSize(size: { width: number; height: number }): boolean {
+  const width = Math.round(size.width)
+  const height = Math.round(size.height)
+  return (
+    positiveFinite(width) &&
+    positiveFinite(height) &&
+    width >= 240 &&
+    height >= 240 &&
+    width <= 1920 &&
+    height <= 1600
+  )
+}
+
 export function isTargetManagedAutoNodeSize(size: { width: number; height: number }): boolean {
   return (
     sameSize(size, defaultPreviewNodeSizeForDesignTarget('web')) ||
@@ -292,7 +305,10 @@ export function resolvePrototypeViewportFrame(
     return viewportFrameFromSize(fallback)
   }
   const nodeSize = { width: node.width, height: node.height }
-  if (node.sizeMode !== 'manual' && isTargetManagedAutoNodeSize(nodeSize)) {
+  if (node.sizeMode !== 'manual') {
+    return viewportFrameFromSize(fallback)
+  }
+  if (isTargetManagedAutoNodeSize(nodeSize) || !isReasonablePrototypeViewportSize(nodeSize)) {
     return viewportFrameFromSize(fallback)
   }
   return viewportFrameFromSize(nodeSize)

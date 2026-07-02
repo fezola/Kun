@@ -2,7 +2,11 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { DesignArtifact } from '../../../design/design-types'
-import { PrototypePlayerOverlay, shouldInjectPrototypeNavigationCapture } from './PrototypePlayerOverlay'
+import {
+  PrototypePlayerOverlay,
+  buildPrototypeViewportModeScript,
+  shouldInjectPrototypeNavigationCapture
+} from './PrototypePlayerOverlay'
 
 const now = '2026-06-30T00:00:00.000Z'
 
@@ -54,6 +58,15 @@ describe('PrototypePlayerOverlay', () => {
     })).toBe(false)
   })
 
+  it('builds app viewport chrome CSS that hides native scrollbars', () => {
+    const script = buildPrototypeViewportModeScript('app')
+
+    expect(script).toContain('data-kun-prototype-viewport="app"')
+    expect(script).toContain('scrollbar-width: none')
+    expect(script).toContain('::-webkit-scrollbar')
+    expect(script).toContain('width: 0')
+  })
+
   it('renders an app-target prototype shell with phone viewport and all screens', () => {
     const html = renderToStaticMarkup(
       createElement(PrototypePlayerOverlay, {
@@ -80,7 +93,11 @@ describe('PrototypePlayerOverlay', () => {
 
     expect(html).toContain('aspect-ratio:390 / 844')
     expect(html).toContain('height:100%')
-    expect(html).toContain('.kun-design/doc/home/v1.html - 390 x 844')
+    expect(html).toContain('.kun-design/doc/home/v1.html - App 390 x 844')
+    expect(html).toContain('aria-label="Prototype viewport"')
+    expect(html).toContain('aria-pressed="true"')
+    expect(html).toContain('rounded-[30px]')
+    expect(html).not.toContain('ring-[6px]')
     expect(html).toContain('All screens')
     expect(html).toContain('Home')
     expect(html).toContain('Settings')
@@ -102,7 +119,8 @@ describe('PrototypePlayerOverlay', () => {
 
     expect(html).toContain('aspect-ratio:1280 / 800')
     expect(html).toContain('width:100%')
-    expect(html).toContain('.kun-design/doc/home/v1.html - 1280 x 800')
+    expect(html).toContain('.kun-design/doc/home/v1.html - Web 1280 x 800')
+    expect(html).toContain('1280 x 800 web prototype')
   })
 
   it('does not render when closed', () => {
