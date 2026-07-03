@@ -50,9 +50,13 @@ function ensureMarkdownExtension(filePath: string): string {
 }
 
 function sanitizeFileName(value: string | undefined): string {
-  return (value ?? '')
+  return replaceControlCharacters(value ?? '')
     .trim()
-    .replace(/[<>:"/\\|?*\u0000-\u001f]+/g, '-')
+    .replace(/[<>:"/\\|?*]+/g, '-')
     .replace(/\s+/g, ' ')
     .slice(0, 180)
+}
+
+function replaceControlCharacters(value: string): string {
+  return Array.from(value, (char) => char.charCodeAt(0) <= 0x1f ? '-' : char).join('')
 }

@@ -519,6 +519,9 @@ const kunRuntimePatchSchema = z.object({
     modelProfilePatchSchema.nullable()
   ).optional(),
   memoryEnabled: z.boolean().optional(),
+  instructions: z.object({
+    enabled: z.boolean().optional()
+  }).strict().optional(),
   // Global small-model slot + per-role internal-LLM model overrides (agents.kun.*).
   // Title & Summary default to smallModel, then the main conversation model.
   smallModel: optionalModelIdSchema,

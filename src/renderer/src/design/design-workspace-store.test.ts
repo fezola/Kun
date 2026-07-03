@@ -43,6 +43,21 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   return { promise, resolve }
 }
 
+function stubLocalStorage() {
+  const storage = new Map<string, string>()
+  const localStorage = {
+    getItem: vi.fn((key: string) => storage.get(key) ?? null),
+    setItem: vi.fn((key: string, value: string) => {
+      storage.set(key, value)
+    }),
+    removeItem: vi.fn((key: string) => {
+      storage.delete(key)
+    })
+  }
+  vi.stubGlobal('localStorage', localStorage)
+  return { storage, localStorage }
+}
+
 describe('design workspace store', () => {
   const writeWorkspaceFile = vi.fn(async (_request: WriteWorkspaceFileRequest) => ({ ok: true as const }))
 
@@ -355,18 +370,8 @@ describe('design workspace store', () => {
   })
 
   it('persists the design target from both quick toggle and context updates', () => {
-    const storage = new Map<string, string>()
-    const localStorage = {
-      getItem: vi.fn((key: string) => storage.get(key) ?? null),
-      setItem: vi.fn((key: string, value: string) => {
-        storage.set(key, value)
-      }),
-      removeItem: vi.fn((key: string) => {
-        storage.delete(key)
-      })
-    }
+    const { storage, localStorage } = stubLocalStorage()
     vi.stubGlobal('window', { kunGui: { writeWorkspaceFile }, localStorage })
-    vi.stubGlobal('localStorage', localStorage)
 
     useDesignWorkspaceStore.getState().setDesignTarget('app')
 
@@ -530,18 +535,8 @@ describe('design workspace store', () => {
   })
 
   it('opens the canvas assistant by default unless the user collapsed it', async () => {
-    const storage = new Map<string, string>()
-    const localStorage = {
-      getItem: vi.fn((key: string) => storage.get(key) ?? null),
-      setItem: vi.fn((key: string, value: string) => {
-        storage.set(key, value)
-      }),
-      removeItem: vi.fn((key: string) => {
-        storage.delete(key)
-      })
-    }
+    const { storage, localStorage } = stubLocalStorage()
     vi.stubGlobal('window', { kunGui: { writeWorkspaceFile }, localStorage })
-    vi.stubGlobal('localStorage', localStorage)
 
     vi.resetModules()
     const { useDesignWorkspaceStore: freshStore } = await import('./design-workspace-store')
@@ -558,15 +553,8 @@ describe('design workspace store', () => {
   })
 
   it('toggles the canvas assistant open state and persists the collapsed mirror key', () => {
-    const storage = new Map<string, string>()
-    const localStorage = {
-      getItem: vi.fn((key: string) => storage.get(key) ?? null),
-      setItem: vi.fn((key: string, value: string) => {
-        storage.set(key, value)
-      })
-    }
+    const { storage, localStorage } = stubLocalStorage()
     vi.stubGlobal('window', { kunGui: { writeWorkspaceFile }, localStorage })
-    vi.stubGlobal('localStorage', localStorage)
     useDesignWorkspaceStore.setState({ canvasAssistantOpen: true, aiRailCollapsed: false })
 
     useDesignWorkspaceStore.getState().toggleCanvasAssistantOpen()

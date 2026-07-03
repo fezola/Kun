@@ -138,13 +138,13 @@ export const TESTIMONIAL_CLASS_RE =
   /\b(?:testimonial|review|quote|customer[- ]stor(?:y|ies)|client[- ]stor(?:y|ies)|social[- ]proof)\b/i
 
 export const TESTIMONIAL_ATTRIBUTION_RE =
-  /\b(?:by|from|at|role|title|founder|ceo|cto|cmo|vp|director|manager|lead|head of|customer|client|team|company)\b|[+\-]?\d[\d,.]*\s?%|\b[A-Z][a-z]{2,}\s+[A-Z][a-z]{2,}\b|\b[A-Z][A-Za-z0-9&.-]+\s+(?:Studio|Labs|Inc|LLC|Ltd|Co|Group|Systems|Health|Finance|Bank|Agency)\b/
+  /\b(?:by|from|at|role|title|founder|ceo|cto|cmo|vp|director|manager|lead|head of|customer|client|team|company)\b|[-+]?\d[\d,.]*\s?%|\b[A-Z][a-z]{2,}\s+[A-Z][a-z]{2,}\b|\b[A-Z][A-Za-z0-9&.-]+\s+(?:Studio|Labs|Inc|LLC|Ltd|Co|Group|Systems|Health|Finance|Bank|Agency)\b/
 
 export const GENERIC_TESTIMONIAL_COPY_RE =
   /\b(?:amazing product|awesome product|best (?:decision|experience|product|tool)|changed everything|couldn'?t be happier|game[- ]changer|highly recommend|incredible|love (?:it|this|the product)|made our lives easier|perfect for our team|saved us so much time|so easy to use|transformed our workflow|would recommend)\b/i
 
 export const CONCRETE_TESTIMONIAL_CONTEXT_RE =
-  /\b(?:after|approval|before|case[- ]stud(?:y|ies)|conversion|dashboard|days?|dispatch|handoff|hours?|implementation|inquir(?:y|ies)|invoice|launch|migration|months?|onboarding|orders?|pilot|portfolio|project|q[1-4]|records?|renewal|revenue|route|sla|sync|tickets?|timeline|trial|users?|weeks?)\b|[+\-]?\d[\d,.]*\s?(?:%|x|arr|days?|hours?|months?|orders?|pages?|projects?|records?|tickets?|users?|weeks?)?\b|[$€£¥]\s*\d/i
+  /\b(?:after|approval|before|case[- ]stud(?:y|ies)|conversion|dashboard|days?|dispatch|handoff|hours?|implementation|inquir(?:y|ies)|invoice|launch|migration|months?|onboarding|orders?|pilot|portfolio|project|q[1-4]|records?|renewal|revenue|route|sla|sync|tickets?|timeline|trial|users?|weeks?)\b|[-+]?\d[\d,.]*\s?(?:%|x|arr|days?|hours?|months?|orders?|pages?|projects?|records?|tickets?|users?|weeks?)?\b|[$€£¥]\s*\d/i
 
 export const MARKETING_FEATURE_SURFACE_RE =
   /\b(?:landing page|marketing site|brand site|homepage|home page|features?|product page|website|waitlist|book a demo|start free trial)\b/i
@@ -180,7 +180,7 @@ export const PORTFOLIO_ENTRY_CLASS_RE =
   /\b(?:case[- ]study|project[- ]card|work[- ]card|portfolio[- ]item|client[- ]story|selected[- ]work|project[- ]tile|project[- ]entry)\b/i
 
 export const PORTFOLIO_OUTCOME_RE =
-  /\b(?:client|role|year|timeline|launched|scope|industry|deliverables|result|outcome|increased|reduced|saved|grew|conversion|qualified inquiries|revenue)\b|[+\-]?\d[\d,.]*\s?%/i
+  /\b(?:client|role|year|timeline|launched|scope|industry|deliverables|result|outcome|increased|reduced|saved|grew|conversion|qualified inquiries|revenue)\b|[-+]?\d[\d,.]*\s?%/i
 
 export const PORTFOLIO_DETAIL_ACTION_RE =
   /\b(?:view case study|read case study|view project|see project|open project|view work|read story|explore project)\b/i
@@ -279,7 +279,7 @@ export const LEAD_FORM_LOADING_RE =
   /\b(?:loading|submitting|sending|please wait|aria-busy|spinner|progress)\b/i
 
 export const HERO_VIEWPORT_LOCK_RE =
-  /(?:^|}|,|\s)(?:[#.]?[a-z0-9_-]*hero[a-z0-9_-]*|section\s*[:.#\[][^{,]*)[^{]*{[^}]*\b(?:min-height|height)\s*:\s*(?:100|9[5-9])(?:dvh|vh)\b/i
+  /(?:^|}|,|\s)(?:[#.]?[a-z0-9_-]*hero[a-z0-9_-]*|section\s*(?:[:.#]|\[)[^{,]*)[^{]*{[^}]*\b(?:min-height|height)\s*:\s*(?:100|9[5-9])(?:dvh|vh)\b/i
 
 export const FIXED_DESKTOP_FRAME_RE =
   /(?:^|[;{]\s*)(?:width|min-width)\s*:\s*(?:1[1-9]\d{2}|[2-9]\d{3})px\b/i
@@ -318,7 +318,7 @@ export const METRIC_CONTAINER_CLASS_RE =
   /\b(?:kpi|metric|stat|summary|scorecard|insight|number-card|value-card)\b/i
 
 export const METRIC_CONTEXT_RE =
-  /\b(?:vs|versus|from|since|last|previous|prior|target|goal|benchmark|trend|delta|change|increase|decrease|up|down|won|lost|this week|this month|this quarter|today|yesterday|q[1-4]|mom|yoy|week over week|month over month|year over year)\b|[+\-]\s?\d[\d,.]*\s?%|[↑↓]/i
+  /\b(?:vs|versus|from|since|last|previous|prior|target|goal|benchmark|trend|delta|change|increase|decrease|up|down|won|lost|this week|this month|this quarter|today|yesterday|q[1-4]|mom|yoy|week over week|month over month|year over year)\b|[-+]\s?\d[\d,.]*\s?%|[↑↓]/i
 
 export const GENERIC_METRIC_LABEL_RE =
   /^(?:activity|conversion(?: rate)?|cycle time|engagement|growth|performance|pipeline|productivity|progress|revenue|sales|tasks?|usage|users?)$/i

@@ -420,6 +420,9 @@ function CanvasOpsChip({
       return null
     }
   }, [code, language])
+  const labelKey = count === null ? 'canvasOpsApplied' : 'canvasOpsAppliedCount'
+  const label = count === null ? t(labelKey) : t(labelKey, { count })
+  const fallbackLabel = count === null ? 'Canvas ops' : `Canvas ops (${count})`
 
   return (
     <div className="my-1.5">
@@ -429,7 +432,7 @@ function CanvasOpsChip({
         className="inline-flex items-center gap-1.5 rounded-full border border-accent/30 bg-accent/10 px-2.5 py-1 text-[12px] font-medium text-accent transition hover:bg-accent/15"
       >
         <Shapes className="h-3.5 w-3.5" strokeWidth={1.9} />
-        {count === null ? t('canvasOpsApplied') : t('canvasOpsAppliedCount', { count })}
+        {label === labelKey ? fallbackLabel : label}
         {expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
       </button>
       {expanded ? (

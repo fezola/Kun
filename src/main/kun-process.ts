@@ -21,7 +21,8 @@ import {
 } from '../shared/app-settings'
 import {
   buildKunServeArgs,
-  resolveKunExecutable
+  resolveKunExecutable,
+  shouldRunKunServeAsElectronChild
 } from './resolve-kun-binary'
 import { resolveCodexOAuthApiKey } from './codex-auth'
 import {
@@ -378,11 +379,17 @@ async function startKunChildOnce(
   // On macOS, libnut links AppKit and calls `[NSApplication sharedApplication]`
   // on its first screen-grab/mouse/keyboard call. That promotes a pure-Node
   // (ELECTRON_RUN_AS_NODE) child to a regular Cocoa app and a second Kun icon
-  // appears in the Dock. When computer-use is enabled we instead spawn kun as
-  // a real Electron instance so it can call `app.dock.hide()` itself (see
-  // kun/src/cli/serve-entry.ts). The extra Chromium overhead is only paid
-  // when the user actually opted into host control.
-  const runAsElectron = process.platform === 'darwin' && runtime.computerUse?.enabled === true
+  // appears in the Dock. In dev, when computer-use is enabled, we instead
+  // spawn kun as a real Electron instance so it can call `app.dock.hide()`
+  // itself (see kun/src/cli/serve-entry.ts). Packaged .app executables are not
+  // generic Electron script runners: passing serve-entry.js to the main app
+  // launches the GUI process instead of kun serve, so packaged builds must use
+  // the Node helper path even when computer-use is enabled.
+  const runAsElectron = shouldRunKunServeAsElectronChild({
+    platform: process.platform,
+    isPackaged: app.isPackaged,
+    computerUseEnabled: runtime.computerUse?.enabled === true
+  })
   const command = runAsElectron ? resolution.command : resolveNodeScriptCommand(resolution.command)
   // When the active provider is Codex, runtime.apiKey holds JSON-encoded OAuth
   // credentials; unwrap to the bare access token so the default client sends a
