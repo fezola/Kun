@@ -17,6 +17,7 @@ import type { ApprovalPolicy } from '../../contracts/policy.js'
 import type { ServeProviderConfig } from '../../config/kun-config.js'
 import type { AttachmentStore } from '../../attachments/attachment-store.js'
 import type { SkillRuntime } from '../../skills/skill-runtime.js'
+import type { InstructionRuntime } from '../../instructions/instruction-runtime.js'
 import type { MemoryStore } from '../../memory/memory-store.js'
 import {
   PLAN_MODE_INSTRUCTION,
@@ -62,6 +63,8 @@ export interface AgentSdkRuntimeFactoryDeps {
   attachmentStore?: AttachmentStore
   /** Skill engine — injects the available-skills catalog + activated skills per turn. */
   skillRuntime?: SkillRuntime
+  /** Native Kun AGENTS.md instruction engine — injects global/workspace instructions per turn. */
+  instructionRuntime?: InstructionRuntime
   /** Long-term memory store — injects relevant memories per turn. */
   memoryStore?: MemoryStore
   /** Interactive-input gate — lets the bridged `user_input` tool surface kun's GUI panel. */
@@ -310,6 +313,9 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       const skillResolution = deps.skillRuntime
         ? await deps.skillRuntime.resolveTurn({ prompt: userText, workspace: thread.workspace })
         : undefined
+      const instructionResolution = deps.instructionRuntime
+        ? await deps.instructionRuntime.resolveTurn({ workspace: thread.workspace })
+        : undefined
 
       let memoryBlocks: string[] = []
       if (deps.memoryStore && userText.trim()) {
@@ -324,9 +330,16 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
 
       const goalInstruction = planMode ? null : goalContinuationInstruction(thread.goal)
       const todoInstruction = planMode ? null : todoContinuationInstruction(thread.todos)
+      if (instructionResolution) {
+        await deps.turns.updateTurnMetadata(threadId, turnId, {
+          injectedInstructionSources: instructionResolution.sources,
+          instructionInjectionBytes: instructionResolution.injectedBytes
+        })
+      }
 
       const contextInstructions = [
         ...(planMode ? [PLAN_MODE_INSTRUCTION] : []),
+        ...(instructionResolution?.instruction ? [instructionResolution.instruction] : []),
         ...(goalInstruction ? [goalInstruction] : []),
         ...(todoInstruction ? [todoInstruction] : []),
         ...memoryBlocks,

@@ -327,6 +327,9 @@ export function createThreadActions(
         activeThreadTodos: todos ?? null,
         blocks,
         lastSeq: latestSeq,
+        // Re-baseline the shared delta floor to this subscription's since_seq,
+        // in lockstep with the liveAssistant reset below.
+        liveDeltaSeqFloor: latestSeq,
         liveReasoning: '',
         liveAssistant: '',
         error: busy ? runtimeStreamRecoveringMessage() : null,
@@ -432,6 +435,7 @@ export function createThreadActions(
         activeThreadTodos: todos ?? null,
         blocks,
         lastSeq: latestSeq,
+        liveDeltaSeqFloor: latestSeq,
         liveReasoning: '',
         liveAssistant: '',
         error: null,
@@ -499,6 +503,9 @@ export function createThreadActions(
       activeThreadId: targetThreadId,
       blocks: keepExistingBlocks ? prevState.blocks : [],
       lastSeq: keepExistingBlocks ? prevState.lastSeq : 0,
+      // This live entry point subscribes from since_seq=0, so the floor starts
+      // at 0 too (matching the per-sink floor) — the buffer is reset to '' here.
+      liveDeltaSeqFloor: 0,
       liveReasoning: '',
       liveAssistant: '',
       unreadThreadIds: { ...prevState.unreadThreadIds, [targetThreadId]: false },
@@ -650,6 +657,7 @@ export function createThreadActions(
             ...(userModelChip ? { modelLabel: userModelChip } : {}),
             ...(reasoningEffort ? { reasoningEffort } : {}),
             ...(overrides?.guiPlan ? { guiPlan: overrides.guiPlan } : {}),
+            ...(overrides?.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
             ...(attachmentIds?.length ? { attachmentIds } : {}),
             ...(attachments?.length ? { attachments } : {}),
             ...(fileReferences?.length ? { fileReferences } : {})
@@ -901,6 +909,7 @@ export function createThreadActions(
         ...(reasoningEffort ? { reasoningEffort } : {}),
         ...(runtimeDisplayText ? { displayText: runtimeDisplayText } : {}),
         ...((queued?.guiPlan ?? overrides?.guiPlan) ? { guiPlan: queued?.guiPlan ?? overrides?.guiPlan } : {}),
+        ...((queued?.guiDesignCanvas ?? overrides?.guiDesignCanvas) ? { guiDesignCanvas: true } : {}),
         ...(attachmentIds.length ? { attachmentIds } : {}),
         ...(workspaceCheckpointId ? { workspaceCheckpointId } : {}),
         ...(fileReferences.length ? { fileReferences } : {})
@@ -978,10 +987,11 @@ export function createThreadActions(
           })
         }
       }
-      // Subscribe to the turn's event stream BEFORE the cosmetic title rename so
-      // a slow/blocked title write never delays the conversation. Title naming
-      // must not be a blocking point of the conversation flow.
-      set({ currentTurnId: turnId })
+      // Re-baseline the shared delta floor to this send's since_seq right before
+      // the sink opens, so a replayed backlog can't re-append text. Subscribe to the
+      // turn's event stream BEFORE the cosmetic title rename so a slow/blocked title
+      // write never delays the conversation.
+      set({ currentTurnId: turnId, liveDeltaSeqFloor: seqAtSend })
       const ac = new AbortController()
       sseAbortRef.current = ac
       const sink = buildThreadEventSink(set, get, { threadId: activeThreadId, signal: ac.signal, sinceSeq: seqAtSend })
@@ -1123,7 +1133,9 @@ export function createThreadActions(
       if (userMessageItemId && userModelChip) {
         rememberTurnModel(activeThreadId, userMessageItemId, userModelChip)
       }
-      set({ currentTurnId: turnId })
+      // Re-baseline the shared delta floor to this send's since_seq right
+      // before the sink opens, so a replayed backlog can't re-append text.
+      set({ currentTurnId: turnId, liveDeltaSeqFloor: seqAtSend })
       const ac = new AbortController()
       sseAbortRef.current = ac
       const sink = buildThreadEventSink(set, get, { threadId: activeThreadId, signal: ac.signal, sinceSeq: seqAtSend })

@@ -45,10 +45,19 @@ export type ReviewServiceDeps = {
 }
 
 export class ReviewService {
-  private readonly deps: ReviewServiceDeps
+  private deps: ReviewServiceDeps
 
   constructor(deps: ReviewServiceDeps) {
     this.deps = deps
+  }
+
+  updateRuntimeConfig(
+    patch: Partial<Pick<ReviewServiceDeps, 'defaultModel' | 'models' | 'contextCompaction' | 'tokenEconomy' | 'runtime' | 'reasoningEffort'>>
+  ): void {
+    this.deps = {
+      ...this.deps,
+      ...patch
+    }
   }
 
   async runReview(input: {

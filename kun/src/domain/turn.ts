@@ -12,6 +12,7 @@ export function createTurnRecord(input: {
   reasoningEffort?: TurnReasoningEffort
   attachmentIds?: string[]
   guiPlan?: GuiPlanContextJson
+  guiDesignCanvas?: boolean
   mode?: ThreadMode
   disableUserInput?: boolean
   workspaceCheckpointId?: string
@@ -31,9 +32,11 @@ export function createTurnRecord(input: {
     activeSkillIds: [],
     injectedMemoryIds: [],
     injectedMemorySummaries: [],
+    injectedInstructionSources: [],
     ...(model ? { model } : {}),
     ...(reasoningEffort ? { reasoningEffort } : {}),
     ...(input.guiPlan ? { guiPlan: input.guiPlan } : {}),
+    ...(input.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
     ...(input.mode ? { mode: input.mode } : {}),
     ...(input.disableUserInput ? { disableUserInput: true } : {}),
     ...(input.workspaceCheckpointId ? { workspaceCheckpointId: input.workspaceCheckpointId } : {}),

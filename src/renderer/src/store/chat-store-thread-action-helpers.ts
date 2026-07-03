@@ -32,9 +32,7 @@ export async function ensureRuntimeProviderForSend(input: {
   if (activeProviderId === providerId) return
   input.set({ runtimeConnection: 'checking', error: null, runtimeErrorDetail: null })
   try {
-    await window.kunGui.saveSettingsSilent({ agents: { kun: { providerId, model } } })
-    rendererRuntimeClient.invalidateSettings()
-    await rendererRuntimeClient.restartRuntime()
+    await rendererRuntimeClient.setSettings({ agents: { kun: { providerId, model } } })
     await getProvider().connect()
     input.set({ runtimeConnection: 'ready', error: null, runtimeErrorDetail: null })
     void input.get().loadComposerModels()
