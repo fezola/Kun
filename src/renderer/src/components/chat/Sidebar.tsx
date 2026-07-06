@@ -195,7 +195,6 @@ export function Sidebar({
         <WorkspaceModeTabs
           activeView={activeView}
           onCodeOpen={onCodeOpen}
-          onWorkflowOpen={onWorkflowOpen}
           onWriteOpen={onWriteOpen}
           onDesignOpen={onDesignOpen}
         />
@@ -239,6 +238,12 @@ export function Sidebar({
           label={t('schedule')}
           onClick={onScheduleOpen}
           active={activeView === 'schedule'}
+        />
+        <SidebarCommandRow
+          icon={<Workflow className="h-4 w-4" strokeWidth={1.75} />}
+          label={t('workflowCreate')}
+          onClick={onWorkflowOpen}
+          active={activeView === 'workflow'}
         />
       </div>
 

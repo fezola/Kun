@@ -13,20 +13,19 @@ describe('WorkspaceModeTabs', () => {
     return {
       activeView,
       onCodeOpen: vi.fn(),
-      onWorkflowOpen: vi.fn(),
       onWriteOpen: vi.fn(),
       onDesignOpen: vi.fn()
     }
   }
 
-  it('renders four tab buttons', () => {
+  it('renders three top-level mode tab buttons', () => {
     const html = renderToStaticMarkup(createElement(WorkspaceModeTabs, props()))
 
     expect(html).toContain('Code')
-    expect(html).toContain('Loop')
     expect(html).toContain('Write')
     expect(html).toContain('Design')
-    expect(html.match(/role="tab"/g)?.length).toBe(4)
+    expect(html).not.toContain('Loop')
+    expect(html.match(/role="tab"/g)?.length).toBe(3)
   })
 
   it('uses horizontal row layout not vertical column', () => {
@@ -45,15 +44,22 @@ describe('WorkspaceModeTabs', () => {
     )
 
     const flex1Matches = html.match(/flex-1/g)
-    expect(flex1Matches?.length).toBe(4)
+    expect(flex1Matches?.length).toBe(3)
   })
 
   it('marks active button with aria-selected true', () => {
-    for (const activeView of ['chat', 'workflow', 'write', 'design'] as const) {
+    for (const activeView of ['chat', 'write', 'design'] as const) {
       const html = renderToStaticMarkup(createElement(WorkspaceModeTabs, props(activeView)))
       expect(html.match(/aria-selected="true"/g)?.length).toBe(1)
-      expect(html.match(/aria-selected="false"/g)?.length).toBe(3)
+      expect(html.match(/aria-selected="false"/g)?.length).toBe(2)
     }
+  })
+
+  it('does not mark a top tab active while the moved Loop view is active', () => {
+    const html = renderToStaticMarkup(createElement(WorkspaceModeTabs, props('workflow')))
+
+    expect(html).not.toContain('aria-selected="true"')
+    expect(html.match(/aria-selected="false"/g)?.length).toBe(3)
   })
 
   it('uses all-or-icon labels instead of truncating tab text', () => {
@@ -79,7 +85,7 @@ describe('WorkspaceModeTabs', () => {
     )
 
     expect(html).toContain('role="tablist"')
-    expect(html).toContain('Code / Loop / Write / Design')
+    expect(html).toContain('Code / Write / Design')
   })
 
   it('does not render secondary switches in the sidebar mode tabs', () => {
@@ -88,6 +94,6 @@ describe('WorkspaceModeTabs', () => {
     )
 
     expect(html).not.toContain('role="switch"')
-    expect(html.match(/role="tab"/g)?.length).toBe(4)
+    expect(html.match(/role="tab"/g)?.length).toBe(3)
   })
 })

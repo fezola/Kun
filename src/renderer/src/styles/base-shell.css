@@ -2883,7 +2883,7 @@ pre {
 }
 
 .timeline-jump-rail {
-  position: fixed;
+  position: absolute;
   top: 50%;
   left: 1rem;
   z-index: 15;
@@ -2960,10 +2960,10 @@ pre {
 }
 
 .timeline-jump-rail-preview {
-  position: fixed;
+  position: absolute;
   z-index: 45;
   box-sizing: border-box;
-  width: min(26rem, calc(100vw - 5.5rem));
+  width: min(26rem, calc(100% - 2rem));
   max-height: min(15rem, calc(100vh - 2rem));
   overflow: hidden;
   transform: translateY(-50%);

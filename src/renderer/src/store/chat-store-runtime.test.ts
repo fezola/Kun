@@ -18,6 +18,11 @@ import {
 import { clearBusyWatchdog, resetBusyRecoveryAttempts } from './chat-store-schedulers'
 import type { ChatState, ChatStoreSet } from './chat-store-types'
 import { emptyDesignThreadRegistry, markDesignThread } from '../design/design-thread-registry'
+import {
+  WRITE_ASSISTANT_THREAD_TITLE,
+  emptyWriteThreadRegistry,
+  markWriteThread
+} from '../write/write-thread-registry'
 
 function makeSinkHarness(overrides: Partial<ChatState> = {}): {
   getState: () => ChatState
@@ -91,6 +96,31 @@ describe('code thread classification', () => {
 
     expect(isCodeSidebarThread(design, [], undefined, designRegistry)).toBe(false)
     expect(isCodeThread(design, [], undefined, designRegistry)).toBe(false)
+  })
+
+  it('excludes leaked default write assistant threads even without registry data', () => {
+    const writeAssistant = makeThread({
+      id: 'thr_write_leaked',
+      title: WRITE_ASSISTANT_THREAD_TITLE
+    })
+
+    expect(isCodeSidebarThread(writeAssistant, [], emptyWriteThreadRegistry())).toBe(false)
+    expect(isCodeThread(writeAssistant, [], emptyWriteThreadRegistry())).toBe(false)
+  })
+
+  it('excludes registered write assistant threads after they are renamed', () => {
+    const writeRegistry = markWriteThread(
+      '/workspace/deepseek-gui',
+      'thr_write_registered',
+      emptyWriteThreadRegistry()
+    )
+    const renamedWriteAssistant = makeThread({
+      id: 'thr_write_registered',
+      title: 'Draft intro'
+    })
+
+    expect(isCodeSidebarThread(renamedWriteAssistant, [], writeRegistry)).toBe(false)
+    expect(isCodeThread(renamedWriteAssistant, [], writeRegistry)).toBe(false)
   })
 
   it('excludes threads stored in the internal design workspace even without registry data', () => {

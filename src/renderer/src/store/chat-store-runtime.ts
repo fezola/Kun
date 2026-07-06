@@ -34,7 +34,7 @@ import {
   upsertUserBlock
 } from './chat-store-runtime-helpers'
 import {
-  isWriteThreadId,
+  isWriteAssistantThread,
   type WriteThreadRegistry
 } from '../write/write-thread-registry'
 import { isSddAssistantThread } from '../sdd/sdd-thread-registry'
@@ -422,7 +422,7 @@ export function isCodeSidebarThread(
     !isInternalDeepSeekGuiWorkspace(thread.workspace) &&
     !isClawWorkspacePath(thread.workspace) &&
     !isClawThread(thread, clawChannels) &&
-    !isWriteThreadId(thread.id, writeRegistry) &&
+    !isWriteAssistantThread(thread, writeRegistry) &&
     !isSddAssistantThread(thread) &&
     !isDesignThreadId(thread.id, designRegistry)
 }
