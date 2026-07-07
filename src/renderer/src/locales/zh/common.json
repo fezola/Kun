@@ -1380,6 +1380,7 @@
   "pluginSkillRootWorkspaceAgents": "工作区 | .agents/skills",
   "pluginSkillRootWorkspaceClaude": "工作区 | .claude/skills",
   "pluginSkillRootWorkspaceCodex": "工作区 | .codex/skills",
+  "pluginSkillRootWorkspaceKun": "工作区 | .kun/skills",
   "pluginSkillRootWorkspaceSkills": "工作区 | skills",
   "pluginSkillRootGlobalAgents": "全局 | ~/.agents/skills",
   "pluginSkillRootGlobalClaude": "全局 | ~/.claude/skills",

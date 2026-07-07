@@ -1380,6 +1380,7 @@
   "pluginSkillRootWorkspaceAgents": "Workspace | .agents/skills",
   "pluginSkillRootWorkspaceClaude": "Workspace | .claude/skills",
   "pluginSkillRootWorkspaceCodex": "Workspace | .codex/skills",
+  "pluginSkillRootWorkspaceKun": "Workspace | .kun/skills",
   "pluginSkillRootWorkspaceSkills": "Workspace | skills",
   "pluginSkillRootGlobalAgents": "Global | ~/.agents/skills",
   "pluginSkillRootGlobalClaude": "Global | ~/.claude/skills",

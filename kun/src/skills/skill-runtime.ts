@@ -11,6 +11,7 @@ const WORKSPACE_SKILL_RELATIVE_DIRS = [
   '.agents/skills',
   '.claude/skills',
   '.codex/skills',
+  '.kun/skills',
   'skills'
 ] as const
 
@@ -418,7 +419,10 @@ function looksLikeWorkspaceSkillRoot(root: string): boolean {
   const parts = root.split(/[\\/]+/)
   if (parts.length < 2) return false
   const tail2 = parts.slice(-2).join('/')
-  return tail2 === '.agents/skills' || tail2 === '.claude/skills' || tail2 === '.codex/skills'
+  return tail2 === '.agents/skills' ||
+    tail2 === '.claude/skills' ||
+    tail2 === '.codex/skills' ||
+    tail2 === '.kun/skills'
 }
 
 async function existingWorkspaceSkillRoots(workspaceRoot: string): Promise<string[]> {

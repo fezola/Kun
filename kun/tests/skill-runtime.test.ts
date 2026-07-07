@@ -212,6 +212,38 @@ describe('SkillRuntime', () => {
     }
   })
 
+  it('discovers workspace-local Kun skills from .kun/skills', async () => {
+    const workspace = await mkdtemp(join(tmpdir(), 'kun-skill-workspace-kun-'))
+    try {
+      const skillRoot = join(workspace, '.kun', 'skills')
+      await writeSkillAt(skillRoot, 'pm', {
+        id: 'pm',
+        name: 'Project Manager',
+        triggers: { commands: ['/pm'] }
+      }, 'PM instructions')
+
+      const config = KunCapabilitiesConfig.parse({
+        skills: {
+          enabled: true,
+          roots: [],
+          workspaceRoots: [],
+          legacySkillMd: true
+        }
+      })
+      const runtime = await SkillRuntime.create(config.skills)
+      const resolution = await runtime.resolveTurn({ prompt: '/pm plan the work', workspace })
+
+      expect(resolution.catalogInstruction).toContain('Project Manager')
+      expect(resolution.activeSkillIds).toEqual(['pm'])
+      await expect(runtime.loadSkillById('pm', workspace)).resolves.toMatchObject({
+        skillId: 'pm',
+        name: 'Project Manager'
+      })
+    } finally {
+      await rm(workspace, { recursive: true, force: true })
+    }
+  })
+
   it('truncates the catalog when the byte budget is exceeded', async () => {
     await writeSkill('one', { id: 'one', name: 'One', description: 'd'.repeat(400) }, 'b')
     await writeSkill('two', { id: 'two', name: 'Two', description: 'd'.repeat(400) }, 'b')
