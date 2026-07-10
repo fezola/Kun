@@ -44,5 +44,6 @@ without changing the public Kun HTTP/SSE contract.
   thread stores, compaction paths, and focused loop tests.
 - No renderer, preload, Electron IPC, provider configuration, or public route
   contract changes are intended.
-- Existing persisted sessions remain readable; revision metadata is introduced in
-  a backward-compatible way and is only used internally to reject stale writes.
+- Existing persisted sessions remain readable; the active single-runtime store
+  assigns opaque in-memory revisions only to reject stale writes, without a
+  session-file format migration.

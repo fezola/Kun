@@ -12,11 +12,11 @@
 
 ## 2. Revision-aware history commits
 
-- [ ] 2.1 Map all session/thread read-modify-write paths used by append, repair,
+- [x] 2.1 Map all session/thread read-modify-write paths used by append, repair,
   discard, compaction, interruption, and deletion.
-- [ ] 2.2 Add backward-compatible session revision read and compare-and-swap
-  primitives with atomic persistence semantics.
-- [ ] 2.3 Implement a history coordinator that serializes per-thread mutations
+- [x] 2.2 Add in-runtime item-history revision read and compare-and-swap
+  primitives without changing persisted session formats.
+- [x] 2.3 Implement a history coordinator that serializes per-thread mutations
   and retries only pure transformations after a revision conflict.
 - [ ] 2.4 Route compaction, history repair, and discard replacement writes through
   the coordinator without replaying model or tool side effects.

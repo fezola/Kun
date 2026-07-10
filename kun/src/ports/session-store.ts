@@ -18,6 +18,22 @@ export type SessionLatestUsageSnapshot = {
 }
 
 /**
+ * A point-in-time view of the canonical item history. `revision` is opaque to
+ * callers and is valid for the lifetime of the active SessionStore instance.
+ * It lets a read-compute-rewrite flow detect an item append or update that
+ * landed after it loaded the history.
+ */
+export type ItemHistorySnapshot = {
+  revision: number
+  items: TurnItem[]
+}
+
+/** Result of a conditional full-history replacement. */
+export type ItemHistoryCommit =
+  | { applied: true; revision: number }
+  | { applied: false; reason: 'conflict' | 'closed'; revision?: number }
+
+/**
  * Port for persisted per-thread activity.
  *
  * The store keeps three streams: the ordered runtime event log
@@ -34,6 +50,17 @@ export interface SessionStore {
    * and explicit discard flows.
    */
   rewriteItems(threadId: string, items: TurnItem[]): Promise<void>
+  /** Load item history and its opaque revision as one consistent snapshot. */
+  loadItemSnapshot(threadId: string): Promise<ItemHistorySnapshot>
+  /**
+   * Replace item history only if no item mutation has occurred since the
+   * caller loaded `expectedRevision`.
+   */
+  rewriteItemsIfRevision(
+    threadId: string,
+    expectedRevision: number,
+    items: TurnItem[]
+  ): Promise<ItemHistoryCommit>
   updateItem(threadId: string, itemId: string, patch: Partial<TurnItem>): Promise<TurnItem | null>
   loadEventsSince(threadId: string, sinceSeq: number): Promise<RuntimeEvent[]>
   /**

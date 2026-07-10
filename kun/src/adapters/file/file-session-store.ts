@@ -2,7 +2,11 @@ import { appendFile, mkdir, readFile, stat } from 'node:fs/promises'
 import { createReadStream } from 'node:fs'
 import { performance } from 'node:perf_hooks'
 import { join, resolve } from 'node:path'
-import type { SessionStore } from '../../ports/session-store.js'
+import type {
+  ItemHistoryCommit,
+  ItemHistorySnapshot,
+  SessionStore
+} from '../../ports/session-store.js'
 import type { RuntimeEvent } from '../../contracts/events.js'
 import type { TurnItem } from '../../contracts/items.js'
 import { assertSafeThreadId, isSafeThreadId } from '../../contracts/thread-id.js'
@@ -23,6 +27,7 @@ const SLOW_LOAD_ITEMS_LOG_MS = 1_000
  */
 const ITEMS_CACHE_MAX_THREADS = 4
 const HIGHEST_SEQ_CACHE_MAX_THREADS = 256
+const ITEM_HISTORY_REVISION_MAX_THREADS = 512
 export const DEFAULT_EVENT_REPLAY_MAX_RECORD_BYTES = 1 * 1024 * 1024
 
 /**
@@ -39,6 +44,9 @@ export class FileSessionStore implements SessionStore {
   }
   private readonly itemsCache = new Map<string, TurnItem[]>()
   private readonly itemsCacheVersion = new Map<string, number>()
+  /** Opaque revisions used to fence stale read-compute-rewrite snapshots. */
+  private readonly itemHistoryRevisions = new Map<string, number>()
+  private nextItemHistoryRevision = 0
   private readonly highestSeqCache = new Map<string, { seq: number; size: number; mtimeMs: number }>()
   private readonly writeQueues = new Map<string, Promise<unknown>>()
 
@@ -88,6 +96,7 @@ export class FileSessionStore implements SessionStore {
       await appendFile(path, `${JSON.stringify(item)}\n`, { encoding: 'utf-8', mode: 0o600 })
       this.bumpItemsVersion(threadId)
       this.applyItemToCache(threadId, item)
+      this.bumpItemHistoryRevision(threadId)
     })
   }
 
@@ -99,6 +108,35 @@ export class FileSessionStore implements SessionStore {
       await this.atomicWrite(this.messagesPath(threadId), contents ? `${contents}\n` : '')
       this.bumpItemsVersion(threadId)
       this.cacheItems(threadId, [...items])
+      this.bumpItemHistoryRevision(threadId)
+    })
+  }
+
+  async loadItemSnapshot(threadId: string): Promise<ItemHistorySnapshot> {
+    if (!isSafeThreadId(threadId)) return { revision: 0, items: [] }
+    return this.withThreadWrite(threadId, async () => ({
+      revision: this.itemHistoryRevision(threadId),
+      items: await this.loadItems(threadId)
+    }))
+  }
+
+  async rewriteItemsIfRevision(
+    threadId: string,
+    expectedRevision: number,
+    items: TurnItem[]
+  ): Promise<ItemHistoryCommit> {
+    assertSafeThreadId(threadId)
+    return this.withThreadWrite(threadId, async () => {
+      const revision = this.itemHistoryRevision(threadId)
+      if (revision !== expectedRevision) {
+        return { applied: false, reason: 'conflict', revision }
+      }
+      await this.ensureDir(this.threadDir(threadId))
+      const contents = items.map((item) => JSON.stringify(item)).join('\n')
+      await this.atomicWrite(this.messagesPath(threadId), contents ? `${contents}\n` : '')
+      this.bumpItemsVersion(threadId)
+      this.cacheItems(threadId, [...items])
+      return { applied: true, revision: this.bumpItemHistoryRevision(threadId) }
     })
   }
 
@@ -113,6 +151,7 @@ export class FileSessionStore implements SessionStore {
       await appendFile(this.messagesPath(threadId), `${JSON.stringify(updated)}\n`, { encoding: 'utf-8', mode: 0o600 })
       this.bumpItemsVersion(threadId)
       this.applyItemToCache(threadId, updated)
+      this.bumpItemHistoryRevision(threadId)
       return updated
     })
   }
@@ -248,12 +287,14 @@ export class FileSessionStore implements SessionStore {
   async resetMemory(): Promise<void> {
     this.itemsCache.clear()
     this.itemsCacheVersion.clear()
+    this.itemHistoryRevisions.clear()
     this.highestSeqCache.clear()
   }
 
   clearThreadMemory(threadId: string): void {
     this.itemsCache.delete(threadId)
     this.itemsCacheVersion.delete(threadId)
+    this.itemHistoryRevisions.delete(threadId)
     this.highestSeqCache.delete(threadId)
   }
 
@@ -263,6 +304,26 @@ export class FileSessionStore implements SessionStore {
 
   private bumpItemsVersion(threadId: string): void {
     this.itemsCacheVersion.set(threadId, this.itemsVersionOf(threadId) + 1)
+  }
+
+  private itemHistoryRevision(threadId: string): number {
+    const revision = this.itemHistoryRevisions.get(threadId)
+    if (revision === undefined) return this.bumpItemHistoryRevision(threadId)
+    this.itemHistoryRevisions.delete(threadId)
+    this.itemHistoryRevisions.set(threadId, revision)
+    return revision
+  }
+
+  private bumpItemHistoryRevision(threadId: string): number {
+    this.nextItemHistoryRevision += 1
+    this.itemHistoryRevisions.delete(threadId)
+    this.itemHistoryRevisions.set(threadId, this.nextItemHistoryRevision)
+    while (this.itemHistoryRevisions.size > ITEM_HISTORY_REVISION_MAX_THREADS) {
+      const oldest = this.itemHistoryRevisions.keys().next().value
+      if (oldest === undefined) break
+      this.itemHistoryRevisions.delete(oldest)
+    }
+    return this.nextItemHistoryRevision
   }
 
   private cacheItems(threadId: string, items: TurnItem[]): void {

@@ -10,9 +10,10 @@ or cache behavior.
 The most urgent correctness gap is concurrent history mutation. A turn can append
 or repair history while compaction, discard, interruption, or deletion persists a
 different snapshot. In-process serialization reduces contention but does not make
-a stale read-modify-write safe across independently scheduled paths or a future
-second runtime process. Session data is persisted, so the migration must remain
-backward compatible.
+a stale read-modify-write safe across independently scheduled paths. Kun's
+single-runtime architecture provides one store instance per data directory, so an
+opaque in-memory revision can fence these operations without changing the
+persisted JSONL format.
 
 The renderer, Electron bridge, and `kun serve` already depend on current HTTP/SSE
 events, persisted thread/session formats, tool schemas, and cache prefix
@@ -59,23 +60,26 @@ class replacement was rejected because it would make regressions in event order
 and cancellation difficult to localize. Keeping helper functions only in the
 existing file was rejected because it would preserve hidden mutable coupling.
 
-### 2. Use per-thread serialization plus persisted revision compare-and-swap for history
+### 2. Use per-thread serialization plus in-runtime revision compare-and-swap for history
 
-Every persisted session snapshot SHALL carry an internal monotonically increasing
-revision. Reads used to derive a replacement return both the session and revision;
-replacement writes commit only when the expected revision still matches. The
-history coordinator retries from a fresh read when a compare-and-swap loses, and
-per-thread mutation serialization keeps the usual path cheap and ordered.
+Every item-history snapshot exposed by the active session store SHALL carry an
+opaque monotonically increasing revision. Reads used to derive a replacement
+return both the item history and revision; replacement writes commit only when
+the expected revision still matches. The history coordinator retries from a
+fresh read when a compare-and-swap loses, and per-thread mutation serialization
+keeps the usual path cheap and ordered.
 
-Legacy session files without revision metadata are read as revision zero and gain
-the metadata on their next successful replacement write. The revision is an
-internal persistence detail; existing session item content remains readable.
+The revision is deliberately not serialized into session JSONL. A restart has no
+in-flight snapshots from the previous runtime, and the existing single-runtime
+contract prevents two serve processes from sharing one data directory. Existing
+session item content therefore remains byte-format compatible without migration.
 
-A single process-local mutex alone was rejected because it cannot protect future
-multi-process access and still allows stale snapshots created outside its scope.
-Making every caller manually merge arrays was rejected because repair, discard,
-and compaction have different semantic ownership; the coordinator centralizes
-those merge/retry rules.
+A single process-local mutex alone was rejected because it cannot protect stale
+snapshots created outside its scope. Making every caller manually merge arrays
+was rejected because repair, discard, and compaction have different semantic
+ownership; the coordinator centralizes those retry rules. A multi-process file
+lock or database transaction is intentionally out of scope because it would
+contradict the current single-runtime ownership model.
 
 ### 3. Snapshot turn context before the first model round
 
@@ -117,9 +121,10 @@ usage loss, duplicate finalization, and stale history writes.
 
 ## Risks / Trade-offs
 
-- [Persisted revision migration corrupts or breaks old files] → Treat missing
-  revision as zero, validate decoded metadata, retain existing item format, and
-  test loading legacy fixtures before writing a revised file.
+- [Revision state is lost on process restart] → Revisions fence only in-flight
+  snapshots; a restart has none. Retain the single-runtime/data-directory
+  ownership constraint and do not treat the current hybrid index as a writer
+  transaction layer.
 - [CAS retries duplicate a side effect] → Only retry pure history transformations;
   model calls, tools, events, and user interactions are never replayed by a CAS
   retry.

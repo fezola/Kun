@@ -16,7 +16,7 @@ import { ContextCompactor } from '../loop/context-compactor.js'
 import { InflightTracker } from '../loop/inflight-tracker.js'
 import { SteeringQueue } from '../loop/steering-queue.js'
 import { SequentialIdGenerator } from '../ports/id-generator.js'
-import type { SessionStore } from '../ports/session-store.js'
+import type { ItemHistoryCommit, ItemHistorySnapshot, SessionStore } from '../ports/session-store.js'
 import { RuntimeEventRecorder } from './runtime-event-recorder.js'
 import { ThreadService } from './thread-service.js'
 import { TurnConflictError, TurnService } from './turn-service.js'
@@ -75,6 +75,18 @@ class GatedSessionStore implements SessionStore {
 
   rewriteItems(threadId: string, items: TurnItem[]): Promise<void> {
     return this.raw.rewriteItems(threadId, items)
+  }
+
+  loadItemSnapshot(threadId: string): Promise<ItemHistorySnapshot> {
+    return this.raw.loadItemSnapshot(threadId)
+  }
+
+  rewriteItemsIfRevision(
+    threadId: string,
+    expectedRevision: number,
+    items: TurnItem[]
+  ): Promise<ItemHistoryCommit> {
+    return this.raw.rewriteItemsIfRevision(threadId, expectedRevision, items)
   }
 
   updateItem(threadId: string, itemId: string, patch: Partial<TurnItem>): Promise<TurnItem | null> {
@@ -186,6 +198,23 @@ async function waitForClosing(fence: ThreadLifecycleFence, threadId: string): Pr
 }
 
 describe('ThreadLifecycleFence persistence guard', () => {
+  it('rejects a conditional history rewrite once deletion closes the thread', async () => {
+    const runtime = await makeRuntime('item')
+    await runtime.rawSessionStore.appendItem(runtime.threadId, item(runtime.threadId, 'item_before_delete'))
+    const snapshot = await runtime.sessionStore.loadItemSnapshot(runtime.threadId)
+
+    const deleting = runtime.threads.delete(runtime.threadId)
+    await waitForClosing(runtime.fence, runtime.threadId)
+
+    await expect(runtime.sessionStore.rewriteItemsIfRevision(
+      runtime.threadId,
+      snapshot.revision,
+      snapshot.items
+    )).resolves.toEqual({ applied: false, reason: 'closed' })
+    await expect(deleting).resolves.toBe(true)
+    expect(await threadDirectoryExists(runtime.root, runtime.threadId)).toBe(false)
+  })
+
   it('drains a deferred item append before raw delete and blocks post-delete recreation', async () => {
     const runtime = await makeRuntime('item')
     const append = runtime.sessionStore.appendItem(runtime.threadId, item(runtime.threadId))

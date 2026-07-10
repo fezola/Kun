@@ -1,7 +1,13 @@
 import type { RuntimeEvent } from '../contracts/events.js'
 import type { TurnItem } from '../contracts/items.js'
 import type { AgentSession } from '../domain/session.js'
-import type { SessionStore, SessionLatestUsageSnapshot, SessionUsageRecord } from '../ports/session-store.js'
+import type {
+  ItemHistoryCommit,
+  ItemHistorySnapshot,
+  SessionStore,
+  SessionLatestUsageSnapshot,
+  SessionUsageRecord
+} from '../ports/session-store.js'
 import type { ThreadStore, ThreadStoreListOptions } from '../ports/thread-store.js'
 import type { ThreadRecord, ThreadSummary } from '../contracts/threads.js'
 
@@ -202,6 +208,26 @@ export class LifecycleFencedSessionStore implements SessionStore {
 
   rewriteItems(threadId: string, items: TurnItem[]): Promise<void> {
     return this.write(threadId, undefined, () => this.raw.rewriteItems(threadId, items))
+  }
+
+  loadItemSnapshot(threadId: string): Promise<ItemHistorySnapshot> {
+    return this.raw.loadItemSnapshot(threadId)
+  }
+
+  async rewriteItemsIfRevision(
+    threadId: string,
+    expectedRevision: number,
+    items: TurnItem[]
+  ): Promise<ItemHistoryCommit> {
+    const lease = this.fence.acquire(threadId)
+    if (!lease) return { applied: false, reason: 'closed' }
+    try {
+      if (!lease.isCurrent()) return { applied: false, reason: 'closed' }
+      const result = await this.raw.rewriteItemsIfRevision(threadId, expectedRevision, items)
+      return lease.isCurrent() ? result : { applied: false, reason: 'closed' }
+    } finally {
+      lease.release()
+    }
   }
 
   updateItem(threadId: string, itemId: string, patch: Partial<TurnItem>): Promise<TurnItem | null> {
