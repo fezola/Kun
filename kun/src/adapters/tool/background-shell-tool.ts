@@ -94,7 +94,7 @@ export function createBackgroundShellTool(options: BackgroundShellToolOptions = 
         }
 
         if (action === 'read') {
-          const payload = await readBashSessionPayload(sessionId)
+          const payload = await readBashSessionPayload(sessionId, context.threadId)
           if (!payload) {
             return { output: { error: 'background shell session not found', session_id: sessionId }, isError: true }
           }
@@ -102,8 +102,8 @@ export function createBackgroundShellTool(options: BackgroundShellToolOptions = 
         }
 
         if (action === 'stop') {
-          const stopped = await stopBashSessionById(sessionId)
-          const payload = await readBashSessionPayload(sessionId)
+          const stopped = await stopBashSessionById(sessionId, context.threadId)
+          const payload = await readBashSessionPayload(sessionId, context.threadId)
           if (!payload) {
             return {
               output: { error: 'background shell session not found', session_id: sessionId, stopped },
@@ -120,7 +120,8 @@ export function createBackgroundShellTool(options: BackgroundShellToolOptions = 
           const payload = await writeBashSessionStdin(
             sessionId,
             typeof args.input === 'string' ? args.input : '',
-            normalizeYieldSeconds(args.yield_seconds)
+            normalizeYieldSeconds(args.yield_seconds),
+            context.threadId
           )
           if (!payload) {
             return { output: { error: 'background shell session not found', session_id: sessionId }, isError: true }
@@ -129,7 +130,7 @@ export function createBackgroundShellTool(options: BackgroundShellToolOptions = 
         }
 
         if (action === 'poll') {
-          const payload = await pollBashSession(sessionId, normalizeYieldSeconds(args.yield_seconds))
+          const payload = await pollBashSession(sessionId, normalizeYieldSeconds(args.yield_seconds), context.threadId)
           if (!payload) {
             return { output: { error: 'background shell session not found', session_id: sessionId }, isError: true }
           }

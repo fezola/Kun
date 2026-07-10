@@ -112,4 +112,67 @@ describe('BackgroundShellRuntime', () => {
     expect(runTurn).toHaveBeenCalledWith('thr_1', 'turn_new')
     expect(steerTurn).not.toHaveBeenCalled()
   })
+
+  it('does not create a completion turn for an archived thread', async () => {
+    const startTurn = vi.fn(async () => ({ threadId: 'thr_1', turnId: 'turn_new', userMessageItemId: 'item_1' }))
+    const runTurn = vi.fn(async () => undefined)
+    const runtime = new BackgroundShellRuntime({
+      events: { record: vi.fn(async () => undefined) } as unknown as RuntimeEventRecorder,
+      threadStore: {
+        get: vi.fn(async () => ({
+          id: 'thr_1',
+          status: 'archived',
+          turns: [{ id: 'turn_1', status: 'completed' }]
+        }))
+      } as unknown as ThreadStore,
+      turns: { startTurn } as unknown as TurnService,
+      nowIso: () => '2026-01-01T00:00:00.000Z'
+    })
+    runtime.bindAgentLoop({ runTurn })
+
+    await runtime.bashHooks().onSessionSettled?.({
+      id: 'abcd1234', threadId: 'thr_1', turnId: 'turn_1', command: 'npm test', cwd: '/tmp', shell: 'bash',
+      status: 'completed', startedAt: '2026-01-01T00:00:00.000Z', finishedAt: '2026-01-01T00:00:05.000Z',
+      exitCode: 0, output: 'ok', detached: true
+    })
+
+    expect(startTurn).not.toHaveBeenCalled()
+    expect(runTurn).not.toHaveBeenCalled()
+  })
+
+  it('stops active shells and suppresses completion auto-turns during shutdown', async () => {
+    const stopSession = vi.fn(async () => true)
+    const startTurn = vi.fn(async () => ({ threadId: 'thr_1', turnId: 'turn_new', userMessageItemId: 'item_1' }))
+    const runTurn = vi.fn(async () => undefined)
+    const runtime = new BackgroundShellRuntime({
+      events: { record: vi.fn(async () => undefined) } as unknown as RuntimeEventRecorder,
+      threadStore: {
+        get: vi.fn(async () => ({
+          id: 'thr_1',
+          status: 'idle',
+          turns: [{ id: 'turn_1', status: 'completed' }]
+        }))
+      } as unknown as ThreadStore,
+      turns: { startTurn } as unknown as TurnService,
+      nowIso: () => '2026-01-01T00:00:00.000Z'
+    })
+    runtime.bindStopHandler(stopSession)
+    runtime.bindAgentLoop({ runTurn })
+    runtime.upsertSession({
+      id: 'running1', threadId: 'thr_1', turnId: 'turn_1', command: 'sleep 10', cwd: '/tmp', shell: 'bash',
+      status: 'running', startedAt: '2026-01-01T00:00:00.000Z', exitCode: null, output: '', detached: true
+    })
+
+    await runtime.shutdown()
+    expect(stopSession).toHaveBeenCalledWith('running1')
+
+    await runtime.bashHooks().onSessionSettled?.({
+      id: 'running1', threadId: 'thr_1', turnId: 'turn_1', command: 'sleep 10', cwd: '/tmp', shell: 'bash',
+      status: 'completed', startedAt: '2026-01-01T00:00:00.000Z', finishedAt: '2026-01-01T00:00:05.000Z',
+      exitCode: 0, output: 'ok', detached: true
+    })
+
+    expect(startTurn).not.toHaveBeenCalled()
+    expect(runTurn).not.toHaveBeenCalled()
+  })
 })

@@ -1022,6 +1022,7 @@ export async function createKunServeRuntime(
       try {
         shuttingDown = true
         loop.shutdownGoalResume()
+        await backgroundShellRuntime.shutdown()
         await turnService.interruptActiveTurns()
         await waitForActiveRuns(activeRuntimeRuns)
         await mcpProviders.close()

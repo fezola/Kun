@@ -153,6 +153,12 @@ export type BashLocalToolOptions = {
   defaultTimeoutSeconds?: number
   maxLines?: number
   maxBytes?: number
+  /** Process-wide cap for concurrently running detached shell sessions. */
+  maxBackgroundSessions?: number
+  /** Per-thread cap for concurrently running detached shell sessions. */
+  maxBackgroundSessionsPerThread?: number
+  /** Maximum accepted timeout for a detached shell session. */
+  maxBackgroundTimeoutSeconds?: number
   operations?: BashLocalToolOperations
   backgroundShell?: BackgroundShellHooks
   backgroundShellDataDir?: string

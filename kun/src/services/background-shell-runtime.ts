@@ -23,6 +23,7 @@ export class BackgroundShellRuntime {
   private readonly sessions = new Map<string, BackgroundShellRecord>()
   private readonly detachedIds = new Set<string>()
   private runTurn: RunTurnFn | null = null
+  private shuttingDown = false
 
   constructor(private readonly deps: BackgroundShellRuntimeDeps) {}
 
@@ -58,6 +59,15 @@ export class BackgroundShellRuntime {
   async stopSession(sessionId: string): Promise<boolean> {
     if (!this.stopHandler) return false
     return this.stopHandler(sessionId)
+  }
+
+  /** Stop this runtime's active shells and prevent completion auto-turns. */
+  async shutdown(): Promise<void> {
+    this.shuttingDown = true
+    const runningIds = [...this.sessions.values()]
+      .filter((session) => session.status === 'running')
+      .map((session) => session.id)
+    await Promise.allSettled(runningIds.map((sessionId) => this.stopSession(sessionId)))
   }
 
   markDetached(sessionId: string): void {
@@ -145,7 +155,7 @@ export class BackgroundShellRuntime {
       ...this.sessionEventOutput(record),
       ...(record.error ? { error: record.error } : {})
     })
-    if (record.detached && record.status === 'completed' && record.exitCode === 0) {
+    if (!this.shuttingDown && record.detached && record.status === 'completed' && record.exitCode === 0) {
       await this.notifyAgent(record)
     }
     if (record.status !== 'running') {
@@ -154,8 +164,9 @@ export class BackgroundShellRuntime {
   }
 
   private async notifyAgent(record: BackgroundShellRecord): Promise<void> {
+    if (this.shuttingDown) return
     const thread = await this.deps.threadStore.get(record.threadId)
-    if (!thread) return
+    if (!thread || thread.status === 'archived') return
     const notice = formatBackgroundShellCompletionNotice(record)
     const displayText = backgroundShellNoticeDisplayText(record.id)
     const noticeMeta = {
