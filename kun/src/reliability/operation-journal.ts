@@ -43,14 +43,17 @@ export type ToolOperationRecord =
 
 export type ToolOperationJournalOptions = {
   nowIso?: () => string
+  resolvedCapacity?: number
 }
 
 export class ToolOperationJournal {
   private readonly records = new Map<string, ToolOperationRecord>()
   private readonly nowIso: () => string
+  private readonly resolvedCapacity: number
 
   constructor(options: ToolOperationJournalOptions = {}) {
     this.nowIso = options.nowIso ?? (() => new Date().toISOString())
+    this.resolvedCapacity = Math.max(1, Math.floor(options.resolvedCapacity ?? 1_024))
   }
 
   static argsHash(args: Record<string, unknown>): string {
@@ -97,6 +100,7 @@ export class ToolOperationJournal {
       completedAt: this.nowIso(),
       result
     })
+    this.trimResolved()
   }
 
   fail(identity: ToolOperationIdentity, error: unknown): void {
@@ -109,6 +113,7 @@ export class ToolOperationJournal {
       failedAt: this.nowIso(),
       error: error instanceof Error ? error.message : String(error)
     })
+    this.trimResolved()
   }
 
   unknown(identity: ToolOperationIdentity, reason: string): void {
@@ -121,10 +126,22 @@ export class ToolOperationJournal {
       updatedAt: this.nowIso(),
       reason
     })
+    this.trimResolved()
   }
 
   clear(): void {
     this.records.clear()
+  }
+
+  private trimResolved(): void {
+    let resolved = [...this.records.values()].filter((record) => record.status !== 'started').length
+    if (resolved <= this.resolvedCapacity) return
+    for (const [key, record] of this.records) {
+      if (record.status === 'started') continue
+      this.records.delete(key)
+      resolved -= 1
+      if (resolved <= this.resolvedCapacity) return
+    }
   }
 }
 

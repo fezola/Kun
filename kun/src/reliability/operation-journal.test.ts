@@ -67,4 +67,25 @@ describe('ToolOperationJournal', () => {
     expect(journal.getCompleted(identity)).toEqual({ output: { ok: true } })
     expect(journal.getCompleted(differentArgs)).toBeNull()
   })
+
+  it('bounds resolved records while retaining in-progress operations', () => {
+    const journal = new ToolOperationJournal({ resolvedCapacity: 2 })
+    const operation = (callId: string) => createToolOperationIdentity({
+      threadId: 'thread', turnId: 'turn', callId, toolName: 'write', args: { callId }
+    })
+    const first = operation('first')
+    const second = operation('second')
+    const third = operation('third')
+    const active = operation('active')
+
+    journal.complete(first, { output: 'first' })
+    journal.complete(second, { output: 'second' })
+    journal.begin(active)
+    journal.complete(third, { output: 'third' })
+
+    expect(journal.getCompleted(first)).toBeNull()
+    expect(journal.getCompleted(second)).toEqual({ output: 'second' })
+    expect(journal.getCompleted(third)).toEqual({ output: 'third' })
+    expect(journal.get(active)?.status).toBe('started')
+  })
 })
