@@ -22,25 +22,27 @@ export class MultiProviderModelClient implements ModelClient {
 
   constructor(input: { default: ModelClient; providers?: Map<string, ModelClient> }) {
     this.default_ = input.default
-    this.providers = input.providers ?? new Map()
+    this.providers = canonicalProviders(input.providers)
     this.model = input.default.model
   }
 
   replace(input: { default: ModelClient; providers?: Map<string, ModelClient> }): void {
     this.default_ = input.default
-    this.providers = input.providers ?? new Map()
+    this.providers = canonicalProviders(input.providers)
     this.model = input.default.model
   }
 
   /**
-   * Pick the client for this request's `providerId` (case-insensitive,
-   * trimmed); fall back to the default client when the id is missing or
-   * unknown.
+   * Pick the client for this request's `providerId`. Omitted ids use the
+   * default client; an explicit unknown id is an error so private request
+   * content can never silently fall back to different provider credentials.
    */
   resolve(providerId?: string): ModelClient {
-    const trimmed = providerId?.trim()
+    const trimmed = providerId?.trim().toLowerCase()
     if (!trimmed) return this.default_
-    return this.providers.get(trimmed) ?? this.default_
+    const client = this.providers.get(trimmed)
+    if (!client) throw new Error(`unknown model provider: ${providerId}`)
+    return client
   }
 
   stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
@@ -65,4 +67,12 @@ export class MultiProviderModelClient implements ModelClient {
   configFor(providerId?: string): unknown {
     return (this.resolve(providerId) as { config?: unknown }).config
   }
+}
+
+function canonicalProviders(providers?: Map<string, ModelClient>): Map<string, ModelClient> {
+  return new Map(
+    [...(providers ?? new Map())]
+      .map(([id, client]) => [id.trim().toLowerCase(), client] as const)
+      .filter(([id]) => Boolean(id))
+  )
 }
