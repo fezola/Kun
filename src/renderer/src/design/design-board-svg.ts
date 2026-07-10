@@ -176,8 +176,8 @@ export function syncSvgArtifactsToBoardDocument(
     const root = next.objects[next.rootId]
     if (!root) continue
     const fallbackSize = {
-      width: Math.max(240, artifact.node?.width ?? 640),
-      height: Math.max(180, artifact.node?.height ?? 480)
+      width: Math.max(64, artifact.node?.width ?? 640),
+      height: Math.max(64, artifact.node?.height ?? 480)
     }
     const rect = artifact.node
       ? { x: artifact.node.x, y: artifact.node.y, ...fallbackSize }

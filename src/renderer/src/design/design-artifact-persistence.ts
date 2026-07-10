@@ -55,7 +55,10 @@ export function serializeArtifactMeta(artifact: DesignArtifact): string {
 const isStr = (v: unknown): v is string => typeof v === 'string'
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
 
-function parseNode(value: unknown): DesignArtifactNode | undefined {
+function parseNode(
+  value: unknown,
+  minimumSize: { width: number; height: number } = { width: 240, height: 180 }
+): DesignArtifactNode | undefined {
   if (!value || typeof value !== 'object') return undefined
   const node = value as Record<string, unknown>
   if (!isNum(node.x) || !isNum(node.y) || !isNum(node.width) || !isNum(node.height)) {
@@ -68,8 +71,8 @@ function parseNode(value: unknown): DesignArtifactNode | undefined {
   return {
     x: node.x,
     y: node.y,
-    width: Math.max(240, node.width),
-    height: Math.max(180, node.height),
+    width: Math.max(minimumSize.width, node.width),
+    height: Math.max(minimumSize.height, node.height),
     ...(node.sizeMode === 'auto' || node.sizeMode === 'manual' || node.sizeMode === 'manual-width-auto-height'
       ? { sizeMode: node.sizeMode }
       : {}),
@@ -164,9 +167,12 @@ export function parseArtifactMeta(raw: string, dirId: string): DesignArtifact | 
           summary: isStr(v.summary) ? v.summary : ''
         }))
     : []
-  const parsedNode = parseNode(o.node)
   const kind: DesignArtifact['kind'] =
     o.kind === 'canvas' ? 'canvas' : o.kind === 'svg' ? 'svg' : 'html'
+  const parsedNode = parseNode(
+    o.node,
+    kind === 'svg' ? { width: 64, height: 64 } : undefined
+  )
   const previewStatus =
     o.previewStatus === 'pending' || o.previewStatus === 'ready' || o.previewStatus === 'error'
       ? o.previewStatus

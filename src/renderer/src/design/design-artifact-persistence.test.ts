@@ -159,13 +159,15 @@ describe('design artifact persistence', () => {
         { id: 'motion-v2', relativePath: '.kun-design/doc/motion/v2.svg', createdAt, summary: 'Refined loop' }
       ],
       designMdPath: '.kun-design/doc/motion/DESIGN.md',
-      previewStatus: 'ready'
+      previewStatus: 'ready',
+      node: { x: 40, y: 80, width: 64, height: 64, sizeMode: 'manual', viewMode: 'preview' }
     }
 
     expect(parseArtifactMeta(serializeArtifactMeta(motion), 'motion')).toMatchObject({
       kind: 'svg',
       relativePath: '.kun-design/doc/motion/v2.svg',
-      designMdPath: '.kun-design/doc/motion/DESIGN.md'
+      designMdPath: '.kun-design/doc/motion/DESIGN.md',
+      node: { width: 64, height: 64 }
     })
     expect(reconstructArtifact('doc/motion', [
       { name: 'v1.svg', path: '.kun-design/doc/motion/v1.svg', type: 'file', ext: '.svg' },

@@ -24,6 +24,7 @@ function manifestPatch(
     ],
     counts: {
       screenCount: 0,
+      svgArtifactCount: 0,
       directionCount: 0,
       objectCount: 0,
       tokenCount: 0,

@@ -217,6 +217,7 @@ function buildDesignModeSection(options: BuildDesignProjectContractMarkdownOptio
     '',
     `- Recommended surface: ${manifest.recommendedSurfaceId ? code(manifest.recommendedSurfaceId) : '`TBD`'}`,
     `- Screens: ${manifest.counts.screenCount}`,
+    `- SVG artifacts: ${manifest.counts.svgArtifactCount}`,
     `- Directions: ${manifest.counts.directionCount}`,
     `- Objects: ${manifest.counts.objectCount}`,
     '',

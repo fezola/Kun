@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { DesignArtifact, DesignDocument } from '../../design/design-types'
 import {
+  getDesignSidebarDocumentArtifactCount,
   getDesignSidebarDocumentLabel,
   getDesignSidebarDocumentScreenCount,
   getDesignSidebarVisibleArtifacts
@@ -50,6 +51,7 @@ describe('DesignSidebar helpers', () => {
     }
 
     expect(getDesignSidebarDocumentScreenCount(doc)).toBe(1)
+    expect(getDesignSidebarDocumentArtifactCount(doc)).toBe(2)
   })
 
   it('keeps visible SVG artifacts in the sidebar artifact list', () => {

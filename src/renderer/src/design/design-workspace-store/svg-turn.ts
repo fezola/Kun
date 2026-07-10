@@ -7,6 +7,7 @@ import {
 import {
   createDesignArtifactId,
   currentDesignArtifactVersion,
+  designArtifactVersionNumber,
   defaultDesignArtifactNode
 } from '../design-types'
 import type { DesignArtifact } from '../design-types'
@@ -52,11 +53,19 @@ function svgTitle(brief: string, explicit?: string): string {
 function svgNode(index: number, width?: number, height?: number) {
   return {
     ...defaultDesignArtifactNode(index),
-    width: Math.max(240, width ?? 640),
-    height: Math.max(180, height ?? 480),
+    width: Math.max(64, width ?? 640),
+    height: Math.max(64, height ?? 480),
     sizeMode: 'manual' as const,
     viewMode: 'preview' as const
   }
+}
+
+function nextSvgVersionNumber(artifact: Pick<DesignArtifact, 'relativePath' | 'versions'>): number {
+  const knownVersions = [
+    ...artifact.versions,
+    { id: '', relativePath: artifact.relativePath }
+  ]
+  return Math.max(0, ...knownVersions.map((version) => designArtifactVersionNumber(version) ?? 0)) + 1
 }
 
 export function prepareDesignSvgTurn({
@@ -109,7 +118,7 @@ export function prepareDesignSvgTurn({
   }
 
   if (activeSvg) {
-    const versionN = activeSvg.versions.length + 1
+    const versionN = nextSvgVersionNumber(activeSvg)
     const dir = activeSvg.relativePath.slice(0, activeSvg.relativePath.lastIndexOf('/'))
     const relativePath = `${dir}/v${versionN}.svg`
     const designMdPath = activeSvg.designMdPath ?? `${dir}/DESIGN.md`

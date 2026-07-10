@@ -100,6 +100,30 @@ describe('first-class SVG artifact lifecycle', () => {
     })
   })
 
+  it('preserves an explicitly requested 64px SVG size', async () => {
+    const board = artifact('board', 'canvas')
+    installDesignDocument([board], board.id)
+
+    const created = createLinkedSvgArtifact({
+      boardArtifactId: board.id,
+      name: 'Tiny loader',
+      brief: 'A compact 64px loading mark',
+      width: 64,
+      height: 64
+    })
+
+    expect(created).not.toBeNull()
+    const result = created!
+    const motion = useDesignWorkspaceStore.getState().artifacts.find((item) => item.id === result.artifactId)
+    const frame = useCanvasShapeStore.getState().document.objects[result.shape.id]
+    expect(motion?.node).toMatchObject({ width: 64, height: 64 })
+    expect(frame).toMatchObject({ width: 64, height: 64 })
+    await vi.waitFor(() => expect(writeWorkspaceFile).toHaveBeenCalledWith(expect.objectContaining({
+      path: result.relativePath,
+      content: expect.stringContaining('viewBox="0 0 64 64"')
+    })))
+  })
+
   it('escapes user text in the standalone SVG skeleton', () => {
     const source = buildSvgArtifactSkeleton({
       title: '<Logo & mark>',

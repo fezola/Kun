@@ -402,13 +402,15 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
           artifacts.map((item, index) => {
             if (item.id !== artifactId) return item
             const current = item.node ?? defaultDesignArtifactNode(index)
+            const minWidth = item.kind === 'svg' ? 64 : 240
+            const minHeight = item.kind === 'svg' ? 64 : 180
             return {
               ...item,
               node: {
                 ...current,
                 ...patch,
-                width: Math.max(240, patch.width ?? current.width),
-                height: Math.max(180, patch.height ?? current.height)
+                width: Math.max(minWidth, patch.width ?? current.width),
+                height: Math.max(minHeight, patch.height ?? current.height)
               }
             }
           })

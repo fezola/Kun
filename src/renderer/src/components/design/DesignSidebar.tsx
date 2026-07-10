@@ -22,7 +22,7 @@ import { useTranslation } from 'react-i18next'
 import type { SettingsRouteSection } from '../../store/chat-store'
 import { WorkspaceModeTabs } from '../chat/WorkspaceModeTabs'
 import { useDesignWorkspaceStore } from '../../design/design-workspace-store'
-import type { DesignArtifact, DesignDocument } from '../../design/design-types'
+import { isFileDesignArtifactKind, type DesignArtifact, type DesignDocument } from '../../design/design-types'
 import { collectAgentDrawingArtifactIds, groupDesignArtifacts } from '../../design/design-artifact-actions'
 import { findDesignBoardArtifact } from '../../design/design-board'
 import { useCanvasShapeStore } from '../../design/canvas/canvas-shape-store'
@@ -52,6 +52,11 @@ export function getDesignSidebarVisibleArtifacts(artifacts: readonly DesignArtif
 
 export function getDesignSidebarDocumentScreenCount(doc: Pick<DesignDocument, 'artifacts'>): number {
   return getDesignSidebarVisibleArtifacts(doc.artifacts).filter((artifact) => artifact.kind === 'html').length
+}
+
+/** Visible first-class HTML/SVG artifacts; excludes the implementation board. */
+export function getDesignSidebarDocumentArtifactCount(doc: Pick<DesignDocument, 'artifacts'>): number {
+  return getDesignSidebarVisibleArtifacts(doc.artifacts).filter((artifact) => isFileDesignArtifactKind(artifact.kind)).length
 }
 
 export function getDesignSidebarDocumentLabel(doc: Pick<DesignDocument, 'id'>): string {
@@ -439,7 +444,7 @@ export function DesignSidebar({
 
   const renderDocument = (doc: DesignDocument): ReactElement => {
     const isActive = doc.id === activeDocumentId
-    const screenCount = getDesignSidebarDocumentScreenCount(doc)
+    const artifactCount = getDesignSidebarDocumentArtifactCount(doc)
     const documentLabel = getDesignSidebarDocumentLabel(doc)
     return (
       <li key={doc.id}>
@@ -466,8 +471,8 @@ export function DesignSidebar({
             className="min-h-[34px]"
             buttonClassName="items-center gap-2 px-2.5 py-2"
             trailing={
-              screenCount > 0 ? (
-                <span className="text-[11.5px] text-ds-faint">{screenCount}</span>
+              artifactCount > 0 ? (
+                <span className="text-[11.5px] text-ds-faint">{artifactCount}</span>
               ) : null
             }
             actions={

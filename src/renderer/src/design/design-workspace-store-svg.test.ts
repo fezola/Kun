@@ -83,4 +83,41 @@ describe('SVG design workspace versions', () => {
       basePath: '.kun-design/doc/motion/v1.svg'
     })
   })
+
+  it('uses the highest known SVG version instead of the version array length', () => {
+    const sparse: DesignArtifact = {
+      ...pendingSvgArtifact(),
+      relativePath: '.kun-design/doc/motion/v3.svg',
+      previewStatus: 'ready',
+      versions: [
+        { id: 'motion-v3', relativePath: '.kun-design/doc/motion/v3.svg', createdAt, summary: 'Latest hand-authored version' },
+        { id: 'motion-v1', relativePath: '.kun-design/doc/motion/v1.svg', createdAt, summary: 'Initial version' }
+      ]
+    }
+    const document: DesignDocument = {
+      id: 'doc',
+      title: 'Doc',
+      createdAt,
+      updatedAt: createdAt,
+      order: 0,
+      artifacts: [canvasArtifact(), sparse],
+      activeArtifactId: sparse.id
+    }
+    useDesignWorkspaceStore.setState({
+      documents: [document],
+      activeDocumentId: document.id,
+      artifacts: document.artifacts,
+      activeArtifactId: sparse.id
+    })
+
+    const iteration = useDesignWorkspaceStore.getState().prepareSvgTurn('Refine the hand-authored motion', {
+      artifactId: sparse.id,
+      activate: false
+    })
+
+    expect(iteration).toMatchObject({
+      relativePath: '.kun-design/doc/motion/v4.svg',
+      basePath: '.kun-design/doc/motion/v3.svg'
+    })
+  })
 })
