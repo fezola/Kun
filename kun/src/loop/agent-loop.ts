@@ -1488,6 +1488,7 @@ export class AgentLoop {
         case 'usage': {
           this.recordPromptPressure(threadId, request.model, chunk.usage.promptTokens)
           const usage = this.opts.usage.record(threadId, chunk.usage, cacheSignature)
+          await this.recordGoalUsage(threadId, chunk.usage.totalTokens)
           await this.opts.events.record({
             kind: 'usage',
             threadId,
@@ -2603,6 +2604,17 @@ export class AgentLoop {
     turnId: string
   ): Promise<'allow' | 'blocked'> {
     if (!thread) return 'allow'
+    if (thread.goal?.status === 'usageLimited') {
+      await this.opts.events.record({
+        kind: 'error',
+        threadId,
+        turnId,
+        message: `Goal token budget exhausted: ${thread.goal.tokensUsed} used of ${thread.goal.tokenBudget ?? 0}.`,
+        code: 'goal_token_budget_limited',
+        severity: 'warning'
+      })
+      return 'blocked'
+    }
     const budget = thread.costBudgetUsd
     if (typeof budget !== 'number' || !Number.isFinite(budget) || budget <= 0) return 'allow'
     const spent = this.opts.usage.forThread(threadId).costUsd ?? 0
@@ -2649,6 +2661,24 @@ export class AgentLoop {
       })
     }
     return 'allow'
+  }
+
+  private async recordGoalUsage(threadId: string, tokenDelta: number): Promise<void> {
+    const delta = Math.max(0, Math.floor(tokenDelta))
+    if (delta === 0) return
+    const thread = await this.opts.threadStore.get(threadId)
+    if (!thread?.goal || thread.goal.status !== 'active') return
+    const tokensUsed = thread.goal.tokensUsed + delta
+    const goal = {
+      ...thread.goal,
+      tokensUsed,
+      status: thread.goal.tokenBudget !== undefined && thread.goal.tokenBudget !== null && tokensUsed >= thread.goal.tokenBudget
+        ? 'usageLimited' as const
+        : 'active' as const,
+      updatedAt: this.opts.nowIso()
+    }
+    await this.opts.threadStore.upsert(touchThread({ ...thread, goal }, goal.updatedAt))
+    await this.opts.events.record({ kind: 'goal_updated', threadId, goal })
   }
 
   private consumePromptPressure(

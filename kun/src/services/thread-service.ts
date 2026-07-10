@@ -250,6 +250,26 @@ export class ThreadService {
     return goal
   }
 
+  /** Add provider-reported token usage to an active goal and enforce its cap. */
+  async recordGoalUsage(threadId: string, tokenDelta: number): Promise<ThreadGoal | null> {
+    const delta = Math.max(0, Math.floor(tokenDelta))
+    if (delta === 0) return this.getGoal(threadId)
+    const current = await this.threadStore.get(threadId)
+    if (!current?.goal || current.goal.status !== 'active') return current?.goal ?? null
+    const nextTokens = current.goal.tokensUsed + delta
+    const goal: ThreadGoal = {
+      ...current.goal,
+      tokensUsed: nextTokens,
+      status: current.goal.tokenBudget !== undefined && current.goal.tokenBudget !== null && nextTokens >= current.goal.tokenBudget
+        ? 'usageLimited'
+        : current.goal.status,
+      updatedAt: this.nowIso()
+    }
+    await this.threadStore.upsert(touchThread({ ...current, goal }, goal.updatedAt))
+    await this.events.record({ kind: 'goal_updated', threadId, goal })
+    return goal
+  }
+
   async clearGoal(threadId: string): Promise<boolean> {
     const current = await this.threadStore.get(threadId)
     if (!current) throw new Error(`thread not found: ${threadId}`)

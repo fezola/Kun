@@ -394,6 +394,21 @@ describe('ThreadService goals', () => {
     expect(events.map((event) => event.kind)).toContain('goal_cleared')
   })
 
+  it('accumulates goal token usage and marks a reached budget as usage limited', async () => {
+    const { service } = buildService()
+    await service.create({ workspace: '/tmp/p', model: 'm', mode: 'agent' }, { id: 'thr_goal_usage' })
+    await service.setGoal('thr_goal_usage', { objective: 'bounded work', tokenBudget: 100 })
+
+    await expect(service.recordGoalUsage('thr_goal_usage', 60)).resolves.toMatchObject({
+      tokensUsed: 60,
+      status: 'active'
+    })
+    await expect(service.recordGoalUsage('thr_goal_usage', 40)).resolves.toMatchObject({
+      tokensUsed: 100,
+      status: 'usageLimited'
+    })
+  })
+
   it('rejects status-only updates when no goal exists', async () => {
     const { service } = buildService()
     await service.create(
