@@ -41,7 +41,7 @@
 - [x] 4.2 Extract channel-independent conversation registry and Kun thread binding.
 - [x] 4.3 Extract IM attachment authorization/upload and reply pipeline.
 - [x] 4.4 Extract Feishu transport adapter.
-- [ ] 4.5 Extract Telegram transport adapter.
+- [x] 4.5 Extract Telegram transport adapter.
 - [ ] 4.6 Extract Weixin transport adapter and legacy session compatibility.
 - [ ] 4.7 Reduce `ClawRuntime` to channel coordination and remove platform branches
   from common conversation logic.
