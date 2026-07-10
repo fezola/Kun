@@ -79,6 +79,18 @@ describe('runtimeSettingsApplyMode', () => {
         }
       }
     }
+    const withImageResolution = {
+      ...prev,
+      agents: {
+        kun: {
+          ...prev.agents.kun,
+          imageGeneration: {
+            ...prev.agents.kun.imageGeneration,
+            defaultResolution: '2K' as const
+          }
+        }
+      }
+    }
     const withMcp = {
       ...prev,
       schedule: {
@@ -95,6 +107,7 @@ describe('runtimeSettingsApplyMode', () => {
     expect(runtimeSettingsApplyMode(prev, withProviderKey)).toBe('hot')
     expect(runtimeSettingsApplyMode(prev, withApproval)).toBe('hot')
     expect(runtimeSettingsApplyMode(prev, withMedia)).toBe('hot')
+    expect(runtimeSettingsApplyMode(prev, withImageResolution)).toBe('hot')
     expect(runtimeSettingsApplyMode(prev, withMcp)).toBe('hot')
     expect(runtimeSettingsApplyMode(prev, withMemory)).toBe('hot')
   })

@@ -1891,14 +1891,19 @@ export class WorkflowRuntime {
         ).trim()
         const outputDir = resolveImageOutputDir(workspace, interpolate(node.config.outputDir, payload, scope))
         // Lazy import keeps the kun image module out of the unit-test graph.
-        const { createImageGenClient } = await import('../../kun/src/adapters/tool/image-gen-tool-provider.js')
+        const { createImageGenClient, mapImageSize } = await import('../../kun/src/adapters/tool/image-gen-tool-provider.js')
         const imageAuth = resolveCodexOAuthApiKey(imageGen.apiKey)
         const client = createImageGenClient({
           ...imageGen,
           apiKey: imageAuth.apiKey,
           ...(imageAuth.headers ? { headers: imageAuth.headers } : {})
         })
-        const size = node.config.size.trim() || imageGen.defaultSize.trim()
+        const size = node.config.size.trim() || imageGen.defaultSize.trim() || mapImageSize(
+          undefined,
+          undefined,
+          undefined,
+          imageGen.defaultResolution
+        )
         const image = await client.generate({
           prompt: interpolate(node.config.prompt, payload, scope),
           model: imageGen.model.trim(),

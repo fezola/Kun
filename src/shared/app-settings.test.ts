@@ -253,6 +253,7 @@ describe('kun defaults', () => {
       baseUrl: '',
       apiKey: '',
       model: '',
+      defaultResolution: '1K',
       defaultSize: '',
       quality: 'auto',
       timeoutMs: 180000
@@ -773,22 +774,35 @@ describe('mergeKunRuntimeSettings', () => {
       baseUrl: 'https://api.siliconflow.cn/v1',
       apiKey: 'sk-image',
       model: 'Kwai-Kolors/Kolors',
+      defaultResolution: '1K',
       defaultSize: '',
       quality: 'auto',
       timeoutMs: 180000
     })
 
     const sized = mergeKunRuntimeSettings(next, {
-      imageGeneration: { defaultSize: '1536x1024', quality: 'high', timeoutMs: 240000 }
+      imageGeneration: {
+        defaultResolution: '2K',
+        defaultSize: '1536x1024',
+        quality: 'high',
+        timeoutMs: 240000
+      }
     })
+    expect(sized.imageGeneration.defaultResolution).toBe('2K')
     expect(sized.imageGeneration.defaultSize).toBe('1536x1024')
     expect(sized.imageGeneration.quality).toBe('high')
     expect(sized.imageGeneration.timeoutMs).toBe(240000)
     expect(sized.imageGeneration.apiKey).toBe('sk-image')
 
     const invalidSize = mergeKunRuntimeSettings(sized, {
-      imageGeneration: { defaultSize: 'huge', quality: 'maximum' as never, timeoutMs: -5 }
+      imageGeneration: {
+        defaultResolution: '4K' as never,
+        defaultSize: 'huge',
+        quality: 'maximum' as never,
+        timeoutMs: -5
+      }
     })
+    expect(invalidSize.imageGeneration.defaultResolution).toBe('1K')
     expect(invalidSize.imageGeneration.defaultSize).toBe('')
     expect(invalidSize.imageGeneration.quality).toBe('auto')
     expect(invalidSize.imageGeneration.timeoutMs).toBe(180000)
@@ -1060,6 +1074,7 @@ describe('legacy Kun defaults migration', () => {
       baseUrl: '',
       apiKey: '',
       model: '',
+      defaultResolution: '1K',
       defaultSize: '',
       quality: 'auto',
       timeoutMs: 180000
@@ -1302,6 +1317,7 @@ describe('claw runtime prompts', () => {
       baseUrl: 'https://images.example.test/v1',
       apiKey: 'sk-image',
       model: 'test-image-model',
+      defaultResolution: '1K',
       defaultSize: '1024x1024',
       quality: 'auto',
       timeoutMs: 180000

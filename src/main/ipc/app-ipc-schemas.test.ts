@@ -416,6 +416,7 @@ describe('app-ipc-schemas', () => {
           },
           imageGeneration: {
             model: longModelId,
+            defaultResolution: '2K',
             quality: 'high'
           }
         }
@@ -430,9 +431,13 @@ describe('app-ipc-schemas', () => {
 
     expect(payload.provider?.providers?.[0]?.models).toEqual([longModelId])
     expect(payload.agents?.kun?.model).toBe(longModelId)
+    expect(payload.agents?.kun?.imageGeneration?.defaultResolution).toBe('2K')
     expect(payload.agents?.kun?.imageGeneration?.quality).toBe('high')
     expect(payload.schedule?.model).toBe(longModelId)
     expect(payload.workflow?.model).toBe(longModelId)
+    expect(() => settingsPatchSchema.parse({
+      agents: { kun: { imageGeneration: { defaultResolution: '4K' } } }
+    })).toThrow()
   })
 
   it('accepts schedule settings patches and task payloads', () => {

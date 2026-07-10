@@ -2,6 +2,7 @@ import { z } from 'zod'
 import {
   IMAGE_GENERATION_QUALITIES,
   IMAGE_GENERATION_PROTOCOLS,
+  IMAGE_GENERATION_RESOLUTIONS,
   MUSIC_GENERATION_PROTOCOLS,
   MODEL_ENDPOINT_FORMATS,
   MODEL_PROVIDER_INPUT_MODALITIES,
@@ -64,6 +65,7 @@ const writeInlineCompletionModelSchema = z.union([
 ])
 const modelEndpointFormatSchema = z.enum(MODEL_ENDPOINT_FORMATS)
 const imageGenerationProtocolSchema = z.enum(IMAGE_GENERATION_PROTOCOLS)
+const imageGenerationResolutionSchema = z.enum(IMAGE_GENERATION_RESOLUTIONS)
 const imageGenerationQualitySchema = z.enum(IMAGE_GENERATION_QUALITIES)
 const speechToTextProtocolSchema = z.enum(SPEECH_TO_TEXT_PROTOCOLS)
 export const localWhisperModelIdSchema = z.enum(LOCAL_WHISPER_MODELS.map((model) => model.id) as [string, ...string[]])
@@ -288,6 +290,7 @@ const kunRuntimePatchSchema = z.object({
     baseUrl: z.string().trim().max(MAX_URL_LENGTH).optional(),
     apiKey: z.string().max(MAX_BODY_BYTES).optional(),
     model: optionalModelIdSchema,
+    defaultResolution: imageGenerationResolutionSchema.optional(),
     defaultSize: z.string().trim().max(16).optional(),
     quality: imageGenerationQualitySchema.optional(),
     timeoutMs: z.number().int().positive().max(600_000).optional()

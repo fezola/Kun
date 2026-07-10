@@ -85,6 +85,9 @@ export const CUSTOM_IMAGE_GENERATION_PROVIDER_ID = 'custom'
 export const IMAGE_GENERATION_PROTOCOLS = ['openai-images', 'minimax-image', 'codex-responses-image'] as const
 export type ImageGenerationProtocol = (typeof IMAGE_GENERATION_PROTOCOLS)[number]
 export const DEFAULT_IMAGE_GENERATION_PROTOCOL: ImageGenerationProtocol = 'openai-images'
+export const IMAGE_GENERATION_RESOLUTIONS = ['auto', '1K', '2K'] as const
+export type ImageGenerationResolution = (typeof IMAGE_GENERATION_RESOLUTIONS)[number]
+export const DEFAULT_IMAGE_GENERATION_RESOLUTION: ImageGenerationResolution = '1K'
 export const IMAGE_GENERATION_QUALITIES = ['auto', 'low', 'medium', 'high'] as const
 export type ImageGenerationQuality = (typeof IMAGE_GENERATION_QUALITIES)[number]
 export const CUSTOM_SPEECH_TO_TEXT_PROVIDER_ID = 'custom'
@@ -487,7 +490,9 @@ export type KunImageGenerationSettingsV1 = {
   /** Custom image API key override. Empty inherits the selected provider API key when providerId is set. */
   apiKey: string
   model: string
-  /** Default "WxH" or "auto" used when the model omits aspect ratio and size. Empty means provider default. */
+  /** Default resolution tier used when the model does not explicitly request one. */
+  defaultResolution: ImageGenerationResolution
+  /** Optional custom "WxH" override used when the model omits a resolution. Empty uses defaultResolution. */
   defaultSize: string
   /** Provider quality/precision hint. "auto" lets the provider decide. */
   quality: ImageGenerationQuality

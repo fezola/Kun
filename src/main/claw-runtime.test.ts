@@ -3898,6 +3898,7 @@ describe('ClawRuntime', () => {
         baseUrl: 'https://images.example.test/v1',
         apiKey: 'sk-image',
         model: 'test-image-model',
+        defaultResolution: '1K',
         defaultSize: '1024x1024',
         quality: 'auto',
         timeoutMs: 180000
@@ -4258,6 +4259,7 @@ describe('ClawRuntime', () => {
         baseUrl: 'https://images.example.test/v1',
         apiKey: 'sk-image',
         model: 'test-image-model',
+        defaultResolution: '1K',
         defaultSize: '1024x1024',
         quality: 'auto',
         timeoutMs: 180000
@@ -4642,6 +4644,7 @@ describe('ClawRuntime', () => {
         baseUrl: 'https://images.example.test/v1',
         apiKey: 'sk-image',
         model: 'test-image-model',
+        defaultResolution: '1K',
         defaultSize: '1024x1024',
         quality: 'auto',
         timeoutMs: 180000

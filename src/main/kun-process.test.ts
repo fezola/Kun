@@ -580,6 +580,7 @@ describe('syncGuiManagedKunConfig', () => {
     expect(parsed.capabilities.imageGen).toEqual({
       enabled: false,
       protocol: 'openai-images',
+      defaultResolution: '1K',
       quality: 'auto',
       timeoutMs: 180000
     })
@@ -724,6 +725,7 @@ describe('syncGuiManagedKunConfig', () => {
         baseUrl: 'https://api.siliconflow.cn/v1',
         apiKey: 'sk-image-test',
         model: 'Kwai-Kolors/Kolors',
+        defaultResolution: '2K' as const,
         defaultSize: '',
         quality: 'high' as const,
         timeoutMs: 240000
@@ -739,6 +741,7 @@ describe('syncGuiManagedKunConfig', () => {
       baseUrl: 'https://api.siliconflow.cn/v1',
       apiKey: 'sk-image-test',
       model: 'Kwai-Kolors/Kolors',
+      defaultResolution: '2K',
       quality: 'high',
       timeoutMs: 240000
     })
@@ -776,6 +779,7 @@ describe('syncGuiManagedKunConfig', () => {
         baseUrl: 'https://chatgpt.com/backend-api/codex',
         apiKey: codexCredentials,
         model: 'gpt-image-2',
+        defaultResolution: '1K',
         defaultSize: '',
         quality: 'medium',
         timeoutMs: 180000
@@ -789,6 +793,7 @@ describe('syncGuiManagedKunConfig', () => {
       baseUrl: 'https://chatgpt.com/backend-api/codex',
       apiKey: 'codex-access-token',
       model: 'gpt-image-2',
+      defaultResolution: '1K',
       quality: 'medium',
       timeoutMs: 180000,
       headers: {
@@ -870,6 +875,7 @@ describe('syncGuiManagedKunConfig', () => {
         baseUrl: 'https://api.siliconflow.cn/v1',
         apiKey: 'sk-image-test',
         model: 'Kwai-Kolors/Kolors',
+        defaultResolution: '1K' as const,
         defaultSize: '1024x1024',
         quality: 'auto' as const,
         timeoutMs: 180000

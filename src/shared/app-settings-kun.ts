@@ -2,7 +2,9 @@ import {
   DEFAULT_APPROVAL_POLICY,
   DEFAULT_DEEPSEEK_BASE_URL,
   DEFAULT_IMAGE_GENERATION_PROTOCOL,
+  DEFAULT_IMAGE_GENERATION_RESOLUTION,
   IMAGE_GENERATION_QUALITIES,
+  IMAGE_GENERATION_RESOLUTIONS,
   DEFAULT_KUN_DATA_DIR,
   DEFAULT_KUN_MODEL,
   DEFAULT_KUN_PORT,
@@ -31,6 +33,7 @@ import {
   type KunImageGenerationSettingsV1,
   type KunInstructionSettingsV1,
   type ImageGenerationQuality,
+  type ImageGenerationResolution,
   type KunMcpSearchSettingsV1,
   type KunMusicGenerationSettingsV1,
   type KunPromptOptimizationSettingsV1,
@@ -214,6 +217,7 @@ export function defaultKunImageGenerationSettings(): KunImageGenerationSettingsV
     baseUrl: '',
     apiKey: '',
     model: '',
+    defaultResolution: DEFAULT_IMAGE_GENERATION_RESOLUTION,
     defaultSize: '',
     quality: 'auto',
     timeoutMs: 180_000
@@ -610,10 +614,17 @@ function normalizeKunImageGenerationSettings(
     baseUrl: typeof input?.baseUrl === 'string' ? input.baseUrl.trim() : defaults.baseUrl,
     apiKey: typeof input?.apiKey === 'string' ? input.apiKey.trim() : defaults.apiKey,
     model: typeof input?.model === 'string' ? input.model.trim() : defaults.model,
+    defaultResolution: normalizeKunImageGenerationResolution(input?.defaultResolution),
     defaultSize: /^(auto|\d+x\d+)$/.test(defaultSize) ? defaultSize : '',
     quality: normalizeKunImageGenerationQuality(input?.quality),
     timeoutMs: boundedPositiveInt(input?.timeoutMs, defaults.timeoutMs, 600_000)
   }
+}
+
+function normalizeKunImageGenerationResolution(value: unknown): ImageGenerationResolution {
+  return IMAGE_GENERATION_RESOLUTIONS.includes(value as ImageGenerationResolution)
+    ? value as ImageGenerationResolution
+    : DEFAULT_IMAGE_GENERATION_RESOLUTION
 }
 
 function normalizeKunImageGenerationQuality(value: unknown): ImageGenerationQuality {

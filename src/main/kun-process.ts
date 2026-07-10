@@ -1080,6 +1080,7 @@ function imageGenConfigForRuntime(
     baseUrl: imageGeneration.baseUrl,
     apiKey: resolvedApiKey.apiKey,
     model: imageGeneration.model,
+    defaultResolution: imageGeneration.defaultResolution,
     defaultSize: imageGeneration.defaultSize,
     quality: imageGeneration.quality
   }
