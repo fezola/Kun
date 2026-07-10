@@ -186,6 +186,7 @@ describe('AgentLoop', () => {
     const h = makeHarness({
       provider: 'throwing',
       model: 'throwing',
+      config: { baseUrl: 'https://user:secret@example.invalid/v1', model: 'throwing' },
       async *stream(): AsyncIterable<ModelStreamChunk> {
         const chunks: ModelStreamChunk[] = []
         for (const chunk of chunks) yield chunk
@@ -204,6 +205,8 @@ describe('AgentLoop', () => {
       message: expect.stringContaining('model stream exploded')
     })
     expect(failed?.kind === 'turn_failed' ? failed.message : '').toContain('[Kun turn failed]')
+    expect(failed?.kind === 'turn_failed' ? failed.message : '').not.toContain('user:secret')
+    expect(failed?.kind === 'turn_failed' ? failed.message : '').not.toContain('secret')
   })
 
   it('fails the turn when the model stream yields an error chunk', async () => {

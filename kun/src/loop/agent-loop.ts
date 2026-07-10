@@ -536,7 +536,7 @@ export class AgentLoop {
         ? (this.opts.model as { config: { model?: string; baseUrl?: string } }).config
         : undefined
       const modelName = modelInfo?.model ?? 'unknown'
-      const provider = modelInfo?.baseUrl ?? 'unknown'
+      const provider = modelInfo?.baseUrl ? sanitizeProviderBaseUrl(modelInfo.baseUrl) : 'unknown'
       const stack = error instanceof Error
         ? (error.stack?.split('\n').slice(0, 3).join(' | ') ?? '')
         : ''
