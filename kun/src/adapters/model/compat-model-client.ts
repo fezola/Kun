@@ -44,6 +44,7 @@ import { projectCompatMessages } from './compat-message-projector.js'
 import { decodeChatCompletionsStreamPayload } from './chat-completions-stream-decoder.js'
 import { decodeResponsesStreamPayload } from './responses-stream-decoder.js'
 import { decodeAnthropicMessagesStreamPayload } from './anthropic-messages-stream-decoder.js'
+import { decodeCompatNonStreamingResponse } from './compat-non-streaming-decoder.js'
 
 export { redactUrlForLog } from './compat-http-diagnostics.js'
 
@@ -87,6 +88,7 @@ export type CompatModelClientConfig = {
 
 type ChatMessage = CompatChatMessage
 type ChatMessageContentPart = CompatChatMessageContentPart
+type ModelStopReason = Extract<ModelStreamChunk, { kind: 'completed' }>['stopReason']
 
 type AnthropicCacheControl = { type: 'ephemeral' }
 
@@ -135,26 +137,6 @@ type ChatCompletionResponse = {
   }
 }
 
-type ResponsesApiResponse = {
-  id?: string
-  status?: string
-  output_text?: string
-  output?: Array<Record<string, unknown>>
-  usage?: Record<string, unknown>
-  error?: { message?: string; type?: string } | null
-  incomplete_details?: { reason?: string } | null
-}
-
-type AnthropicMessageResponse = {
-  id?: string
-  type?: string
-  role?: string
-  content?: Array<Record<string, unknown>>
-  stop_reason?: string | null
-  usage?: Record<string, unknown>
-}
-
-type ModelStopReason = Extract<ModelStreamChunk, { kind: 'completed' }>['stopReason']
 type StreamReadResult =
   | { kind: 'chunk'; value?: Uint8Array; done: boolean }
   | { kind: 'timeout' }
@@ -883,8 +865,7 @@ export class CompatModelClient implements ModelClient {
       sawTextDelta,
       budget,
       parseToolArguments: (raw) => this.parseToolArguments(raw),
-      materializeCompleted: (response, options) =>
-        this.materializeResponsesOutput(response as ResponsesApiResponse, options, model)
+      normalizeUsage: (usage) => this.mapUsage(usage, model)
     })
   }
   private consumeAnthropicMessagesStreamPayload(
@@ -914,169 +895,18 @@ export class CompatModelClient implements ModelClient {
     model: string,
     limits: ModelStreamLimits
   ): Generator<ModelStreamChunk> {
-    const payloadError = modelPayloadError(payload as unknown as Record<string, unknown>)
-    if (payloadError) {
-      yield {
-        kind: 'error',
-        message: payloadError.message,
-        ...(payloadError.code ? { code: payloadError.code } : {})
-      }
-      return
-    }
-    if (endpointFormat === 'responses') {
-      yield* enforceNonStreamingLimits(
-        this.materializeResponsesNonStreaming(payload as unknown as ResponsesApiResponse, model),
-        limits
-      )
-      return
-    }
-    if (endpointFormat === 'messages') {
-      yield* enforceNonStreamingLimits(
-        this.materializeAnthropicMessagesNonStreaming(payload as unknown as AnthropicMessageResponse, model),
-        limits
-      )
-      return
-    }
-    const choice = payload.choices?.[0]
-    if (!choice) {
-      yield { kind: 'error', message: 'model response contained no choices' }
-      return
-    }
-    const text = typeof choice.message?.content === 'string' ? choice.message.content : ''
-    const reasoning = reasoningFromMessage(choice.message)
-    const chunks: ModelStreamChunk[] = []
-    if (reasoning) {
-      chunks.push({ kind: 'assistant_reasoning_delta', text: reasoning })
-    }
-    if (text) {
-      chunks.push({ kind: 'assistant_text_delta', text })
-    }
-    if (Array.isArray(choice.message?.tool_calls)) {
-      for (const call of choice.message.tool_calls) {
-        const args = this.parseToolArguments(call.function?.arguments ?? '{}')
-        chunks.push({
-          kind: 'tool_call_complete',
-          callId: call.id,
-          toolName: call.function.name,
-          arguments: args
-        })
-      }
-    }
-    if (payload.usage) {
-      chunks.push({ kind: 'usage', usage: this.mapUsage(payload.usage, model) })
-    }
-    let stopReason: 'stop' | 'tool_calls' | 'length' | 'error' = 'stop'
-    if (choice.finish_reason === 'tool_calls') stopReason = 'tool_calls'
-    else if (choice.finish_reason === 'length') stopReason = 'length'
-    else if (choice.finish_reason === 'error') stopReason = 'error'
-    chunks.push({ kind: 'completed', stopReason })
-    yield* enforceNonStreamingLimits(chunks, limits)
-  }
-
-  private *materializeResponsesNonStreaming(
-    payload: ResponsesApiResponse,
-    model: string
-  ): Generator<ModelStreamChunk> {
-    if (payload.error?.message) {
-      yield { kind: 'error', message: payload.error.message, code: payload.error.type }
-      return
-    }
-    const materialized = this.materializeResponsesOutput(payload, {}, model)
-    yield* materialized.chunks
-    if (materialized.usage) {
-      yield { kind: 'usage', usage: materialized.usage }
-    }
-    yield { kind: 'completed', stopReason: materialized.finishReason }
-  }
-
-  private materializeResponsesOutput(
-    payload: ResponsesApiResponse,
-    options: {
-      skipText?: boolean
-      pendingArguments?: Map<string, PendingToolCall>
-      completedToolCalls?: Set<string>
-      budget?: ModelStreamResourceBudget
-    } = {},
-    model = this.config.model
-  ): {
-    chunks: ModelStreamChunk[]
-    finishReason: ModelStopReason
-    usage: UsageSnapshot | null
-  } {
-    const chunks: ModelStreamChunk[] = []
-    let sawToolCall = (options.completedToolCalls?.size ?? 0) > 0
-    if (!options.skipText) {
-      const outputText = typeof payload.output_text === 'string'
-        ? payload.output_text
-        : responsesOutputText(payload.output)
-      if (outputText) {
-        chunks.push({ kind: 'assistant_text_delta', text: outputText })
-      }
-    }
-    for (const item of payload.output ?? []) {
-      const itemType = recordString(item, 'type')
-      if (itemType !== 'function_call' && itemType !== 'custom_tool_call') continue
-      const callId = recordString(item, 'call_id') || recordString(item, 'id')
-      const toolName = recordString(item, 'name')
-      if (!callId || !toolName) continue
-      if (options.completedToolCalls?.has(callId)) continue
-      sawToolCall = true
-      const argsRaw = recordString(item, 'arguments') || recordString(item, 'input') || '{}'
-      options.budget?.completeToolCall(argsRaw)
-      if (options.pendingArguments?.has(callId)) {
-        if (options.budget) options.budget.removePendingCall(options.pendingArguments, callId)
-        else options.pendingArguments.delete(callId)
-      }
-      options.completedToolCalls?.add(callId)
-      chunks.push({
-        kind: 'tool_call_complete',
-        callId,
-        toolName,
-        arguments: this.parseToolArguments(argsRaw)
-      })
-    }
-    const usage = payload.usage ? this.mapUsage(payload.usage, model) : null
-    let finishReason: ModelStopReason = sawToolCall ? 'tool_calls' : 'stop'
-    if (payload.status === 'incomplete') {
-      finishReason = payload.incomplete_details?.reason === 'max_output_tokens' ? 'length' : 'error'
-    } else if (payload.status === 'failed') {
-      finishReason = 'error'
-    }
-    return { chunks, finishReason, usage }
-  }
-
-  private *materializeAnthropicMessagesNonStreaming(
-    payload: AnthropicMessageResponse,
-    model: string
-  ): Generator<ModelStreamChunk> {
-    let sawToolCall = false
-    for (const block of payload.content ?? []) {
-      const type = recordString(block, 'type')
-      if (type === 'text') {
-        const text = recordString(block, 'text')
-        if (text) yield { kind: 'assistant_text_delta', text }
-      } else if (type === 'thinking') {
-        const thinking = recordString(block, 'thinking')
-        if (thinking) yield { kind: 'assistant_reasoning_delta', text: thinking }
-      } else if (type === 'tool_use') {
-        const callId = recordString(block, 'id')
-        const toolName = recordString(block, 'name')
-        const input = recordValue(block, 'input') ?? {}
-        if (callId && toolName) {
-          sawToolCall = true
-          yield {
-            kind: 'tool_call_complete',
-            callId,
-            toolName,
-            arguments: input
-          }
+    yield* enforceNonStreamingLimits(
+      decodeCompatNonStreamingResponse(
+        payload as unknown as Record<string, unknown>,
+        endpointFormat,
+        {
+          normalizeUsage: (usage) => this.mapUsage(usage, model),
+          parseToolArguments: (raw) => this.parseToolArguments(raw),
+          payloadError: modelPayloadError
         }
-      }
-    }
-    if (payload.usage) {
-      yield { kind: 'usage', usage: this.mapUsage(payload.usage, model) }
-    }
-    yield { kind: 'completed', stopReason: anthropicStopReason(payload.stop_reason) ?? (sawToolCall ? 'tool_calls' : 'stop') }
+      ),
+      limits
+    )
   }
 
   private mapUsage(usage: Record<string, unknown>, model = this.config.model): UsageSnapshot {
@@ -1460,64 +1290,6 @@ function buildChatCompletionsUrl(baseUrl: string): string {
   return buildModelEndpointUrl(baseUrl, 'chat_completions')
 }
 
-function responsesOutputText(output: ResponsesApiResponse['output']): string {
-  const parts: string[] = []
-  for (const item of output ?? []) {
-    if (recordString(item, 'type') !== 'message') continue
-    const content = item.content
-    if (!Array.isArray(content)) continue
-    for (const block of content) {
-      if (!block || typeof block !== 'object') continue
-      const record = block as Record<string, unknown>
-      const type = recordString(record, 'type')
-      if (type === 'output_text' || type === 'text') {
-        const text = recordString(record, 'text')
-        if (text) parts.push(text)
-      }
-    }
-  }
-  return parts.join('')
-}
-
-function responseStreamCallId(
-  payload: Record<string, unknown>,
-  pendingArguments: Map<string, PendingToolCall>,
-  pendingByIndex: Map<number, string>
-): string {
-  const explicit = recordString(payload, 'call_id')
-  if (explicit) return explicit
-  const itemId = recordString(payload, 'item_id')
-  if (itemId && pendingArguments.has(itemId)) return itemId
-  const index = numericIndex(payload.output_index)
-  if (index !== undefined) {
-    return pendingByIndex.get(index) ?? indexFallbackCallId(index, pendingArguments)
-  }
-  if (pendingArguments.size === 1) return [...pendingArguments.keys()][0]
-  return indexFallbackCallId(undefined, pendingArguments)
-}
-
-function anthropicStreamCallId(
-  index: number | undefined,
-  pendingArguments: Map<string, PendingToolCall>,
-  pendingByIndex: Map<number, string>
-): string {
-  if (index !== undefined) {
-    return pendingByIndex.get(index) ?? indexFallbackCallId(index, pendingArguments)
-  }
-  if (pendingArguments.size === 1) return [...pendingArguments.keys()][0]
-  return indexFallbackCallId(undefined, pendingArguments)
-}
-
-function indexFallbackCallId(index: number | undefined, pendingArguments: Map<string, PendingToolCall>): string {
-  return index === undefined ? `call_${pendingArguments.size + 1}` : `call_${index + 1}`
-}
-
-function responseErrorMessage(payload: Record<string, unknown>): string {
-  const error = recordValue(payload, 'error') ?? recordValue(recordValue(payload, 'response'), 'error')
-  const message = error ? recordString(error, 'message') : ''
-  return message || recordString(payload, 'message') || 'model stream reported an error'
-}
-
 function modelPayloadError(payload: Record<string, unknown>): { message: string; code?: string } | null {
   const rawError = payload.error
   if (typeof rawError === 'string' && rawError.trim()) {
@@ -1576,21 +1348,6 @@ function errorCodeString(value: unknown): string {
 function successErrorCode(code: string): boolean {
   const normalized = code.trim().toLowerCase()
   return normalized === '0' || normalized === 'ok' || normalized === 'success'
-}
-
-function anthropicStopReason(value: unknown): ModelStopReason | undefined {
-  if (typeof value !== 'string') return undefined
-  switch (value) {
-    case 'tool_use':
-      return 'tool_calls'
-    case 'max_tokens':
-      return 'length'
-    case 'end_turn':
-    case 'stop_sequence':
-      return 'stop'
-    default:
-      return undefined
-  }
 }
 
 function recordValue(value: unknown, key?: string): Record<string, unknown> | null {
@@ -2059,11 +1816,4 @@ function canonicalize(value: unknown): unknown {
     out[key] = canonicalize((value as Record<string, unknown>)[key])
   }
   return out
-}
-
-
-function numericIndex(index: unknown): number | undefined {
-  return typeof index === 'number' && Number.isInteger(index) && index >= 0
-    ? index
-    : undefined
 }
