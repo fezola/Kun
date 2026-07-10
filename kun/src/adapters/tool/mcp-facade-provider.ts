@@ -45,7 +45,10 @@ function createListResourcesTool(connected: McpFacadeConnectionState[]): LocalTo
   return LocalToolHost.defineTool({
     name: 'mcp_list_resources',
     description: 'List MCP resources exposed by currently connected MCP servers.',
-    policy: 'auto',
+    // Remote MCP servers are an external authority. Listing can expose
+    // sensitive metadata, so facade RPCs use the same approval boundary as
+    // direct MCP calls rather than treating server annotations as authority.
+    policy: 'on-request',
     toolKind: 'command_execution',
     inputSchema: {
       type: 'object',
@@ -71,7 +74,7 @@ function createReadResourceTool(connected: McpFacadeConnectionState[]): LocalToo
   return LocalToolHost.defineTool({
     name: 'mcp_read_resource',
     description: 'Read one MCP resource from a connected MCP server.',
-    policy: 'auto',
+    policy: 'on-request',
     toolKind: 'command_execution',
     inputSchema: {
       type: 'object',
@@ -97,7 +100,7 @@ function createListResourceTemplatesTool(connected: McpFacadeConnectionState[]):
   return LocalToolHost.defineTool({
     name: 'mcp_list_resource_templates',
     description: 'List MCP resource templates exposed by currently connected MCP servers.',
-    policy: 'auto',
+    policy: 'on-request',
     toolKind: 'command_execution',
     inputSchema: {
       type: 'object',
@@ -123,7 +126,7 @@ function createListPromptsTool(connected: McpFacadeConnectionState[]): LocalTool
   return LocalToolHost.defineTool({
     name: 'mcp_list_prompts',
     description: 'List MCP prompts exposed by currently connected MCP servers.',
-    policy: 'auto',
+    policy: 'on-request',
     toolKind: 'command_execution',
     inputSchema: {
       type: 'object',
@@ -149,7 +152,7 @@ function createGetPromptTool(connected: McpFacadeConnectionState[]): LocalTool {
   return LocalToolHost.defineTool({
     name: 'mcp_get_prompt',
     description: 'Get one MCP prompt from a connected MCP server.',
-    policy: 'auto',
+    policy: 'on-request',
     toolKind: 'command_execution',
     inputSchema: {
       type: 'object',

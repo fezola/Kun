@@ -664,6 +664,66 @@ describe('MCP tool provider', () => {
     expect(resourceCalls).toBe(0)
   })
 
+  it('requires approval before invoking facade resource and prompt RPCs', async () => {
+    let resourceCalls = 0
+    let promptCalls = 0
+    const config = KunCapabilitiesConfig.parse({
+      mcp: {
+        enabled: true,
+        servers: {
+          github: { transport: 'stdio', command: 'node', trustScope: 'user' }
+        }
+      }
+    })
+    const client: McpClientLike = {
+      async listTools() { return { tools: [] } },
+      async callTool() { return { ok: true } },
+      async readResource() {
+        resourceCalls += 1
+        return { contents: [] }
+      },
+      async getPrompt() {
+        promptCalls += 1
+        return { messages: [] }
+      },
+      async close() {}
+    }
+    const built = await buildMcpToolProviders(config.mcp, { clientFactory: async () => client })
+    const facade = built.providers.find((provider) => provider.id === 'mcp:facade')
+    expect(facade?.tools).toHaveLength(5)
+    expect(facade?.tools.every((tool) => tool.policy === 'on-request')).toBe(true)
+
+    const host = new LocalToolHost({ registry: new CapabilityRegistry(built.providers) })
+    const context = {
+      ...buildContext('/tmp/project'),
+      approvalPolicy: 'on-request' as const,
+      awaitApproval: async () => 'deny' as const
+    }
+    const resource = await host.execute({
+      callId: 'facade_resource',
+      toolName: 'mcp_read_resource',
+      arguments: { uri: 'file:///secret' }
+    }, context)
+    const prompt = await host.execute({
+      callId: 'facade_prompt',
+      toolName: 'mcp_get_prompt',
+      arguments: { name: 'summarize', arguments: { secret: 'no' } }
+    }, context)
+
+    expect(resource.item).toMatchObject({
+      kind: 'tool_result',
+      isError: true,
+      output: { code: 'approval_denied' }
+    })
+    expect(prompt.item).toMatchObject({
+      kind: 'tool_result',
+      isError: true,
+      output: { code: 'approval_denied' }
+    })
+    expect(resourceCalls).toBe(0)
+    expect(promptCalls).toBe(0)
+  })
+
   it('reconnects without replaying a mid-flight MCP tool call', async () => {
     let factories = 0
     let closes = 0
