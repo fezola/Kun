@@ -3,7 +3,7 @@ import type { EventBus } from '../../ports/event-bus.js'
 import type { SessionStore } from '../../ports/session-store.js'
 import type { RuntimeEvent } from '../../contracts/events.js'
 
-const HEARTBEAT_INTERVAL_MS = 15_000
+export const HEARTBEAT_INTERVAL_MS = 15_000
 /**
  * Events published while a slow persisted replay is in flight. If this fills,
  * closing the stream is safer than retaining an unbounded in-memory backlog:
@@ -117,6 +117,14 @@ export function buildEventStreamResponse(input: {
         replaying = false
         heartbeatTimer = setInterval(() => {
           if (closed) return
+          // Heartbeats are subject to the same backpressure policy as live
+          // events. Without this guard, an idle reader that stops consuming
+          // receives a new frame every interval forever and keeps its SSE
+          // subscription/timer alive indefinitely.
+          if (controller.desiredSize !== null && controller.desiredSize <= 0) {
+            close()
+            return
+          }
           try {
             controller.enqueue(
               encoder.encode(

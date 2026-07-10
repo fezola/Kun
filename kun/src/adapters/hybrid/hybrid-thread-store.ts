@@ -766,14 +766,17 @@ export class HybridThreadStore implements ThreadStore {
       latestById.set(item.id, item)
     }
     const seen = new Set<string>()
+    // Keep the latest occurrence for each id while walking newest→oldest,
+    // then reverse once. Repeated unshift made a cold hybrid restore O(n²)
+    // and could block the serve event loop on long message histories.
     const ordered: TurnItem[] = []
     for (let index = raw.length - 1; index >= 0; index -= 1) {
       const item = raw[index]
       if (!item || seen.has(item.id)) continue
       seen.add(item.id)
-      ordered.unshift(latestById.get(item.id)!)
+      ordered.push(latestById.get(item.id)!)
     }
-    return ordered
+    return ordered.reverse()
   }
 
   private async noteEventHighWater(threadId: string, seq: number): Promise<void> {

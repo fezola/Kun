@@ -301,6 +301,8 @@ export type AgentLoopOptions = {
   turnLimits?: {
     maxSteps?: number
     maxWallTimeMs?: number
+    /** Maximum completed tool calls accepted from one model response. */
+    maxToolCallsPerStep?: number
   }
   toolArgumentRepair?: {
     maxStringBytes?: number
@@ -479,9 +481,45 @@ export class AgentLoop {
         delegatedSdkRuntime = sdkRuntime
       }
     }
+    // The Agent SDK owns its own wall-clock timeout so it can distinguish a
+    // runtime deadline from a user cancellation. Starting this native timer
+    // for the delegated path races that SDK timer and turns deadline failures
+    // into misleading `aborted` turns.
+    const maxWallTimeMs = normalizeTurnLimits(this.opts.turnLimits).maxWallTimeMs
+    let wallTimeExceeded = false
+    let deadline: ReturnType<typeof setTimeout> | undefined
+    if (!delegatedSdkRuntime) {
+      deadline = setTimeout(() => {
+        wallTimeExceeded = true
+        this.opts.turns.abortTurnExecution(turnId)
+      }, maxWallTimeMs)
+      if (typeof (deadline as { unref?: () => void }).unref === 'function') {
+        ;(deadline as { unref: () => void }).unref()
+      }
+    }
     let goalTimer: GoalElapsedTimer | null = null
     let finalStatus: 'completed' | 'failed' | 'aborted' | undefined
     let finalError: string | undefined
+    const failWallTimeLimit = async (): Promise<'failed'> => {
+      const message = `turn exceeded ${maxWallTimeMs}ms wall time`
+      this.rememberTurnFailure(turnId, {
+        error: message,
+        code: 'turn_wall_time_limit',
+        severity: 'warning'
+      })
+      await this.recordTurnLimitExceeded(threadId, turnId, 'turn_wall_time_limit', message)
+      await this.opts.turns.finishTurn({
+        threadId,
+        turnId,
+        status: 'failed',
+        error: message,
+        code: 'turn_wall_time_limit',
+        severity: 'warning'
+      })
+      finalStatus = 'failed'
+      finalError = message
+      return 'failed'
+    }
     try {
       goalTimer = await this.startGoalElapsedTimer(threadId)
       await this.recordPipelineStage(threadId, turnId, 'setup')
@@ -526,6 +564,7 @@ export class AgentLoop {
         return status
       }
       const status = await this.loop(threadId, turnId, signal)
+      if (wallTimeExceeded) return failWallTimeLimit()
       const failure = status === 'failed' ? this.turnFailures.get(turnId) : undefined
       await this.opts.turns.finishTurn({
         threadId,
@@ -542,6 +581,7 @@ export class AgentLoop {
       }
       return status
     } catch (error) {
+      if (wallTimeExceeded) return failWallTimeLimit()
       const raw = error instanceof Error ? error.message : String(error)
       // Best-effort enrichment so the renderer can show "what failed where"
       // instead of the bare "Kun turn failed" string. See issue #26.
@@ -567,6 +607,7 @@ export class AgentLoop {
       finalError = message
       return 'failed'
     } finally {
+      if (deadline !== undefined) clearTimeout(deadline)
       await this.finishGoalElapsedTimer(threadId, goalTimer)
       // Decide cross-turn goal resume before clearing the per-turn progress
       // marker it reads.
@@ -959,7 +1000,7 @@ export class AgentLoop {
         return 'failed'
       }
       await this.drainSteering(threadId, turnId, signal)
-      const stepResult = await this.modelStep(threadId, turnId, signal, step)
+      const stepResult = await this.modelStep(threadId, turnId, signal, step, limits.maxToolCallsPerStep)
       if (stepResult === 'stop') return 'completed'
       if (stepResult === 'failed') return 'failed'
       if (stepResult === 'aborted') return 'aborted'
@@ -969,7 +1010,7 @@ export class AgentLoop {
   private async recordTurnLimitExceeded(
     threadId: string,
     turnId: string,
-    code: 'turn_step_limit' | 'turn_wall_time_limit',
+    code: 'turn_step_limit' | 'turn_wall_time_limit' | 'tool_call_limit_exceeded',
     message: string
   ): Promise<void> {
     await this.opts.events.record({ kind: 'error', threadId, turnId, message, code, severity: 'warning' })
@@ -979,7 +1020,8 @@ export class AgentLoop {
     threadId: string,
     turnId: string,
     signal: AbortSignal,
-    stepIndex = 0
+    stepIndex = 0,
+    maxToolCallsPerStep = normalizeTurnLimits(this.opts.turnLimits).maxToolCallsPerStep
   ): Promise<'continue' | 'stop' | 'failed' | 'aborted'> {
     if (shouldVerifyImmutablePrefix()) {
       verifyImmutablePrefix(this.opts.prefix)
@@ -1448,6 +1490,17 @@ export class AgentLoop {
           })
           break
         case 'tool_call_complete': {
+          if (completedToolCalls.length >= maxToolCallsPerStep) {
+            const message = `model response exceeded ${maxToolCallsPerStep} tool calls`
+            this.rememberTurnFailure(turnId, {
+              error: message,
+              code: 'tool_call_limit_exceeded',
+              severity: 'warning'
+            })
+            await this.recordTurnLimitExceeded(threadId, turnId, 'tool_call_limit_exceeded', message)
+            await persistAccumulatedResponse()
+            return 'failed'
+          }
           const provider = toolProviderMetadata.get(chunk.toolName)
           const toolKind = toolKinds.get(chunk.toolName)
           const repaired = repairDispatchToolArguments(chunk.arguments, {
@@ -3160,10 +3213,12 @@ function autoModelRouteKey(threadId: string, turnId: string): string {
 function normalizeTurnLimits(input: AgentLoopOptions['turnLimits']): {
   maxSteps: number
   maxWallTimeMs: number
+  maxToolCallsPerStep: number
 } {
   return {
     maxSteps: Math.max(1, Math.floor(input?.maxSteps ?? 64)),
-    maxWallTimeMs: Math.max(1, Math.floor(input?.maxWallTimeMs ?? 15 * 60_000))
+    maxWallTimeMs: Math.max(1, Math.floor(input?.maxWallTimeMs ?? 15 * 60_000)),
+    maxToolCallsPerStep: Math.max(1, Math.floor(input?.maxToolCallsPerStep ?? 32))
   }
 }
 

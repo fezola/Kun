@@ -186,11 +186,14 @@ export class TurnService {
     if (turn.status !== 'running' || !this.inflightTurns.has(input.turnId)) {
       throw new TurnConflictError(`turn is not active: ${input.turnId}`)
     }
-    this.deps.steering.enqueue(input.turnId, {
+    const accepted = this.deps.steering.enqueue(input.turnId, {
       text: input.text,
       ...(input.displayText ? { displayText: input.displayText } : {}),
       ...(input.messageSource ? { messageSource: input.messageSource } : {})
     })
+    if (!accepted) {
+      throw new TurnConflictError(`steering queue capacity reached for active turn: ${input.turnId}`)
+    }
     await this.deps.events.record({
       kind: 'turn_steered',
       threadId: input.threadId,
@@ -463,6 +466,14 @@ export class TurnService {
 
   getAbortController(turnId: string): AbortSignal | undefined {
     return this.inflightTurns.get(turnId)?.signal
+  }
+
+  /** Abort active turn work without changing its persisted lifecycle state. */
+  abortTurnExecution(turnId: string): boolean {
+    const controller = this.inflightTurns.get(turnId)
+    if (!controller || controller.signal.aborted) return false
+    controller.abort()
+    return true
   }
 
   /**

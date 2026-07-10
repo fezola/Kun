@@ -1,14 +1,19 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RuntimeEvent } from '../src/contracts/events.js'
 import type { EventBus } from '../src/ports/event-bus.js'
 import type { SessionStore } from '../src/ports/session-store.js'
 import {
   buildEventStreamResponse,
+  HEARTBEAT_INTERVAL_MS,
   MAX_LIVE_EVENTS_DURING_REPLAY,
   parseEventCursor
 } from '../src/server/routes/events.js'
 
 describe('event stream replay', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('accepts only non-negative safe integer cursors', () => {
     expect(parseEventCursor(new Request('http://localhost/events?since_seq=0', { headers: { 'Last-Event-ID': '9' } }))).toBe(0)
     expect(parseEventCursor(new Request('http://localhost/events?since_seq=-1'))).toBeNull()
@@ -123,6 +128,35 @@ describe('event stream replay', () => {
     const reader = response.body!.getReader()
     const first = await reader.read()
     expect(new TextDecoder().decode(first.value)).toContain('id: 1')
+    await expect(reader.read()).resolves.toMatchObject({ done: true })
+  })
+
+  it('closes an idle SSE client once an unread heartbeat fills its queue', async () => {
+    vi.useFakeTimers()
+    let unsubscribed = false
+    const eventBus: EventBus = {
+      publish: () => undefined,
+      subscribe: () => () => {
+        unsubscribed = true
+      },
+      snapshotSince: () => [], highestSeq: () => 0, reset: () => undefined
+    }
+    const sessionStore = {
+      highestSeq: async () => 0,
+      loadEventsSince: async () => []
+    } as unknown as SessionStore
+    const response = buildEventStreamResponse({
+      request: new Request('http://localhost/v1/threads/thr_events/events?since_seq=0'),
+      threadId: 'thr_events', eventBus, sessionStore
+    })
+
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(HEARTBEAT_INTERVAL_MS * 2)
+
+    expect(unsubscribed).toBe(true)
+    const reader = response.body!.getReader()
+    const first = await reader.read()
+    expect(new TextDecoder().decode(first.value)).toContain('event: heartbeat')
     await expect(reader.read()).resolves.toMatchObject({ done: true })
   })
 })

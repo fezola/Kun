@@ -165,7 +165,8 @@ export const RuntimeTuningConfigSchema = z
     turnLimits: z
       .object({
         maxSteps: PositiveInt.max(1_000).optional(),
-        maxWallTimeMs: PositiveInt.max(86_400_000).optional()
+        maxWallTimeMs: PositiveInt.max(86_400_000).optional(),
+        maxToolCallsPerStep: PositiveInt.max(256).optional()
       })
       .strict()
       .optional(),

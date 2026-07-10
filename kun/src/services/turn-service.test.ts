@@ -187,6 +187,50 @@ describe('TurnService startTurn', () => {
       providerId: 'xiaomi-token-plan'
     })
   })
+
+  it('rejects steering that exceeds the active turn buffer without recording a phantom event', async () => {
+    const sessionStore = new InMemorySessionStore()
+    const threadStore = new InMemoryThreadStore()
+    const eventBus = new InMemoryEventBus()
+    const nowIso = () => '2026-06-18T00:00:00.000Z'
+    const events = new RuntimeEventRecorder({
+      eventBus,
+      sessionStore,
+      allocateSeq: (threadId) => eventBus.allocateSeq(threadId),
+      nowIso
+    })
+    const steering = new SteeringQueue({ maxEntriesPerTurn: 1, maxBytesPerTurn: 32 })
+    const service = new TurnService({
+      threadStore,
+      sessionStore,
+      events,
+      inflight: new InflightTracker(),
+      steering,
+      compactor: new ContextCompactor(),
+      ids: new SequentialIdGenerator(),
+      nowIso
+    })
+    const threadId = 'thr_bounded_steering'
+    await threadStore.upsert(createThreadRecord({
+      id: threadId,
+      title: 'Bounded steering',
+      workspace: '/tmp/workspace',
+      model: 'deepseek-v4-pro'
+    }))
+    const started = await service.startTurn({ threadId, request: { prompt: 'run' } })
+
+    await service.steerTurn({ threadId, turnId: started.turnId, text: 'first' })
+    await expect(service.steerTurn({
+      threadId,
+      turnId: started.turnId,
+      text: 'second'
+    })).rejects.toThrow(TurnConflictError)
+
+    expect(steering.peek(started.turnId)).toEqual([{ text: 'first' }])
+    const runtimeEvents = await sessionStore.loadEventsSince(threadId, 0)
+    expect(runtimeEvents.filter((event) => event.kind === 'turn_steered')).toHaveLength(1)
+    await service.interruptTurn({ threadId, turnId: started.turnId })
+  })
 })
 
 describe('TurnService compact', () => {
