@@ -65,7 +65,7 @@ export class FileSessionStore implements SessionStore {
     await this.withThreadWrite(threadId, async () => {
       await this.ensureDir(this.threadDir(threadId))
       const path = this.eventsPath(threadId)
-      await appendFile(path, `${JSON.stringify(event)}\n`, 'utf-8')
+      await appendFile(path, `${JSON.stringify(event)}\n`, { encoding: 'utf-8', mode: 0o600 })
       if (event.kind === 'usage') {
         await this.compactUsageEventsIfLarge(threadId).catch((error) => {
           warnUsageCompaction(threadId, error)
@@ -79,7 +79,7 @@ export class FileSessionStore implements SessionStore {
     await this.withThreadWrite(threadId, async () => {
       await this.ensureDir(this.threadDir(threadId))
       const path = this.messagesPath(threadId)
-      await appendFile(path, `${JSON.stringify(item)}\n`, 'utf-8')
+      await appendFile(path, `${JSON.stringify(item)}\n`, { encoding: 'utf-8', mode: 0o600 })
       this.bumpItemsVersion(threadId)
       this.applyItemToCache(threadId, item)
     })
@@ -104,7 +104,7 @@ export class FileSessionStore implements SessionStore {
       if (!current) return null
       const updated = { ...current, ...patch } as TurnItem
       await this.ensureDir(this.threadDir(threadId))
-      await appendFile(this.messagesPath(threadId), `${JSON.stringify(updated)}\n`, 'utf-8')
+      await appendFile(this.messagesPath(threadId), `${JSON.stringify(updated)}\n`, { encoding: 'utf-8', mode: 0o600 })
       this.bumpItemsVersion(threadId)
       this.applyItemToCache(threadId, updated)
       return updated
@@ -254,7 +254,7 @@ export class FileSessionStore implements SessionStore {
   }
 
   private async ensureDir(path: string): Promise<void> {
-    await mkdir(path, { recursive: true })
+    await mkdir(path, { recursive: true, mode: 0o700 })
   }
 
   private async atomicWrite(path: string, contents: string): Promise<void> {

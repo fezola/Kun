@@ -164,7 +164,7 @@ export type KunServeHandle = NodeHttpServerHandle & {
 export async function createKunServeRuntime(
   options: KunServeRuntimeOptions
 ): Promise<ServerRuntime> {
-  await mkdir(options.dataDir, { recursive: true })
+  await mkdir(options.dataDir, { recursive: true, mode: 0o700 })
   let activeOptions: KunServeRuntimeOptions = { ...options }
   const eventBus = new InMemoryEventBus()
   const stores = await createPersistentStores({

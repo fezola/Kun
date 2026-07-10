@@ -127,7 +127,7 @@ export class FileThreadStore implements ThreadStore {
   }
 
   private async ensureDir(path: string): Promise<void> {
-    await mkdir(path, { recursive: true })
+    await mkdir(path, { recursive: true, mode: 0o700 })
   }
 
   private async atomicWrite(path: string, contents: string): Promise<void> {
