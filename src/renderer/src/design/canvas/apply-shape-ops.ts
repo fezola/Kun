@@ -150,6 +150,7 @@ export function extractCanvasOpBlocksFromValue(value: unknown): unknown[][] {
 }
 
 export type SvgArtifactCreateSpec = {
+  artifactId?: string
   name: string
   brief: string
   x?: number
@@ -164,10 +165,14 @@ export function extractSvgArtifactCreateSpecsFromValue(value: unknown): SvgArtif
     if (!isRecord(entry) || entry.op !== 'add-svg-artifact') return []
     const name = typeof entry.name === 'string' ? entry.name.trim() : ''
     const brief = typeof entry.brief === 'string' ? entry.brief.trim() : ''
+    const artifactId = typeof entry.artifactId === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(entry.artifactId.trim())
+      ? entry.artifactId.trim()
+      : undefined
     if (!name || !brief) return []
     const number = (candidate: unknown): number | undefined =>
       typeof candidate === 'number' && Number.isFinite(candidate) ? candidate : undefined
     return [{
+      ...(artifactId ? { artifactId } : {}),
       name,
       brief,
       ...(number(entry.x) !== undefined ? { x: number(entry.x) } : {}),

@@ -28,7 +28,11 @@ import type { IdGenerator } from '../ports/id-generator.js'
 import type { ImmutablePrefix } from '../cache/immutable-prefix.js'
 import type { CacheRequestSignature } from '../cache/cache-diagnostics.js'
 import { ContextCompactor } from './context-compactor.js'
-import { DESIGN_MODE_INSTRUCTION } from './design-mode.js'
+import {
+  DESIGN_MODE_INSTRUCTION,
+  SVG_ARTIFACT_ALLOWED_TOOL_NAMES,
+  SVG_ARTIFACT_MODE_INSTRUCTION
+} from './design-mode.js'
 import {
   effectiveHistoryAfterLatestCompaction,
   insertCompactionIntoVisibleHistory,
@@ -100,6 +104,11 @@ import { ToolStormBreaker, type ToolStormBreakerOptions } from './tool-storm-bre
 import { healLoadedHistoryItems } from './history-healing.js'
 import { repairDispatchToolArguments } from './tool-call-repair.js'
 import { CREATE_PLAN_TOOL_NAME } from '../adapters/tool/create-plan-tool.js'
+import {
+  DESIGN_SVG_ANIMATE_TOOL_NAME,
+  DESIGN_SVG_EDIT_TOOL_NAME,
+  DESIGN_SVG_VALIDATE_TOOL_NAME
+} from '../adapters/tool/design-svg-tool.js'
 import { GET_GOAL_TOOL_NAME, UPDATE_GOAL_TOOL_NAME } from '../adapters/tool/goal-tools.js'
 import { TODO_LIST_TOOL_NAME, TODO_WRITE_TOOL_NAME } from '../adapters/tool/todo-tools.js'
 import { resolveWorkspacePath, shellRuntimeInstruction } from '../adapters/tool/builtin-tool-utils.js'
@@ -147,6 +156,58 @@ export {
   buildRuntimeContextInstruction,
   shouldInjectInitialRuntimeContext
 } from './runtime-context.js'
+
+export type SvgArtifactCompletionState = {
+  mutationSucceeded: boolean
+  validationAfterMutation: boolean
+  mutationRevision?: string
+  validationRevision?: string
+}
+
+/**
+ * Dedicated SVG turns are not complete until a structured mutation succeeded
+ * and a later validation succeeded. A validation before the last mutation is
+ * stale and must not satisfy the gate.
+ */
+export function svgArtifactCompletionState(
+  items: readonly TurnItem[],
+  turnId: string
+): SvgArtifactCompletionState {
+  let lastMutation = -1
+  let lastValidation = -1
+  let mutationRevision = ''
+  let validationRevision = ''
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index]
+    if (
+      item?.turnId !== turnId ||
+      item.kind !== 'tool_result' ||
+      item.status !== 'completed' ||
+      item.isError === true
+    ) continue
+    const output = item.output && typeof item.output === 'object' && !Array.isArray(item.output)
+      ? item.output as Record<string, unknown>
+      : null
+    const revision = typeof output?.revision === 'string' ? output.revision : ''
+    if (output?.ok !== true || !revision) continue
+    if (item.toolName === DESIGN_SVG_EDIT_TOOL_NAME || item.toolName === DESIGN_SVG_ANIMATE_TOOL_NAME) {
+      lastMutation = index
+      mutationRevision = revision
+    } else if (item.toolName === DESIGN_SVG_VALIDATE_TOOL_NAME) {
+      lastValidation = index
+      validationRevision = revision
+    }
+  }
+  return {
+    mutationSucceeded: lastMutation >= 0,
+    validationAfterMutation:
+      lastMutation >= 0 &&
+      lastValidation > lastMutation &&
+      validationRevision === mutationRevision,
+    ...(mutationRevision ? { mutationRevision } : {}),
+    ...(validationRevision ? { validationRevision } : {})
+  }
+}
 export {
   goalContinuationInstruction,
   todoContinuationInstruction
@@ -159,6 +220,7 @@ const MAX_PARALLEL_TOOL_CALLS = 3
 // request. Older ones collapse to a text note (Anthropic-style "keep last
 // N images"), bounding context growth for long computer-use sessions.
 const MAX_FORWARDED_TOOL_IMAGES = 3
+const MAX_SVG_COMPLETION_RECOVERY_STEPS = 3
 
 /**
  * Tools that, on their own, do not count as "progress" toward a goal when
@@ -419,6 +481,7 @@ export class AgentLoop {
   private readonly lastNoToolTextByTurn = new Map<string, string>()
   private readonly goalNoToolRecoveryStepsByTurn = new Map<string, number>()
   private readonly emptyPostToolRecoveryStepsByTurn = new Map<string, number>()
+  private readonly svgCompletionRecoveryStepsByTurn = new Map<string, number>()
   private readonly turnFailures = new Map<string, TurnFailure>()
   /** Turns that executed at least one real (non-goal-status) tool call. */
   private readonly turnMadeProgress = new Set<string>()
@@ -643,6 +706,7 @@ export class AgentLoop {
       this.turnMadeProgress.delete(turnId)
       this.goalResumeSuppressedByTurn.delete(turnId)
       this.emptyPostToolRecoveryStepsByTurn.delete(turnId)
+      this.svgCompletionRecoveryStepsByTurn.delete(turnId)
       this.turnFailures.delete(turnId)
       this.promptTokenPressure.delete(threadId)
       await this.runTurnEndHooks(threadId, turnId, finalStatus ?? 'failed', finalError)
@@ -735,6 +799,48 @@ export class AgentLoop {
 
   private async failTurn(threadId: string, turnId: string, message: string): Promise<void> {
     await this.opts.turns.finishTurn({ threadId, turnId, status: 'failed', error: message })
+  }
+
+  private async recoverRequiredSvgCompletion(
+    threadId: string,
+    turnId: string,
+    state: SvgArtifactCompletionState
+  ): Promise<'continue' | 'failed'> {
+    const attempt = (this.svgCompletionRecoveryStepsByTurn.get(turnId) ?? 0) + 1
+    this.svgCompletionRecoveryStepsByTurn.set(turnId, attempt)
+    const exhausted = attempt >= MAX_SVG_COMPLETION_RECOVERY_STEPS
+    const missingCode = state.mutationSucceeded
+      ? 'required_svg_validation_missing'
+      : 'required_svg_mutation_missing'
+    const message = state.mutationSucceeded
+      ? `The dedicated SVG artifact turn cannot finish until \`${DESIGN_SVG_VALIDATE_TOOL_NAME}\` succeeds after the last mutation.`
+      : [
+          'The dedicated SVG artifact turn cannot finish before a structured mutation succeeds.',
+          `Call \`${DESIGN_SVG_EDIT_TOOL_NAME}\` or \`${DESIGN_SVG_ANIMATE_TOOL_NAME}\`, then finish with \`${DESIGN_SVG_VALIDATE_TOOL_NAME}\`.`
+        ].join(' ')
+    const finalMessage = exhausted
+      ? `${message} Recovery attempts exhausted.`
+      : message
+    const code = exhausted ? 'svg_completion_gate_exhausted' : missingCode
+    const severity = exhausted ? 'error' as const : 'warning' as const
+    if (exhausted) {
+      this.rememberTurnFailure(turnId, { error: finalMessage, code, severity })
+    }
+    await this.opts.events.record({
+      kind: 'error', threadId, turnId, message: finalMessage, code, severity
+    })
+    await this.opts.turns.applyItem(
+      threadId,
+      makeErrorItem({
+        id: this.opts.ids.next('item_error'),
+        turnId,
+        threadId,
+        message: finalMessage,
+        code,
+        severity
+      })
+    )
+    return exhausted ? 'failed' : 'continue'
   }
 
   /**
@@ -1068,6 +1174,7 @@ export class AgentLoop {
     // let a stale continuation issue a new request or dispatch a tool after
     // its owning thread/turn no longer exists.
     if (signal.aborted || !thread || !turn) return 'aborted'
+    const dedicatedSvgTurn = turn.guiDesignArtifact?.kind === 'svg'
     await this.recordPipelineStage(threadId, turnId, 'input_received', { stepIndex })
     const candidatePlanContext = turn?.guiPlan
       ? { ...turn.guiPlan, turnId }
@@ -1077,13 +1184,29 @@ export class AgentLoop {
     // agent turn instead of hard-failing create_plan on the workspace mismatch
     // or forcing a plan-only tool set the cloned history can't satisfy.
     const planContextStale = isStalePlanContext(candidatePlanContext, thread?.workspace ?? '')
-    const activePlanContext = planContextStale ? undefined : candidatePlanContext
+    // A reserved SVG artifact is an execution turn even when the parent thread
+    // was left in Plan mode. Keeping plan context here would make the registry
+    // hide every structured SVG mutation tool.
+    const activePlanContext = dedicatedSvgTurn || planContextStale ? undefined : candidatePlanContext
     const budgetGate = await this.checkBudgetGate(thread, threadId, turnId)
     if (budgetGate === 'blocked') {
       // A cost-budget stop is a deliberate cap, not an interrupted goal turn:
       // suppress goal auto-resume so it isn't relaunched straight back into
       // the same exhausted budget.
       this.goalResumeSuppressedByTurn.add(turnId)
+      if (dedicatedSvgTurn) {
+        const persistedCompletion = svgArtifactCompletionState(
+          await this.opts.sessionStore.loadItems(threadId),
+          turnId
+        )
+        if (persistedCompletion.validationAfterMutation) return 'stop'
+        this.rememberTurnFailure(turnId, {
+          error: 'Dedicated SVG artifact turn could not satisfy its completion gate before the budget was exhausted.',
+          code: 'svg_completion_budget_blocked',
+          severity: 'error'
+        })
+        return 'failed'
+      }
       return 'stop'
     }
     const loadedItems = await this.opts.sessionStore.loadItems(threadId)
@@ -1123,7 +1246,7 @@ export class AgentLoop {
     const sandboxMode = normalizeSandboxMode(thread?.sandboxMode)
     // Per-turn mode overrides the thread mode so the GUI can toggle
     // Plan/agent (and run Build as agent) without recreating the thread.
-    const effectiveMode = turn?.mode ?? thread?.mode
+    const effectiveMode = dedicatedSvgTurn ? 'agent' : turn?.mode ?? thread?.mode
     const providerId = turn?.providerId?.trim() || thread?.providerId?.trim()
     const modelRoute = await this.resolveTurnModel({
       threadId,
@@ -1168,7 +1291,7 @@ export class AgentLoop {
       prompt: turn?.prompt ?? '',
       workspace: thread?.workspace ?? ''
     })
-    const planTurnActive = !planContextStale && (effectiveMode === 'plan' || Boolean(activePlanContext))
+    const planTurnActive = !dedicatedSvgTurn && !planContextStale && (effectiveMode === 'plan' || Boolean(activePlanContext))
     const activeGoalInstruction = planTurnActive
       ? null
       : goalContinuationInstruction(thread?.goal)
@@ -1178,12 +1301,18 @@ export class AgentLoop {
     const activeTodoInstruction = planTurnActive
       ? null
       : todoContinuationInstruction(thread?.todos)
+    const forcedAllowedToolNames = intersectAllowedToolNames(
+      this.opts.forcedAllowedToolNames,
+      turn?.guiDesignArtifact?.kind === 'svg' ? SVG_ARTIFACT_ALLOWED_TOOL_NAMES : undefined
+    )
     const allowedToolNames = intersectAllowedToolNames(
       allowedToolNamesWithGuiStateTools(
-        skillResolution.allowedToolNames,
+        // Dedicated artifact continuation is governed by the hard SVG tool
+        // policy. An unrelated auto-activated skill must not hide edit/validate.
+        dedicatedSvgTurn ? undefined : skillResolution.allowedToolNames,
         activeGoalInstruction !== null
       ),
-      this.opts.forcedAllowedToolNames
+      forcedAllowedToolNames
     )
     // IM/headless turns run without the user-input gate. The tools stay
     // advertised so GUI/IM transitions keep a stable provider tool
@@ -1217,6 +1346,26 @@ export class AgentLoop {
         : { awaitUserInput: (input) => this.awaitUserInput(threadId, turnId, input, signal) })
     }
     const tools = await this.opts.toolHost.listTools(toolContext)
+    if (dedicatedSvgTurn) {
+      const toolNames = new Set(tools.map((tool) => tool.name))
+      const hasMutationTool = toolNames.has(DESIGN_SVG_EDIT_TOOL_NAME) || toolNames.has(DESIGN_SVG_ANIMATE_TOOL_NAME)
+      const hasValidationTool = toolNames.has(DESIGN_SVG_VALIDATE_TOOL_NAME)
+      const completionAlreadySatisfied = svgArtifactCompletionState(historyItems, turnId).validationAfterMutation
+      if (!completionAlreadySatisfied && (approvalPolicy === 'never' || !hasMutationTool || !hasValidationTool)) {
+        const message = approvalPolicy === 'never'
+          ? 'Dedicated SVG artifact turns require tool execution, but the current approval policy disables tools.'
+          : 'Dedicated SVG artifact tools are unavailable under the current plan, skill, or sandbox policy.'
+        this.rememberTurnFailure(turnId, { error: message, code: 'svg_tools_unavailable', severity: 'error' })
+        await this.opts.events.record({
+          kind: 'error', threadId, turnId, message, code: 'svg_tools_unavailable', severity: 'error'
+        })
+        await this.opts.turns.applyItem(threadId, makeErrorItem({
+          id: this.opts.ids.next('item_error'), turnId, threadId, message,
+          code: 'svg_tools_unavailable', severity: 'error'
+        }))
+        return 'failed'
+      }
+    }
     const toolSpecs: ModelToolSpec[] = tools
     const toolProviderMetadata = new Map(
       tools.map((tool) => [tool.name, { providerId: tool.providerId, providerKind: tool.providerKind }])
@@ -1267,17 +1416,34 @@ export class AgentLoop {
         toolCatalogDrift: toolCatalogDrift.kind !== 'none'
       })
     }
-    if (toolCatalogDrift.kind === 'breaking') return 'stop'
+    if (toolCatalogDrift.kind === 'breaking') {
+      if (dedicatedSvgTurn && !svgArtifactCompletionState(historyItems, turnId).validationAfterMutation) {
+        this.rememberTurnFailure(turnId, {
+          error: 'The SVG tool catalog changed before the required mutation and validation completed.',
+          code: 'svg_tool_catalog_changed',
+          severity: 'error'
+        })
+        return 'failed'
+      }
+      return 'stop'
+    }
     const toolKinds = new Map(toolSpecs.map((tool) => [tool.name, tool.toolKind]))
     const createPlanSatisfied = planTurnActive
       ? hasSuccessfulCreatePlanResult(historyItems, turnId)
       : false
+    const svgCompletion = turn?.guiDesignArtifact?.kind === 'svg'
+      ? svgArtifactCompletionState(historyItems, turnId)
+      : null
     const requiredToolName =
       planTurnActive &&
       !createPlanSatisfied &&
       toolSpecs.some((tool) => tool.name === CREATE_PLAN_TOOL_NAME)
         ? CREATE_PLAN_TOOL_NAME
-        : undefined
+        : svgCompletion?.mutationSucceeded &&
+            !svgCompletion.validationAfterMutation &&
+            toolSpecs.some((tool) => tool.name === DESIGN_SVG_VALIDATE_TOOL_NAME)
+          ? DESIGN_SVG_VALIDATE_TOOL_NAME
+          : undefined
     const suggestVerification =
       !planTurnActive &&
       toolSpecs.some((tool) => tool.name === VERIFY_CHANGES_TOOL_NAME) &&
@@ -1350,7 +1516,11 @@ export class AgentLoop {
     const tokenEconomy = normalizeTokenEconomyConfig(this.opts.tokenEconomy)
     const modeInstruction = [
       ...(planTurnActive ? [PLAN_MODE_INSTRUCTION] : []),
-      ...(turn?.guiDesignMode ? [DESIGN_MODE_INSTRUCTION] : [])
+      ...(turn?.guiDesignArtifact?.kind === 'svg'
+        ? [SVG_ARTIFACT_MODE_INSTRUCTION]
+        : turn?.guiDesignMode
+          ? [DESIGN_MODE_INSTRUCTION]
+          : [])
     ].join('\n\n')
     const baseRequest: ModelRequest = {
       threadId,
@@ -1666,6 +1836,9 @@ export class AgentLoop {
     await persistAccumulatedResponse()
     if (stopReason === 'error') return 'failed'
     if (completedToolCalls.length === 0) {
+      if (svgCompletion && !svgCompletion.validationAfterMutation) {
+        return this.recoverRequiredSvgCompletion(threadId, turnId, svgCompletion)
+      }
       if (request.requiredToolName) {
         if (
           request.requiredToolName === CREATE_PLAN_TOOL_NAME &&
@@ -1922,7 +2095,31 @@ export class AgentLoop {
       signal
     })
     if (dispatched === 'aborted') return 'aborted'
-    if (dispatched === 'all_suppressed') return 'stop'
+    if (dispatched === 'all_suppressed') {
+      if (dedicatedSvgTurn) {
+        const latestItems = await this.opts.sessionStore.loadItems(threadId)
+        const latestCompletion = svgArtifactCompletionState(latestItems, turnId)
+        if (!latestCompletion.validationAfterMutation) {
+          return this.recoverRequiredSvgCompletion(threadId, turnId, latestCompletion)
+        }
+      }
+      return 'stop'
+    }
+    if (dedicatedSvgTurn && completedToolCalls.some((call) =>
+      call.toolName === DESIGN_SVG_EDIT_TOOL_NAME ||
+      call.toolName === DESIGN_SVG_ANIMATE_TOOL_NAME ||
+      call.toolName === DESIGN_SVG_VALIDATE_TOOL_NAME
+    )) {
+      const latestItems = await this.opts.sessionStore.loadItems(threadId)
+      const latestCompletion = svgArtifactCompletionState(latestItems, turnId)
+      const progressed =
+        latestCompletion.mutationRevision !== svgCompletion?.mutationRevision ||
+        (!svgCompletion?.validationAfterMutation && latestCompletion.validationAfterMutation)
+      if (!progressed) {
+        return this.recoverRequiredSvgCompletion(threadId, turnId, latestCompletion)
+      }
+      this.svgCompletionRecoveryStepsByTurn.delete(turnId)
+    }
     return 'continue'
   }
 

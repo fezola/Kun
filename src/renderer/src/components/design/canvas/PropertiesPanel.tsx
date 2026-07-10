@@ -241,6 +241,10 @@ function PropertiesPanelInner({ surface = 'design', onImplementDesign }: Props):
   const fontColor = allText ? reduceField(shapes, (s) => s.fontColor ?? '#000000') : undefined
 
   const singleHtmlFrame = shapes.length === 1 && isHtmlFrame(shapes[0]) ? shapes[0] : null
+  // Embedded HTML/SVG artifacts are DOM portals. Their source owns artwork
+  // fills and strokes; only geometry, corner radius, opacity, and portal
+  // controls have a visible canvas effect.
+  const singleArtifactFrame = shapes.length === 1 && isArtifactFrame(shapes[0]) ? shapes[0] : null
   const linkedArtifact = singleHtmlFrame
     ? useDesignWorkspaceStore.getState().artifacts.find((a) => a.id === singleHtmlFrame.htmlArtifactId)
     : null
@@ -467,7 +471,7 @@ function PropertiesPanelInner({ surface = 'design', onImplementDesign }: Props):
       )}
 
       {/* Fill — non-frame, non-linear shapes */}
-      {shapes.some((s) => s.type !== 'group') && !singleHtmlFrame && !isLinear && (
+      {shapes.some((s) => s.type !== 'group') && !singleArtifactFrame && !isLinear && (
         <Section title={t('canvasInspectorFill', 'Fill')}>
           {firstFill ? (
             <div className="space-y-1.5">
@@ -503,7 +507,7 @@ function PropertiesPanelInner({ surface = 'design', onImplementDesign }: Props):
       )}
 
       {/* Stroke */}
-      {!singleHtmlFrame && (
+      {!singleArtifactFrame && (
         <Section
           title={t('canvasInspectorStroke', 'Stroke')}
           action={

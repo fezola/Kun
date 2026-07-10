@@ -49,6 +49,11 @@ describe('design tool protocol', () => {
       'design.ops',
       'design.generate_screen',
       'design.generate_directions',
+      'design_svg_create',
+      'design_svg_inspect',
+      'design_svg_edit',
+      'design_svg_animate',
+      'design_svg_validate',
       'design.critique',
       'design.repair',
       'design.system',
@@ -61,6 +66,11 @@ describe('design tool protocol', () => {
       operationTypes: ['define_token', 'apply_token', 'define_component', 'instantiate_component', 'lint_design']
     })
     expect(designToolProtocolById('design.implement')?.requiresCodeBinding).toBe(true)
+    expect(designToolProtocolById('design_svg_animate')).toMatchObject({ category: 'operations' })
+    expect(designToolProtocolById('design_svg_create')).toMatchObject({
+      inputs: ['name', 'brief', 'frame geometry'],
+      outputs: expect.arrayContaining(['deterministic artifact id'])
+    })
   })
 
   it('formats concise agent contract lines', () => {

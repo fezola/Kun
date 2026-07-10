@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdir, mkdtemp, readFile, realpath, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, readdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 
@@ -432,5 +432,33 @@ describe('workspace-service boundary checks', () => {
     if (!result.ok) {
       expect(result.message).toContain('within the selected workspace')
     }
+  })
+
+  it('rejects write/create/rename/delete through a parent symlink outside the workspace', async () => {
+    if (process.platform === 'win32') return
+    const outsideDir = join(rootDir, 'outside-dir')
+    await mkdir(outsideDir)
+    await writeFile(join(outsideDir, 'victim.txt'), 'outside', 'utf8')
+    await symlink(outsideDir, join(workspaceRoot, 'linked-outside'), 'dir')
+
+    const createResult = await createWorkspaceFile({
+      path: 'linked-outside/new.txt', workspaceRoot, content: 'escaped'
+    })
+    const writeResult = await writeWorkspaceFile({
+      path: 'linked-outside/victim.txt', workspaceRoot, content: 'overwritten'
+    })
+    const renameResult = await renameWorkspaceEntry({
+      path: 'linked-outside/victim.txt', workspaceRoot, newName: 'renamed.txt'
+    })
+    const deleteResult = await deleteWorkspaceEntry({
+      path: 'linked-outside/victim.txt', workspaceRoot
+    })
+
+    expect(createResult.ok).toBe(false)
+    expect(writeResult.ok).toBe(false)
+    expect(renameResult.ok).toBe(false)
+    expect(deleteResult.ok).toBe(false)
+    expect(await readFile(join(outsideDir, 'victim.txt'), 'utf8')).toBe('outside')
+    await expect(readFile(join(outsideDir, 'new.txt'), 'utf8')).rejects.toThrow()
   })
 })

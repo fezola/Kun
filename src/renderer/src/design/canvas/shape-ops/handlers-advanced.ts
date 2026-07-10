@@ -1,5 +1,5 @@
 import type { CanvasShape, Rect } from '../canvas-types'
-import { createDefaultShape, shapeBounds, type DevicePreset } from '../canvas-types'
+import { createDefaultShape, isArtifactFrame, shapeBounds, type DevicePreset } from '../canvas-types'
 import { useCanvasShapeStore, withDescendants } from '../canvas-shape-store'
 import { useCanvasViewportStore } from '../canvas-viewport-store'
 import { centerRectInViewport, layoutRectsInViewport, placeRectInViewportAvoiding } from '../canvas-placement'
@@ -195,6 +195,13 @@ export function executeAdvancedShapeOp(
           code: 'SHAPE_NOT_FOUND',
           message: `stack: none of [${op.ids.join(', ')}] exist`,
           suggestion: suggestionForMissingId(op.ids[0])
+        })
+        return true
+      }
+      if (members.some(isArtifactFrame)) {
+        errors.push({
+          code: 'INVALID_OP',
+          message: 'HTML and SVG artifact frames cannot be stacked because portal previews must remain root-level.'
         })
         return true
       }

@@ -10,9 +10,12 @@ import { placeRectInViewportAvoiding } from './canvas-placement'
 import { useCanvasSelectionStore } from './canvas-selection-store'
 import { useCanvasShapeStore } from './canvas-shape-store'
 import { useCanvasViewportStore } from './canvas-viewport-store'
+export { buildSvgArtifactSkeleton } from '../svg/svg-skeleton'
 
 export type CreateLinkedSvgArtifactOptions = Partial<Rect> & {
   boardArtifactId: string
+  /** Stable id emitted by design_svg_create so replaying the same tool call is idempotent. */
+  artifactId?: string
   name?: string
   brief?: string
   targetFrameId?: string
@@ -24,35 +27,11 @@ export type CreateLinkedSvgArtifactResult = {
   relativePath: string
   designMdPath: string
   shape: CanvasShape
+  newlyCreated: boolean
+  versionCreated: boolean
 }
 
-function escapeXml(value: string): string {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&apos;')
-}
-
-export function buildSvgArtifactSkeleton(options: {
-  title: string
-  brief?: string
-  width: number
-  height: number
-}): string {
-  const title = escapeXml(options.title.trim() || 'SVG motion')
-  const description = escapeXml(options.brief?.trim() || 'SVG motion design generated in Kun.')
-  return [
-    '<?xml version="1.0" encoding="UTF-8"?>',
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${Math.round(options.width)} ${Math.round(options.height)}" width="${Math.round(options.width)}" height="${Math.round(options.height)}" role="img" aria-labelledby="title desc">`,
-    `  <title id="title">${title}</title>`,
-    `  <desc id="desc">${description}</desc>`,
-    '  <g id="artwork" />',
-    '</svg>',
-    ''
-  ].join('\n')
-}
+const linkedCreationQueues = new Map<string, Promise<CreateLinkedSvgArtifactResult | null>>()
 
 function uniqueSvgTitle(name?: string, brief?: string): string {
   const source = name?.trim() || brief?.trim() || 'SVG motion'
@@ -67,9 +46,11 @@ function uniqueSvgTitle(name?: string, brief?: string): string {
 }
 
 function reusableTargetFrame(shape: CanvasShape | undefined): shape is CanvasShape {
+  const rootId = useCanvasShapeStore.getState().document.rootId
   return Boolean(
     shape &&
       shape.type === 'frame' &&
+      shape.parentId === rootId &&
       !isArtifactFrame(shape) &&
       shape.visible !== false &&
       !shape.locked &&
@@ -91,31 +72,78 @@ function geometry(options: CreateLinkedSvgArtifactOptions): Rect {
   return { x: options.x ?? placed.x, y: options.y ?? placed.y, width, height }
 }
 
-export function createLinkedSvgArtifact(
+async function createLinkedSvgArtifactImpl(
   options: CreateLinkedSvgArtifactOptions
-): CreateLinkedSvgArtifactResult | null {
+): Promise<CreateLinkedSvgArtifactResult | null> {
   const store = useDesignWorkspaceStore.getState()
-  const title = uniqueSvgTitle(options.name, options.brief)
+  const context = {
+    workspaceRoot: store.workspaceRoot,
+    documentId: store.activeDocumentId,
+    canvasDocumentKey: useCanvasShapeStore.getState().documentKey
+  }
+  if (
+    !context.documentId ||
+    !store.artifacts.some((artifact) => artifact.id === options.boardArtifactId && artifact.kind === 'canvas')
+  ) {
+    throw new Error('SVG creation was cancelled because the active design board is unavailable.')
+  }
+  const existingArtifact = options.artifactId
+    ? store.artifacts.find((item) => item.id === options.artifactId && item.kind === 'svg')
+    : undefined
+  const title = existingArtifact?.title ?? uniqueSvgTitle(options.name, options.brief)
   const target = options.targetFrameId
     ? useCanvasShapeStore.getState().document.objects[options.targetFrameId]
     : undefined
   const reusable = reusableTargetFrame(target) ? target : null
-  const rect = reusable ? shapeBounds(reusable) : geometry(options)
-  const prepared = store.prepareSvgTurn(options.brief ?? title, {
+  const existingFrame = existingArtifact
+    ? Object.values(useCanvasShapeStore.getState().document.objects).find((shape) =>
+        isArtifactFrame(shape) && shape.embeddedArtifact?.kind === 'svg' && shape.embeddedArtifact.id === existingArtifact.id
+      )
+    : undefined
+  const rect = existingFrame
+    ? shapeBounds(existingFrame)
+    : reusable
+      ? shapeBounds(reusable)
+      : existingArtifact?.node
+        ? {
+            x: existingArtifact.node.x,
+            y: existingArtifact.node.y,
+            width: existingArtifact.node.width,
+            height: existingArtifact.node.height
+          }
+        : geometry(options)
+  const prepared = await store.prepareSvgTurn(options.brief ?? title, {
     forceNew: true,
+    artifactId: options.artifactId,
     width: rect.width,
     height: rect.height,
     title
   })
-  store.updateArtifactNode(prepared.artifactId, {
-    ...rect,
-    sizeMode: 'manual',
-    viewMode: 'preview'
-  })
+  const currentStore = useDesignWorkspaceStore.getState()
+  const currentCanvas = useCanvasShapeStore.getState()
+  if (
+    currentStore.workspaceRoot !== context.workspaceRoot ||
+    currentStore.activeDocumentId !== context.documentId ||
+    currentCanvas.documentKey !== context.canvasDocumentKey ||
+    !currentStore.artifacts.some(
+      (artifact) => artifact.id === options.boardArtifactId && artifact.kind === 'canvas'
+    )
+  ) {
+    throw new Error('SVG creation was cancelled because the active workspace or design board changed.')
+  }
+  if (prepared.newlyCreated || !existingArtifact?.node) {
+    store.updateArtifactNode(prepared.artifactId, {
+      ...rect,
+      sizeMode: 'manual',
+      viewMode: 'preview'
+    })
+  }
   store.setActiveArtifact(options.boardArtifactId)
 
   let shape: CanvasShape
-  if (reusable) {
+  if (existingFrame) {
+    shape = existingFrame
+  } else if (reusable) {
     useCanvasShapeStore.getState().updateShape(reusable.id, {
       name: title,
       embeddedArtifact: { id: prepared.artifactId, kind: 'svg' },
@@ -131,27 +159,25 @@ export function createLinkedSvgArtifact(
     useCanvasSelectionStore.getState().select([shape.id])
     useCanvasViewportStore.getState().setActiveTool('select')
   }
-  if (store.workspaceRoot && typeof window.kunGui?.writeWorkspaceFile === 'function') {
-    void window.kunGui
-      .writeWorkspaceFile({
-        path: prepared.relativePath,
-        workspaceRoot: store.workspaceRoot,
-        content: buildSvgArtifactSkeleton({
-          title,
-          brief: options.brief,
-          width: rect.width,
-          height: rect.height
-        })
-      })
-      .then((result) => {
-        if (!result.ok) {
-          useDesignWorkspaceStore.getState().setArtifactPreviewStatus(prepared.artifactId, 'error')
-        }
-      })
-      .catch(() => {
-        useDesignWorkspaceStore.getState().setArtifactPreviewStatus(prepared.artifactId, 'error')
-      })
-  }
   const created = useCanvasShapeStore.getState().document.objects[shape.id] ?? shape
   return { ...prepared, shape: created }
+}
+
+export function createLinkedSvgArtifact(
+  options: CreateLinkedSvgArtifactOptions
+): Promise<CreateLinkedSvgArtifactResult | null> {
+  const stableId = options.artifactId?.trim()
+  if (!stableId) return createLinkedSvgArtifactImpl(options)
+  const workspaceRoot = useDesignWorkspaceStore.getState().workspaceRoot
+  const key = [workspaceRoot, options.boardArtifactId, stableId].join('\0')
+  const pending = linkedCreationQueues.get(key)
+  if (pending) {
+    return pending.then((result) => result ? { ...result, newlyCreated: false, versionCreated: false } : null)
+  }
+  const task = createLinkedSvgArtifactImpl(options)
+  linkedCreationQueues.set(key, task)
+  void task.finally(() => {
+    if (linkedCreationQueues.get(key) === task) linkedCreationQueues.delete(key)
+  }).catch(() => undefined)
+  return task
 }

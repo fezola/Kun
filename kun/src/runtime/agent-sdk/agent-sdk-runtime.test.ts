@@ -29,6 +29,99 @@ function fakeSdk(messages: SdkMessage[], onQuery?: (opts: unknown) => void): Sdk
   }
 }
 
+function fakeSdkAttempts(
+  attempts: readonly SdkMessage[][],
+  onQuery?: (input: { prompt: unknown; options?: unknown }, attempt: number) => void
+): SdkApi {
+  let attempt = 0
+  return {
+    query: (input): SdkQueryResult => {
+      const current = attempt
+      attempt += 1
+      onQuery?.(input as { prompt: unknown; options?: unknown }, current)
+      async function* gen(): AsyncGenerator<SdkMessage> {
+        for (const message of attempts[current] ?? attempts.at(-1) ?? []) yield message
+      }
+      const stream = gen() as SdkQueryResult
+      stream.interrupt = async () => {}
+      return stream
+    },
+    createSdkMcpServer: (config) => ({ type: 'sdk', name: config.name, instance: {} }),
+    tool: (name) => ({ name })
+  }
+}
+
+type SvgSdkToolResult = {
+  name: 'design_svg_edit' | 'design_svg_animate' | 'design_svg_validate'
+  id: string
+  output: unknown
+  isError?: boolean
+}
+
+function svgSdkAttempt(results: readonly SvgSdkToolResult[], finalText = 'done'): SdkMessage[] {
+  return [
+    {
+      type: 'assistant',
+      parent_tool_use_id: null,
+      message: {
+        role: 'assistant',
+        content: results.map((entry) => ({
+          type: 'tool_use' as const,
+          id: entry.id,
+          name: `mcp__kun__${entry.name}`,
+          input: {}
+        }))
+      }
+    } as SdkMessage,
+    {
+      type: 'user',
+      parent_tool_use_id: null,
+      message: {
+        role: 'user',
+        content: results.map((entry) => ({
+          type: 'tool_result' as const,
+          tool_use_id: entry.id,
+          content: JSON.stringify(entry.output),
+          ...(entry.isError ? { is_error: true } : {})
+        }))
+      }
+    } as SdkMessage,
+    {
+      type: 'result', subtype: 'success', is_error: false, result: finalText,
+      num_turns: 1, usage: { input_tokens: 1, output_tokens: 1 }
+    } as SdkMessage
+  ]
+}
+
+function svgSdkTextAttempt(text = 'done'): SdkMessage[] {
+  return [
+    {
+      type: 'assistant', parent_tool_use_id: null,
+      message: { role: 'assistant', content: [{ type: 'text', text }] }
+    } as SdkMessage,
+    {
+      type: 'result', subtype: 'success', is_error: false, result: text,
+      num_turns: 1, usage: { input_tokens: 1, output_tokens: 1 }
+    } as SdkMessage
+  ]
+}
+
+function svgSdkContext(): SdkTurnContext {
+  return {
+    workspace: '/ws',
+    userText: 'make the reserved svg',
+    approvalPolicy: 'auto',
+    sandboxMode: 'workspace-write',
+    allowSdkBuiltins: false,
+    requireSvgCompletion: true,
+    bridgeableTools: [
+      { name: 'design_svg_edit', description: 'edit', inputSchema: {} },
+      { name: 'design_svg_animate', description: 'animate', inputSchema: {} },
+      { name: 'design_svg_validate', description: 'validate', inputSchema: {} }
+    ]
+  }
+}
+
 function makeDeps(overrides: Partial<SdkRuntimeDeps> = {}): {
   deps: SdkRuntimeDeps
   events: RuntimeEventDraft[]
@@ -253,6 +346,118 @@ describe('AgentSdkRuntime.runTurn', () => {
     })
   })
 
+  test('disables SDK built-ins and completes after mutation plus matching validation', async () => {
+    const seenOptions: Array<{ tools?: unknown; strictMcpConfig?: boolean; allowedTools?: string[] }> = []
+    const sdk = fakeSdkAttempts([
+      svgSdkAttempt([
+        { name: 'design_svg_edit', id: 'edit_ok', output: { ok: true, revision: 'rev_1' } },
+        { name: 'design_svg_validate', id: 'validate_ok', output: { ok: true, revision: 'rev_1' } }
+      ])
+    ], (input) => seenOptions.push(input.options as typeof seenOptions[number]))
+    const { deps, finished } = makeDeps({
+      loadSdk: async () => sdk,
+      loadTurnContext: async () => svgSdkContext()
+    })
+
+    await expect(new AgentSdkRuntime(deps).runTurn('th', 'tn', new AbortController().signal)).resolves.toBe('completed')
+    expect(finished).toEqual([{ status: 'completed', error: undefined }])
+    expect(seenOptions).toHaveLength(1)
+    expect(seenOptions[0]).toMatchObject({ tools: [], strictMcpConfig: true })
+    expect(seenOptions[0].allowedTools).not.toEqual(expect.arrayContaining(['Read', 'Write', 'Edit', 'Bash']))
+  })
+
+  test('exhausts three recovery attempts when no structured mutation succeeds', async () => {
+    let queries = 0
+    const sdk = fakeSdkAttempts([
+      svgSdkTextAttempt('prose only'), svgSdkTextAttempt('still prose'), svgSdkTextAttempt('done')
+    ], () => { queries += 1 })
+    const { deps, events, finished } = makeDeps({
+      loadSdk: async () => sdk,
+      loadTurnContext: async () => svgSdkContext()
+    })
+
+    await expect(new AgentSdkRuntime(deps).runTurn('th', 'tn', new AbortController().signal)).resolves.toBe('failed')
+    expect(queries).toBe(3)
+    expect(finished.at(-1)).toMatchObject({ status: 'failed', error: expect.stringContaining('recovery attempts') })
+    expect(events.filter((event) => event.kind === 'error')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'required_svg_mutation_missing' })
+    ]))
+  })
+
+  test('fails before loading the SDK when SVG mutation tools are unavailable', async () => {
+    const loadSdk = vi.fn(async () => fakeSdk([]))
+    const { deps, events } = makeDeps({
+      loadSdk,
+      loadTurnContext: async () => ({
+        ...svgSdkContext(),
+        bridgeableTools: [{ name: 'design_svg_validate', description: 'validate', inputSchema: {} }]
+      })
+    })
+    await expect(new AgentSdkRuntime(deps).runTurn('th', 'tn', new AbortController().signal)).resolves.toBe('failed')
+    expect(loadSdk).not.toHaveBeenCalled()
+    expect(events).toContainEqual(expect.objectContaining({ kind: 'error', code: 'svg_tools_unavailable' }))
+  })
+
+  test('exhausts recovery when mutation is never followed by validation', async () => {
+    const sdk = fakeSdkAttempts([
+      svgSdkAttempt([{ name: 'design_svg_edit', id: 'edit_only', output: { ok: true, revision: 'rev_1' } }]),
+      svgSdkTextAttempt(),
+      svgSdkTextAttempt()
+    ])
+    const { deps, events } = makeDeps({
+      loadSdk: async () => sdk,
+      loadTurnContext: async () => svgSdkContext()
+    })
+    await expect(new AgentSdkRuntime(deps).runTurn('th', 'tn', new AbortController().signal)).resolves.toBe('failed')
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'error', code: 'required_svg_validation_missing' })
+    ]))
+  })
+
+  test('requires validation after the mutation and ignores failed tool results', async () => {
+    let queries = 0
+    const sdk = fakeSdkAttempts([
+      svgSdkAttempt([
+        { name: 'design_svg_validate', id: 'validate_first', output: { ok: true, revision: 'rev_0' } },
+        { name: 'design_svg_edit', id: 'edit_failed', output: { ok: false, error: 'bad op' }, isError: true }
+      ]),
+      svgSdkAttempt([{ name: 'design_svg_edit', id: 'edit_second', output: { ok: true, revision: 'rev_2' } }]),
+      svgSdkAttempt([{ name: 'design_svg_validate', id: 'validate_last', output: { ok: true, revision: 'rev_2' } }])
+    ], () => { queries += 1 })
+    const { deps } = makeDeps({
+      loadSdk: async () => sdk,
+      loadTurnContext: async () => svgSdkContext()
+    })
+    await expect(new AgentSdkRuntime(deps).runTurn('th', 'tn', new AbortController().signal)).resolves.toBe('completed')
+    expect(queries).toBe(3)
+  })
+
+  test('rejects stale validation revisions and retries with tool feedback', async () => {
+    const prompts: unknown[] = []
+    const sdk = fakeSdkAttempts([
+      svgSdkAttempt([
+        { name: 'design_svg_edit', id: 'edit_new', output: { ok: true, revision: 'rev_new' } },
+        { name: 'design_svg_validate', id: 'validate_old', output: { ok: true, revision: 'rev_old' } }
+      ]),
+      svgSdkAttempt([{ name: 'design_svg_validate', id: 'validate_new', output: { ok: true, revision: 'rev_new' } }])
+    ], (input) => prompts.push(input.prompt))
+    let mcpServerInstances = 0
+    const createServer = sdk.createSdkMcpServer
+    sdk.createSdkMcpServer = (config) => {
+      mcpServerInstances += 1
+      return createServer(config)
+    }
+    const { deps } = makeDeps({
+      loadSdk: async () => sdk,
+      loadTurnContext: async () => svgSdkContext()
+    })
+    await expect(new AgentSdkRuntime(deps).runTurn('th', 'tn', new AbortController().signal)).resolves.toBe('completed')
+    expect(prompts).toHaveLength(2)
+    expect(mcpServerInstances).toBe(2)
+    expect(prompts[1]).toContain('SVG completion gate')
+    expect(prompts[1]).toContain('design_svg_validate result')
+  })
+
   test('null turn context fails the turn early', async () => {
     const { deps, finished } = makeDeps({ loadTurnContext: async () => null })
     const status = await new AgentSdkRuntime(deps).runTurn('th', 'tn', new AbortController().signal)
@@ -276,14 +481,14 @@ describe('AgentSdkRuntime.runTurn', () => {
       loadSdk: async () => ({
         query: ({ options }) => {
           const abortController = (options as { abortController: AbortController }).abortController
-          const stream: SdkQueryResult = {
-            async *[Symbol.asyncIterator](): AsyncGenerator<SdkMessage> {
-              await new Promise<void>((resolve) => {
-                abortController.signal.addEventListener('abort', resolve, { once: true })
-              })
-            },
-            interrupt: async () => { interrupted = true }
+          async function* gen(): AsyncGenerator<SdkMessage> {
+            await new Promise<void>((resolve) => {
+              abortController.signal.addEventListener('abort', () => resolve(), { once: true })
+            })
+            for (const message of [] as SdkMessage[]) yield message
           }
+          const stream = gen() as SdkQueryResult
+          stream.interrupt = async () => { interrupted = true }
           return stream
         },
         createSdkMcpServer: (config) => ({ type: 'sdk', name: config.name, instance: {} }),

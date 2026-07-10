@@ -1,5 +1,5 @@
 import type { CanvasShape, ShapeType } from '../canvas-types'
-import { createDefaultShape, isImplicitImageSlot, shapeBounds, type DevicePreset } from '../canvas-types'
+import { createDefaultShape, isArtifactFrame, isImplicitImageSlot, shapeBounds, type DevicePreset } from '../canvas-types'
 import { useCanvasShapeStore, withDescendants } from '../canvas-shape-store'
 import { useCanvasSelectionStore } from '../canvas-selection-store'
 import { useCanvasViewportStore } from '../canvas-viewport-store'
@@ -73,6 +73,13 @@ export function executeBasicShapeOp(
           code: 'PARENT_NOT_FOUND',
           message: `Cannot add shape: parent "${op.parentId}" does not exist`,
           suggestion: suggestionForMissingId(op.parentId)
+        })
+        return true
+      }
+      if (op.parentId && isArtifactFrame(findShape(op.parentId)!)) {
+        errors.push({
+          code: 'INVALID_OP',
+          message: 'Cannot add canvas shapes inside an HTML or SVG artifact frame.'
         })
         return true
       }
@@ -160,12 +167,21 @@ export function executeBasicShapeOp(
       break
     }
     case 'reparent': {
-      if (!findShape(op.id)) {
+      const shape = findShape(op.id)
+      if (!shape) {
         errors.push({ code: 'SHAPE_NOT_FOUND', message: `No shape "${op.id}"` })
         return true
       }
-      if (!findShape(op.newParentId)) {
+      const newParent = findShape(op.newParentId)
+      if (!newParent) {
         errors.push({ code: 'PARENT_NOT_FOUND', message: `No parent "${op.newParentId}"` })
+        return true
+      }
+      if (isArtifactFrame(newParent) || (isArtifactFrame(shape) && op.newParentId !== store.document.rootId)) {
+        errors.push({
+          code: 'INVALID_OP',
+          message: 'HTML and SVG artifact frames must remain root-level canvas portals.'
+        })
         return true
       }
       store.reparentShape(op.id, op.newParentId, op.index)
@@ -380,6 +396,13 @@ export function executeBasicShapeOp(
           code: 'SHAPE_NOT_FOUND',
           message: `group: none of [${op.ids.join(', ')}] exist`,
           suggestion: suggestionForMissingId(op.ids[0])
+        })
+        return true
+      }
+      if (members.some(isArtifactFrame)) {
+        errors.push({
+          code: 'INVALID_OP',
+          message: 'HTML and SVG artifact frames cannot be grouped because portal previews must remain root-level.'
         })
         return true
       }

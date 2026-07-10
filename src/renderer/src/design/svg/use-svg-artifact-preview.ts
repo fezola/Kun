@@ -8,16 +8,20 @@ export type SvgArtifactPreviewState = {
   animationCount: number
   visualElementCount: number
   durationMs: number
+  loopsIndefinitely: boolean
   revision: number
 }
 
-const INITIAL: SvgArtifactPreviewState = {
+type StoredSvgArtifactPreviewState = Omit<SvgArtifactPreviewState, 'srcDoc'> & { svg: string }
+
+const INITIAL: StoredSvgArtifactPreviewState = {
   status: 'loading',
-  srcDoc: '',
+  svg: '',
   diagnostics: [],
   animationCount: 0,
   visualElementCount: 0,
   durationMs: 4000,
+  loopsIndefinitely: false,
   revision: 0
 }
 
@@ -26,7 +30,7 @@ export function useSvgArtifactPreview(
   relativePath: string,
   background: 'transparent' | 'light' | 'dark'
 ): SvgArtifactPreviewState {
-  const [state, setState] = useState<SvgArtifactPreviewState>(INITIAL)
+  const [state, setState] = useState<StoredSvgArtifactPreviewState>(INITIAL)
 
   useEffect(() => {
     let cancelled = false
@@ -36,8 +40,21 @@ export function useSvgArtifactPreview(
     setState(INITIAL)
     if (!workspaceRoot || !relativePath || typeof api?.readWorkspaceFile !== 'function') return
 
-    const apply = (content: string): void => {
+    const apply = (content: string, truncated = false): void => {
       if (cancelled) return
+      if (truncated) {
+        setState((current) => ({
+          ...current,
+          status: 'invalid',
+          diagnostics: [{
+            severity: 'error',
+            code: 'source-truncated',
+            message: 'SVG source was truncated while reading and cannot be previewed safely.'
+          }],
+          revision: current.revision + 1
+        }))
+        return
+      }
       const parsed = parseAndSanitizeSvgDocument(content)
       if (!parsed.ok) {
         setState((current) => ({
@@ -50,11 +67,12 @@ export function useSvgArtifactPreview(
       }
       setState((current) => ({
         status: 'ready',
-        srcDoc: buildSvgPreviewDocument(parsed.svg, background),
+        svg: parsed.svg,
         diagnostics: parsed.diagnostics,
         animationCount: parsed.animationCount,
         visualElementCount: parsed.visualElementCount,
         durationMs: parsed.durationMs,
+        loopsIndefinitely: parsed.loopsIndefinitely,
         revision: current.revision + 1
       }))
     }
@@ -66,14 +84,13 @@ export function useSvgArtifactPreview(
         setState((current) => ({ ...current, status: 'missing', revision: current.revision + 1 }))
         return
       }
-      apply(result.content)
+      apply(result.content, result.truncated)
     }
 
-    void load()
     if (api.watchWorkspaceFile && api.unwatchWorkspaceFile && api.onWorkspaceFileChanged) {
       offChanged = api.onWorkspaceFileChanged((payload) => {
         if (!cancelled && watchId && payload.watchId === watchId) {
-          if (payload.ok) apply(payload.content)
+          if (payload.ok) apply(payload.content, payload.truncated)
           else void load()
         }
       })
@@ -84,9 +101,15 @@ export function useSvgArtifactPreview(
         }
         if (result.ok) {
           watchId = result.watchId
-          apply(result.content)
+          apply(result.content, result.truncated)
+        } else {
+          void load()
         }
-      }).catch(() => undefined)
+      }).catch(() => {
+        void load()
+      })
+    } else {
+      void load()
     }
 
     return () => {
@@ -94,7 +117,13 @@ export function useSvgArtifactPreview(
       offChanged?.()
       if (watchId) void api.unwatchWorkspaceFile?.(watchId).catch(() => undefined)
     }
-  }, [background, relativePath, workspaceRoot])
+  }, [relativePath, workspaceRoot])
 
-  return useMemo(() => state, [state])
+  return useMemo(() => {
+    const { svg, ...preview } = state
+    return {
+      ...preview,
+      srcDoc: preview.status === 'ready' ? buildSvgPreviewDocument(svg, background) : ''
+    }
+  }, [background, state])
 }

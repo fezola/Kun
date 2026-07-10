@@ -161,13 +161,34 @@ export function syncSvgArtifactsToBoardDocument(
   for (const artifact of svgArtifacts) {
     const existing = framesByArtifactId.get(artifact.id)
     if (existing) {
+      const currentRoot = (next ?? workingDoc).objects[(next ?? workingDoc).rootId]
+      const rootHasFrame = currentRoot?.children.includes(existing.id) ?? false
+      if (existing.parentId !== workingDoc.rootId || !rootHasFrame || existing.frameId !== null) {
+        if (!next) next = cloneDocument(workingDoc)
+        const current = next.objects[existing.id]
+        const root = next.objects[next.rootId]
+        if (current && root) {
+          if (current.parentId && current.parentId !== next.rootId && next.objects[current.parentId]) {
+            const oldParent = next.objects[current.parentId]
+            next.objects[current.parentId] = {
+              ...oldParent,
+              children: oldParent.children.filter((childId) => childId !== current.id)
+            }
+          }
+          next.objects[current.id] = { ...current, parentId: next.rootId, frameId: null }
+          if (!root.children.includes(current.id)) {
+            next.objects[next.rootId] = { ...root, children: [...root.children, current.id] }
+          }
+          if (!updatedFrameIds.includes(current.id)) updatedFrameIds.push(current.id)
+        }
+      }
       const width = Math.max(64, existing.width)
       const height = Math.max(64, existing.height)
       const name = artifact.title || existing.name
       if (name !== existing.name || width !== existing.width || height !== existing.height) {
         if (!next) next = cloneDocument(workingDoc)
         next.objects[existing.id] = { ...next.objects[existing.id], name, width, height }
-        updatedFrameIds.push(existing.id)
+        if (!updatedFrameIds.includes(existing.id)) updatedFrameIds.push(existing.id)
       }
       continue
     }
@@ -190,6 +211,7 @@ export function syncSvgArtifactsToBoardDocument(
       rect.width,
       rect.height
     )
+    frame.parentId = next.rootId
     next.objects[frame.id] = frame
     next.objects[next.rootId] = { ...root, children: [...root.children, frame.id] }
     occupiedRects.push(shapeBounds(frame))
@@ -205,8 +227,19 @@ export function syncDesignArtifactsToBoardDocument(
 ): SyncHtmlArtifactsToBoardResult {
   const html = syncHtmlArtifactsToBoardDocument(doc, artifacts)
   const svg = syncSvgArtifactsToBoardDocument(html.document, artifacts)
+  const root = svg.document.objects[svg.document.rootId]
+  const normalChildren = root?.children.filter((id) => !isArtifactFrame(svg.document.objects[id])) ?? []
+  const portalChildren = root?.children.filter((id) => isArtifactFrame(svg.document.objects[id])) ?? []
+  const orderedChildren = [...normalChildren, ...portalChildren]
+  const portalOrderChanged = Boolean(root && root.children.some((id, index) => id !== orderedChildren[index]))
+  const document = portalOrderChanged && root
+    ? {
+        ...svg.document,
+        objects: { ...svg.document.objects, [root.id]: { ...root, children: orderedChildren } }
+      }
+    : svg.document
   return {
-    document: svg.document,
+    document,
     addedFrameIds: [...html.addedFrameIds, ...svg.addedFrameIds],
     updatedFrameIds: [...html.updatedFrameIds, ...svg.updatedFrameIds],
     removedFrameIds: [...html.removedFrameIds, ...svg.removedFrameIds]

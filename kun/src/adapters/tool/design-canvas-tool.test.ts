@@ -14,6 +14,7 @@ import {
   DESIGN_VALIDATE_TOOL_NAME
 } from './design-canvas-tool.js'
 import type { ToolHostContext } from '../../ports/tool-host.js'
+import { LocalToolHost } from './local-tool-host.js'
 
 function context(guiDesignCanvas = true): ToolHostContext {
   return {
@@ -97,6 +98,7 @@ describe('dedicated design tools', () => {
     const tool = createDesignSvgCreateTool()
     const designContext = { ...context(true), guiDesignMode: true }
     expect(tool.name).toBe(DESIGN_SVG_CREATE_TOOL_NAME)
+    expect(tool.toolKind).toBe('file_change')
     expect(tool.shouldAdvertise?.(designContext)).toBe(true)
     expect(tool.shouldAdvertise?.(context(true))).toBe(false)
     expect(tool.shouldAdvertise?.({ ...designContext, guiDesignCanvas: undefined })).toBe(false)
@@ -112,12 +114,32 @@ describe('dedicated design tools', () => {
       tool: DESIGN_SVG_CREATE_TOOL_NAME,
       ops: [{
         op: 'add-svg-artifact',
+        artifactId: expect.stringMatching(/^svg-[a-f0-9]{12}$/),
         name: 'Orbit loader',
         brief: 'A compact looping vector loader',
         width: 240,
         height: 160
       }]
     })
+
+    const replay = await tool.execute({
+      name: 'Orbit loader',
+      brief: 'A compact looping vector loader',
+      width: 240,
+      height: 160
+    }, designContext)
+    expect((replay.output as { ops: Array<{ artifactId: string }> }).ops[0]?.artifactId)
+      .toBe((result.output as { ops: Array<{ artifactId: string }> }).ops[0]?.artifactId)
+  })
+
+  it('does not advertise renderer-backed SVG creation in a read-only sandbox', async () => {
+    const host = new LocalToolHost({ tools: [createDesignSvgCreateTool()] })
+    const names = (await host.listTools({
+      ...context(true),
+      guiDesignMode: true,
+      sandboxMode: 'read-only'
+    })).map((tool) => tool.name)
+    expect(names).not.toContain(DESIGN_SVG_CREATE_TOOL_NAME)
   })
 
   it('normalizes design_create_screen calls to screen ops', async () => {

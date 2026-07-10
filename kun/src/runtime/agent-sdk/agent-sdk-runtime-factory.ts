@@ -30,7 +30,11 @@ import {
   memoryInstructions,
   isStalePlanContext
 } from '../../loop/agent-loop.js'
-import { DESIGN_MODE_INSTRUCTION } from '../../loop/design-mode.js'
+import {
+  DESIGN_MODE_INSTRUCTION,
+  SVG_ARTIFACT_ALLOWED_TOOL_NAMES,
+  SVG_ARTIFACT_MODE_INSTRUCTION
+} from '../../loop/design-mode.js'
 import type { GuiDesignArtifactContext, GuiPlanContext } from '../../ports/tool-host.js'
 import type { ThreadRecord } from '../../contracts/threads.js'
 import type {
@@ -285,6 +289,7 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       guiDesignCanvas?: boolean
       guiDesignMode?: boolean
       guiDesignArtifact?: GuiDesignArtifactContext
+      allowedToolNames?: readonly string[]
       sandboxMode?: SandboxMode
       approvalPolicy?: ApprovalPolicy
       signal?: AbortSignal
@@ -305,6 +310,7 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
     ...(opts?.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
     ...(opts?.guiDesignMode ? { guiDesignMode: true } : {}),
     ...(opts?.guiDesignArtifact ? { guiDesignArtifact: opts.guiDesignArtifact } : {}),
+    ...(opts?.allowedToolNames ? { allowedToolNames: opts.allowedToolNames } : {}),
     // Wire interactive input to kun's GUI panel (advertises `user_input`).
     ...(opts?.awaitUserInput ? { awaitUserInput: opts.awaitUserInput } : {}),
     // Execution supplies the real GUI approval callback; listing contexts stay
@@ -364,12 +370,18 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
       // set); resolve before listing tools so the bridge sees create_plan.
       // awaitUserInput presence is what advertises `user_input` (the signal here
       // is only for advertisement; the real per-call signal is set on execution).
-      const plan = resolveTurnPlanContext(thread, turnId)
+      const dedicatedSvgTurn = turn.guiDesignArtifact?.kind === 'svg'
+      const plan = dedicatedSvgTurn
+        ? { planMode: false as const }
+        : resolveTurnPlanContext(thread, turnId)
       const ctx = toolContext(threadId, turnId, thread.workspace, {
         ...plan,
         ...(turn?.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
         ...(turn?.guiDesignMode ? { guiDesignMode: true } : {}),
         ...(turn?.guiDesignArtifact ? { guiDesignArtifact: turn.guiDesignArtifact } : {}),
+        ...(turn?.guiDesignArtifact?.kind === 'svg'
+          ? { allowedToolNames: SVG_ARTIFACT_ALLOWED_TOOL_NAMES }
+          : {}),
         sandboxMode: thread.sandboxMode,
         awaitUserInput: makeAwaitUserInput(threadId, turnId, new AbortController().signal)
       })
@@ -422,7 +434,11 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
 
       const contextInstructions = [
         ...(planMode ? [PLAN_MODE_INSTRUCTION] : []),
-        ...(turn?.guiDesignMode ? [DESIGN_MODE_INSTRUCTION] : []),
+        ...(turn?.guiDesignArtifact?.kind === 'svg'
+          ? [SVG_ARTIFACT_MODE_INSTRUCTION]
+          : turn?.guiDesignMode
+            ? [DESIGN_MODE_INSTRUCTION]
+            : []),
         ...(instructionResolution?.instruction ? [instructionResolution.instruction] : []),
         ...(goalInstruction ? [goalInstruction] : []),
         ...(todoInstruction ? [todoInstruction] : []),
@@ -438,6 +454,9 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
         approvalPolicy: thread.approvalPolicy ?? deps.defaultApprovalPolicy,
         sandboxMode: thread.sandboxMode,
         planMode,
+        ...(turn?.guiDesignArtifact?.kind === 'svg'
+          ? { allowSdkBuiltins: false, requireSvgCompletion: true }
+          : {}),
         // Claude Code only accepts Anthropic models; coerce a thread's non-Claude
         // model (e.g. an old deepseek thread now routed to the subscription) to
         // the runtime default so the turn doesn't fail "model may not exist".
@@ -460,7 +479,9 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
         return { output: 'Kun tool host is unavailable; tool execution was denied', isError: true }
       }
       // Re-resolve plan context so create_plan can write to its reserved path.
-      const plan = resolveTurnPlanContext(thread, turnId)
+      const plan = turn.guiDesignArtifact?.kind === 'svg'
+        ? { planMode: false as const }
+        : resolveTurnPlanContext(thread, turnId)
       const approvalPolicy = thread.approvalPolicy ?? deps.defaultApprovalPolicy
       const sandboxMode = thread.sandboxMode ?? deps.defaultSandboxMode
       const toolSignal = signal ?? new AbortController().signal
@@ -470,6 +491,9 @@ export function createAgentSdkRuntime(deps: AgentSdkRuntimeFactoryDeps): AgentSd
         ...(turn?.guiDesignCanvas ? { guiDesignCanvas: true } : {}),
         ...(turn?.guiDesignMode ? { guiDesignMode: true } : {}),
         ...(turn?.guiDesignArtifact ? { guiDesignArtifact: turn.guiDesignArtifact } : {}),
+        ...(turn?.guiDesignArtifact?.kind === 'svg'
+          ? { allowedToolNames: SVG_ARTIFACT_ALLOWED_TOOL_NAMES }
+          : {}),
         ...(sandboxMode ? { sandboxMode } : {}),
         approvalPolicy,
         signal: toolSignal,

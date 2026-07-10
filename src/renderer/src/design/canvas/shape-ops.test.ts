@@ -3,7 +3,7 @@ import { executeOps } from './shape-ops'
 import { useCanvasShapeStore } from './canvas-shape-store'
 import { useCanvasUndoStore } from './canvas-undo-store'
 import { useCanvasSelectionStore } from './canvas-selection-store'
-import { createEmptyDocument } from './canvas-types'
+import { createDefaultShape, createEmptyDocument, createSvgFrameShape } from './canvas-types'
 
 beforeEach(() => {
   useCanvasShapeStore.getState().loadDocument(createEmptyDocument())
@@ -350,6 +350,54 @@ describe('gradient fills', () => {
 })
 
 describe('group / ungroup ops', () => {
+  it('keeps artifact portals root-level instead of grouping them', () => {
+    const store = useCanvasShapeStore.getState()
+    const svg = createSvgFrameShape('Motion', 0, 0, 'svg-artifact')
+    store.addShape(svg)
+    const added = executeOps([
+      { op: 'add', shape: { type: 'rect', x: 100, y: 100, width: 50, height: 50 } }
+    ])
+
+    const grouped = executeOps([{ op: 'group', ids: [svg.id, added.affectedIds[0]] }])
+
+    expect(grouped.ok).toBe(false)
+    const document = useCanvasShapeStore.getState().document
+    expect(document.objects[svg.id].parentId).toBe(document.rootId)
+    expect(document.objects[document.rootId].children).toContain(svg.id)
+    expect(Object.values(document.objects).some((shape) => shape.type === 'group')).toBe(false)
+  })
+
+  it('rejects direct drag-style reparenting of an artifact portal', () => {
+    const store = useCanvasShapeStore.getState()
+    const svg = createSvgFrameShape('Motion', 0, 0, 'svg-artifact')
+    const group = createDefaultShape('group', 0, 0)
+    store.addShape(svg)
+    store.addShape(group)
+
+    store.reparentShape(svg.id, group.id)
+
+    const document = useCanvasShapeStore.getState().document
+    expect(document.objects[svg.id].parentId).toBe(document.rootId)
+    expect(document.objects[group.id].children).not.toContain(svg.id)
+    expect(document.objects[document.rootId].children).toContain(svg.id)
+  })
+
+  it('reports an invalid ShapeOp when reparenting an artifact portal below root', () => {
+    const store = useCanvasShapeStore.getState()
+    const svg = createSvgFrameShape('Motion', 0, 0, 'svg-artifact')
+    const group = createDefaultShape('group', 0, 0)
+    store.addShape(svg)
+    store.addShape(group)
+
+    const result = executeOps([{ op: 'reparent', id: svg.id, newParentId: group.id }])
+
+    expect(result.ok).toBe(false)
+    expect(result.errors[0]).toMatchObject({ code: 'INVALID_OP' })
+    expect(useCanvasShapeStore.getState().document.objects[svg.id].parentId).toBe(
+      useCanvasShapeStore.getState().document.rootId
+    )
+  })
+
   it('groups shapes, wrapping them in a group sized to their bounds', () => {
     const r1 = executeOps([
       { op: 'add', shape: { type: 'rect', x: 0, y: 0, width: 50, height: 50 } },

@@ -78,6 +78,7 @@ describe('SVG artifact creation protocol', () => {
       ok: true,
       ops: [{
         op: 'add-svg-artifact',
+        artifactId: 'svg-4d2a6b8c0e12',
         name: 'Orbit loader',
         brief: 'Looping vector loader',
         x: 120,
@@ -86,6 +87,7 @@ describe('SVG artifact creation protocol', () => {
         height: 160
       }]
     })).toEqual([{
+      artifactId: 'svg-4d2a6b8c0e12',
       name: 'Orbit loader',
       brief: 'Looping vector loader',
       x: 120,
@@ -97,6 +99,9 @@ describe('SVG artifact creation protocol', () => {
 
   it('ignores malformed or unrelated SVG creation results', () => {
     expect(extractSvgArtifactCreateSpecsFromValue({ ops: [{ op: 'add-svg-artifact', name: '', brief: 'x' }] })).toEqual([])
+    expect(extractSvgArtifactCreateSpecsFromValue({
+      ops: [{ op: 'add-svg-artifact', artifactId: '../escape', name: 'Bad', brief: 'x' }]
+    })).toEqual([{ name: 'Bad', brief: 'x' }])
     expect(extractSvgArtifactCreateSpecsFromValue({ ops: [{ op: 'add-screen', name: 'Home' }] })).toEqual([])
   })
 })

@@ -19,3 +19,29 @@ Execution rules:
 - Prefer the fewest calls that complete the requested visible outcome. Batch related screens in \`design_create_screen.screens\` and related shape operations in one focused \`design_update_shapes.ops\` call; do not split work into one call per shape or invent renderer-local workflow tools.
 - Keep one logical outcome per call, inspect tool results, and correct reported errors before claiming completion.
 - Preserve existing canvas content unless the user asks to replace or delete it.`
+
+/**
+ * Dedicated artifact turns already own a reserved SVG file. Keep them out of
+ * the general Design classifier, which would otherwise tell the model to call
+ * design_svg_create a second time even though that tool is intentionally absent.
+ */
+export const SVG_ARTIFACT_MODE_INSTRUCTION = `You are operating a dedicated Kun SVG artifact turn for one already-reserved file.
+
+- Do not call design_svg_create and do not create another screen, canvas, HTML page, or raster asset.
+- Use only design_svg_inspect, design_svg_edit, design_svg_animate, and design_svg_validate to inspect or mutate the reserved SVG.
+- Start from design_svg_inspect and pass its revision as expectedRevision on edit/animate calls; a fresh revision is mandatory when using structural handles.
+- Complete at least one successful design_svg_edit or design_svg_animate mutation in this turn; inspection or prose alone is not completion.
+- Never use generic write/edit/patch/shell tools to change the SVG source.
+- Preserve safe existing content, use stable element ids or fresh structural handles from inspect, and finish with a successful design_svg_validate result before claiming completion.`
+
+/** Hard execution allow-list for dedicated SVG artifact turns. */
+export const SVG_ARTIFACT_ALLOWED_TOOL_NAMES = [
+  'design_svg_inspect',
+  'design_svg_edit',
+  'design_svg_animate',
+  'design_svg_validate',
+  'get_goal',
+  'update_goal',
+  'todo_list',
+  'todo_write'
+] as const

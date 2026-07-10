@@ -5,37 +5,49 @@ import { LocalToolHost, type LocalTool } from './local-tool-host.js'
 import { resolveWorkspacePath, withToolBoundary } from './builtin-tool-utils.js'
 import { withFileMutationQueue } from './file-mutation-queue.js'
 import { assertCanWritePath } from './sandbox-policy.js'
+import {
+  ALLOWED_SVG_TAGS as ALLOWED_TAGS,
+  SAFE_SVG_ANIMATION_ATTRIBUTES as SAFE_ANIMATION_ATTRIBUTES,
+  SVG_NS,
+  MAX_SVG_ELEMENTS,
+  assertSvgSourceSize,
+  safeSvgAttribute as safeAttribute,
+  safeSvgId as safeId,
+  svgElementName as elementName,
+  svgElements as elements,
+  svgNodes as nodes,
+  svgRoot as rootOf,
+  validateSvgDocument as validateDocument
+} from './design-svg-validation.js'
+import type { SvgDiagnostic } from './design-svg-validation.js'
 import type { ToolHostContext } from '../../ports/tool-host.js'
 
 export const DESIGN_SVG_INSPECT_TOOL_NAME = 'design_svg_inspect'
 export const DESIGN_SVG_EDIT_TOOL_NAME = 'design_svg_edit'
 export const DESIGN_SVG_ANIMATE_TOOL_NAME = 'design_svg_animate'
 export const DESIGN_SVG_VALIDATE_TOOL_NAME = 'design_svg_validate'
+export const DESIGN_SVG_STRUCTURED_TOOL_NAMES = [
+  DESIGN_SVG_INSPECT_TOOL_NAME,
+  DESIGN_SVG_EDIT_TOOL_NAME,
+  DESIGN_SVG_ANIMATE_TOOL_NAME,
+  DESIGN_SVG_VALIDATE_TOOL_NAME
+] as const
 
-const SVG_NS = 'http://www.w3.org/2000/svg'
-const MAX_SOURCE_BYTES = 1_000_000
-const MAX_ELEMENTS = 5_000
+export type DesignSvgMutationToolOptions = {
+  /** Test/integration seam invoked after serialization and before compare-and-write. */
+  beforeCommit?: (path: string) => Promise<void>
+}
+
 const MAX_BATCH_OPS = 200
-
-const ALLOWED_TAGS = new Set([
-  'svg', 'g', 'defs', 'title', 'desc', 'metadata',
-  'path', 'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon',
-  'text', 'tspan', 'textpath', 'lineargradient', 'radialgradient', 'stop',
-  'pattern', 'clippath', 'mask', 'marker', 'symbol', 'use', 'image',
-  'filter', 'feblend', 'fecolormatrix', 'fecomponenttransfer', 'fecomposite',
-  'feconvolvematrix', 'fediffuselighting', 'fedisplacementmap', 'fedistantlight',
-  'fedropshadow', 'feflood', 'fefunca', 'fefuncb', 'fefuncg', 'fefuncr',
-  'fegaussianblur', 'feimage', 'femerge', 'femergenode', 'femorphology',
-  'feoffset', 'fepointlight', 'fespecularlighting', 'fespotlight', 'fetile',
-  'feturbulence', 'animate', 'animatetransform', 'animatemotion', 'mpath', 'set', 'style'
-])
-
-const SAFE_ANIMATION_ATTRIBUTES = new Set([
-  'cx', 'cy', 'r', 'rx', 'ry', 'x', 'y', 'x1', 'x2', 'y1', 'y2',
-  'width', 'height', 'opacity', 'fill', 'fill-opacity', 'stroke', 'stroke-opacity',
-  'stroke-width', 'stroke-dasharray', 'stroke-dashoffset', 'transform', 'd',
-  'points', 'pathlength', 'offset', 'stop-color', 'stop-opacity'
-])
+const MAX_HANDLE_DEPTH = 64
+// Keep inspect results below LocalToolHost's large-output offload threshold so
+// structural handles remain directly available to the model. Larger documents
+// are traversed with offset pagination.
+const MAX_INSPECT_ELEMENTS = 20
+const MAX_INSPECT_ATTRIBUTES = 8
+const MAX_INSPECT_ATTRIBUTE_NAME = 128
+const MAX_INSPECT_ATTRIBUTE_VALUE = 256
+const MAX_RETURNED_DIAGNOSTICS = 100
 
 const CANONICAL_TAGS: Record<string, string> = {
   textpath: 'textPath',
@@ -71,7 +83,6 @@ const CANONICAL_TAGS: Record<string, string> = {
   feturbulence: 'feTurbulence'
 }
 
-type Diagnostic = { severity: 'error' | 'warning'; code: string; message: string; elementId?: string }
 type SvgElementSpec = {
   tag: string
   id?: string
@@ -84,62 +95,102 @@ function advertised(context: ToolHostContext): boolean {
   return context.guiDesignMode === true && context.guiDesignArtifact?.kind === 'svg'
 }
 
-function nodes(list: { length: number; item(index: number): Node | null }): Node[] {
-  const result: Node[] = []
-  for (let index = 0; index < list.length; index += 1) {
-    const item = list.item(index)
-    if (item) result.push(item)
+function elementChildren(parent: Node): Element[] {
+  return nodes(parent.childNodes).filter((node): node is Element => node.nodeType === 1)
+}
+
+/**
+ * Version-local structural handle for elements that do not yet have an id.
+ * Indices count element children only, so formatting whitespace does not make
+ * handles drift. Handles must always come from a fresh inspect result.
+ */
+function handleOf(root: Element, element: Element): string {
+  if (element === root) return '0'
+  const segments: number[] = []
+  let current: Element | null = element
+  while (current && current !== root) {
+    const parent = current.parentNode
+    if (!parent || parent.nodeType !== 1) return ''
+    const siblings = elementChildren(parent)
+    const index = siblings.indexOf(current)
+    if (index < 0) return ''
+    segments.unshift(index)
+    current = parent as Element
   }
-  return result
+  return current === root ? `0/${segments.join('/')}` : ''
 }
 
-function elements(root: Element): Element[] {
-  return [root, ...nodes(root.getElementsByTagName('*')).filter((node): node is Element => node.nodeType === 1)]
+function findByHandle(document: Document, value: unknown): Element | null {
+  if (typeof value !== 'string') return null
+  const handle = value.trim()
+  if (!/^0(?:\/\d+)*$/.test(handle)) return null
+  const segments = handle.split('/').slice(1)
+  if (segments.length > MAX_HANDLE_DEPTH) return null
+  let current = rootOf(document)
+  for (const rawIndex of segments) {
+    const index = Number(rawIndex)
+    if (!Number.isSafeInteger(index)) return null
+    const child = elementChildren(current)[index]
+    if (!child) return null
+    current = child
+  }
+  return current
 }
 
-function elementName(element: Element): string {
-  return (element.localName || element.tagName).toLowerCase()
+function operationElement(
+  document: Document,
+  operation: Record<string, unknown>,
+  role = 'element'
+): Element {
+  const rawId = typeof operation.id === 'string' ? operation.id.trim() : ''
+  const rawHandle = typeof operation.handle === 'string' ? operation.handle.trim() : ''
+  if (rawId && rawHandle) throw new Error(`SVG ${role} must use either id or handle, not both`)
+  const element = rawId
+    ? (safeId(rawId) ? findUniqueById(document, rawId, role) : null)
+    : rawHandle
+      ? findByHandle(document, rawHandle)
+      : null
+  if (!element || element === rootOf(document)) {
+    const reference = rawId || rawHandle || '(missing reference)'
+    throw new Error(`SVG ${role} not found or protected: ${reference}`)
+  }
+  return element
 }
 
-function validViewBox(value: string): boolean {
-  const numbers = value.trim().split(/[\s,]+/).map(Number)
-  return numbers.length === 4 && numbers.every(Number.isFinite) && numbers[2] > 0 && numbers[3] > 0
+function operationParent(
+  document: Document,
+  operation: Record<string, unknown>,
+  fallback?: Element
+): Element {
+  const rawId = typeof operation.parentId === 'string' ? operation.parentId.trim() : ''
+  const rawHandle = typeof operation.parentHandle === 'string' ? operation.parentHandle.trim() : ''
+  if (rawId && rawHandle) throw new Error('SVG parent must use either parentId or parentHandle, not both')
+  const parent = rawId
+    ? (safeId(rawId) ? findUniqueById(document, rawId, 'parent') : null)
+    : rawHandle
+      ? findByHandle(document, rawHandle)
+      : fallback ?? null
+  if (!parent) throw new Error(`SVG parent not found: ${rawId || rawHandle || '(missing reference)'}`)
+  return parent
 }
 
-function rootOf(document: Document): Element {
-  const root = document.documentElement
-  if (!root) throw new Error('SVG document has no root element')
-  return root
+function isDescendantOf(candidate: Element, ancestor: Element): boolean {
+  let current: Node | null = candidate
+  while (current) {
+    if (current === ancestor) return true
+    current = current.parentNode
+  }
+  return false
 }
 
 function findById(document: Document, id: string): Element | null {
   return elements(rootOf(document)).find((element) => element.getAttribute('id') === id) ?? null
 }
 
-function safeId(value: unknown): string | null {
-  if (typeof value !== 'string') return null
-  const id = value.trim()
-  return /^[A-Za-z_][\w:.-]*$/.test(id) ? id : null
-}
-
-function unsafeCss(value: string): boolean {
-  if (/@import|javascript\s*:|(?:https?|file|ftp)\s*:|expression\s*\(|behavior\s*:|-moz-binding/i.test(value)) return true
-  const urls = value.match(/url\(([^)]+)\)/gi) ?? []
-  return urls.some((entry) => {
-    const target = entry.slice(entry.indexOf('(') + 1, -1).trim().replace(/^['"]|['"]$/g, '')
-    return !/^#[A-Za-z_][\w:.-]*$/.test(target) && !/^data:image\/(?:png|jpe?g|gif|webp);base64,/i.test(target)
-  })
-}
-
-function safeAttribute(name: string, value: string): boolean {
-  const normalized = name.toLowerCase()
-  if (!/^[A-Za-z_:][\w:.-]*$/.test(name) || normalized.startsWith('on')) return false
-  if (/javascript\s*:/i.test(value)) return false
-  if (normalized === 'href' || normalized === 'xlink:href' || normalized === 'src') {
-    return /^#[A-Za-z_][\w:.-]*$/.test(value.trim()) ||
-      /^data:image\/(?:png|jpe?g|gif|webp);base64,/i.test(value.trim())
-  }
-  return !((normalized === 'style' || value.includes('url(')) && unsafeCss(value))
+function findUniqueById(document: Document, id: string, role = 'element'): Element | null {
+  const matches = elements(rootOf(document)).filter((element) => element.getAttribute('id') === id)
+  if (matches.length > 1) throw new Error(`SVG ${role} id is ambiguous; inspect and use a structural handle: ${id}`)
+  return matches[0] ?? null
 }
 
 function parseSvg(source: string): { document: Document; errors: string[] } {
@@ -162,74 +213,32 @@ function parseSvg(source: string): { document: Document; errors: string[] } {
   return { document, errors }
 }
 
-function validateDocument(document: Document, parseErrors: readonly string[] = []): Diagnostic[] {
-  const diagnostics: Diagnostic[] = parseErrors.map((message) => ({ severity: 'error', code: 'xml-parse', message }))
-  const root = rootOf(document)
-  const all = elements(root)
-  if (all.length > MAX_ELEMENTS) {
-    diagnostics.push({ severity: 'error', code: 'too-many-elements', message: `SVG exceeds ${MAX_ELEMENTS} elements.` })
-  }
-  const namespace = root.getAttribute('xmlns')
-  if (!namespace) diagnostics.push({ severity: 'warning', code: 'missing-namespace', message: `Add xmlns="${SVG_NS}" for a standalone SVG.` })
-  else if (namespace !== SVG_NS) diagnostics.push({ severity: 'error', code: 'invalid-namespace', message: `SVG xmlns must be ${SVG_NS}.` })
-  const ids = new Set<string>()
-  for (const element of all) {
-    const tag = elementName(element)
-    const id = element.getAttribute('id') || undefined
-    if (!ALLOWED_TAGS.has(tag)) {
-      diagnostics.push({ severity: 'error', code: 'unsafe-element', message: `<${tag}> is not allowed.`, ...(id ? { elementId: id } : {}) })
-    }
-    if (id) {
-      if (!safeId(id)) diagnostics.push({ severity: 'error', code: 'invalid-id', message: `Invalid id "${id}".`, elementId: id })
-      else if (ids.has(id)) diagnostics.push({ severity: 'error', code: 'duplicate-id', message: `Duplicate id "${id}".`, elementId: id })
-      else ids.add(id)
-    }
-    for (const attribute of nodes(element.attributes).filter((node): node is Attr => node.nodeType === 2)) {
-      if (!safeAttribute(attribute.name, attribute.value)) {
-        diagnostics.push({ severity: 'error', code: 'unsafe-attribute', message: `Unsafe ${attribute.name} attribute.`, ...(id ? { elementId: id } : {}) })
-      }
-    }
-    if (tag === 'style' && unsafeCss(element.textContent ?? '')) {
-      diagnostics.push({ severity: 'error', code: 'unsafe-style', message: 'Style blocks cannot load external resources or executable CSS.', ...(id ? { elementId: id } : {}) })
-    }
-    if (tag === 'animate' || tag === 'set') {
-      const attributeName = element.getAttribute('attributeName')?.toLowerCase()
-      if (attributeName && !SAFE_ANIMATION_ATTRIBUTES.has(attributeName)) {
-        diagnostics.push({ severity: 'error', code: 'unsafe-animation-property', message: `Animation property ${attributeName} is not allowed.`, ...(id ? { elementId: id } : {}) })
-      }
-    }
-  }
-  const viewBox = root.getAttribute('viewBox')
-  if (!viewBox) diagnostics.push({ severity: 'warning', code: 'missing-viewbox', message: 'Add a viewBox for responsive scaling.' })
-  else if (!validViewBox(viewBox)) diagnostics.push({ severity: 'error', code: 'invalid-viewbox', message: 'viewBox must contain four finite numbers with positive width and height.' })
-  if (root.getElementsByTagName('title').length === 0) diagnostics.push({ severity: 'warning', code: 'missing-title', message: 'Add an accessible <title>.' })
-  if (root.getElementsByTagName('desc').length === 0) diagnostics.push({ severity: 'warning', code: 'missing-description', message: 'Add an accessible <desc>.' })
-
-  for (const element of all) {
-    for (const attribute of nodes(element.attributes).filter((node): node is Attr => node.nodeType === 2)) {
-      const refs = [...attribute.value.matchAll(/url\(#([A-Za-z_][\w:.-]*)\)/g)].map((match) => match[1])
-      if ((attribute.name === 'href' || attribute.name === 'xlink:href') && attribute.value.startsWith('#')) refs.push(attribute.value.slice(1))
-      for (const reference of refs) {
-        const elementId = element.getAttribute('id') || undefined
-        if (!ids.has(reference)) diagnostics.push({ severity: 'error', code: 'missing-reference', message: `Reference #${reference} does not exist.`, ...(elementId ? { elementId } : {}) })
-      }
-    }
-  }
-  return diagnostics
-}
-
-function attributesOf(element: Element): Record<string, string> {
+function attributesOf(element: Element): { attributes: Record<string, string>; truncated: boolean } {
   const output: Record<string, string> = {}
+  let truncated = false
+  let included = 0
   for (const attribute of nodes(element.attributes).filter((node): node is Attr => node.nodeType === 2)) {
     if (['id', 'xmlns'].includes(attribute.name)) continue
-    output[attribute.name] = attribute.value
+    if (included >= MAX_INSPECT_ATTRIBUTES || attribute.name.length > MAX_INSPECT_ATTRIBUTE_NAME) {
+      truncated = true
+      continue
+    }
+    output[attribute.name] = attribute.value.slice(0, MAX_INSPECT_ATTRIBUTE_VALUE)
+    if (attribute.value.length > MAX_INSPECT_ATTRIBUTE_VALUE) truncated = true
+    included += 1
   }
-  return output
+  return { attributes: output, truncated }
 }
 
-function inspectDocument(document: Document) {
+function inspectDocument(
+  document: Document,
+  page: { offset?: number; limit?: number } = {}
+) {
   const root = rootOf(document)
   const all = elements(root)
+  const offset = page.offset ?? 0
+  const limit = page.limit ?? MAX_INSPECT_ELEMENTS
+  const end = Math.min(all.length, offset + limit)
   const animationTags = new Set(['animate', 'animatetransform', 'animatemotion', 'set'])
   return {
     viewBox: root.getAttribute('viewBox') ?? null,
@@ -237,27 +246,47 @@ function inspectDocument(document: Document) {
     height: root.getAttribute('height') ?? null,
     elementCount: all.length,
     animationCount: all.filter((element) => animationTags.has(elementName(element))).length,
-    elements: all.slice(0, 400).map((element) => ({
-      tag: elementName(element),
-      id: element.getAttribute('id') || null,
-      parentId: element.parentNode?.nodeType === 1 ? (element.parentNode as Element).getAttribute('id') || null : null,
-      attributes: attributesOf(element),
-      ...(element.childNodes.length === 1 && element.firstChild?.nodeType === 3
-        ? { text: element.textContent?.slice(0, 200) ?? '' }
-        : {})
-    })),
-    truncated: all.length > 400
+    offset,
+    limit,
+    elements: all.slice(offset, end).map((element) => {
+      const inspectedAttributes = attributesOf(element)
+      return {
+        tag: elementName(element),
+        id: element.getAttribute('id') || null,
+        handle: handleOf(root, element),
+        parentId: element.parentNode?.nodeType === 1 ? (element.parentNode as Element).getAttribute('id') || null : null,
+        attributes: inspectedAttributes.attributes,
+        ...(inspectedAttributes.truncated ? { attributesTruncated: true } : {}),
+        ...(element.childNodes.length === 1 && element.firstChild?.nodeType === 3
+          ? { text: element.textContent?.slice(0, 200) ?? '' }
+          : {})
+      }
+    }),
+    truncated: offset > 0 || end < all.length,
+    hasMore: end < all.length
   }
 }
 
-function specFrom(value: unknown, depth = 0): SvgElementSpec | null {
-  if (depth > 32 || !value || typeof value !== 'object' || Array.isArray(value)) return null
+function specFrom(
+  value: unknown,
+  depth = 0,
+  state: { count: number } = { count: 0 }
+): SvgElementSpec {
+  if (depth > 32) throw new Error('SVG element nesting exceeds 32 levels')
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid SVG element spec')
+  state.count += 1
+  if (state.count > MAX_SVG_ELEMENTS) throw new Error(`one add operation cannot create more than ${MAX_SVG_ELEMENTS} elements`)
   const record = value as Record<string, unknown>
-  if (typeof record.tag !== 'string') return null
+  if (typeof record.tag !== 'string') throw new Error('SVG element spec requires tag')
+  if (record.id !== undefined && typeof record.id !== 'string') throw new Error('SVG element id must be a string')
+  if (record.text !== undefined && typeof record.text !== 'string') throw new Error('SVG element text must be a string')
+  if (record.attributes !== undefined && (!record.attributes || typeof record.attributes !== 'object' || Array.isArray(record.attributes))) {
+    throw new Error('SVG element attributes must be an object')
+  }
+  if (record.children !== undefined && !Array.isArray(record.children)) throw new Error('SVG element children must be an array')
   const children = Array.isArray(record.children)
-    ? record.children.map((child) => specFrom(child, depth + 1))
+    ? record.children.map((child) => specFrom(child, depth + 1, state))
     : []
-  if (children.some((child) => child === null)) return null
   return {
     tag: record.tag,
     ...(typeof record.id === 'string' ? { id: record.id } : {}),
@@ -266,9 +295,53 @@ function specFrom(value: unknown, depth = 0): SvgElementSpec | null {
       : {}),
     ...(typeof record.text === 'string' ? { text: record.text } : {}),
     ...(Array.isArray(record.children)
-      ? { children: children.filter((item): item is SvgElementSpec => item !== null) }
+      ? { children }
       : {})
   }
+}
+
+type PreparedEditOperation = {
+  operation: Record<string, unknown>
+  element?: Element
+  parent?: Element
+  spec?: SvgElementSpec
+}
+
+function prepareEditOperations(
+  document: Document,
+  operations: readonly Record<string, unknown>[]
+): PreparedEditOperation[] {
+  const addedElements = { count: 0 }
+  return operations.map((operation) => {
+    const op = typeof operation.op === 'string' ? operation.op : ''
+    if (op === 'set-document') return { operation }
+    if (op === 'add') {
+      return {
+        operation,
+        spec: specFrom(operation.element, 0, addedElements),
+        ...(typeof operation.parentHandle === 'string'
+          ? { parent: operationParent(document, operation) }
+          : {})
+      }
+    }
+    return {
+      operation,
+      ...(typeof operation.handle === 'string'
+        ? { element: operationElement(document, operation) }
+        : {}),
+      ...(op === 'reparent' && typeof operation.parentHandle === 'string'
+        ? { parent: operationParent(document, operation) }
+        : {})
+    }
+  })
+}
+
+function requireAttached(document: Document, element: Element, role: string): Element {
+  const root = rootOf(document)
+  if (element !== root && !isDescendantOf(element, root)) {
+    throw new Error(`SVG ${role} is no longer attached after an earlier batch operation`)
+  }
+  return element
 }
 
 function createElement(document: Document, spec: SvgElementSpec): Element {
@@ -283,6 +356,9 @@ function createElement(document: Document, spec: SvgElementSpec): Element {
   }
   for (const [name, rawValue] of Object.entries(spec.attributes ?? {})) {
     if (rawValue === undefined || rawValue === null) continue
+    if (name.toLowerCase() === 'xmlns' || name.toLowerCase().startsWith('xmlns:')) {
+      throw new Error('namespace declarations are only supported by set-document')
+    }
     const value = String(rawValue)
     if (!safeAttribute(name, value)) throw new Error(`unsafe SVG attribute: ${name}`)
     element.setAttribute(name, value)
@@ -292,7 +368,8 @@ function createElement(document: Document, spec: SvgElementSpec): Element {
   return element
 }
 
-function applyEditOperation(document: Document, operation: Record<string, unknown>): string[] {
+function applyEditOperation(document: Document, prepared: PreparedEditOperation): string[] {
+  const { operation } = prepared
   const op = typeof operation.op === 'string' ? operation.op : ''
   if (op === 'set-document') {
     const root = rootOf(document)
@@ -314,29 +391,31 @@ function applyEditOperation(document: Document, operation: Record<string, unknow
     return []
   }
   if (op === 'add') {
-    const spec = specFrom(operation.element)
-    if (!spec) throw new Error('add requires an element spec')
-    const parentId = typeof operation.parentId === 'string' ? operation.parentId : ''
-    const parent = parentId ? findById(document, parentId) : findById(document, 'artwork') ?? rootOf(document)
-    if (!parent) throw new Error(`parent not found: ${parentId}`)
+    const spec = prepared.spec ?? specFrom(operation.element)
+    const parent = requireAttached(
+      document,
+      prepared.parent ?? operationParent(document, operation, findUniqueById(document, 'artwork', 'parent') ?? rootOf(document)),
+      'parent'
+    )
     const element = createElement(document, spec)
     parent.appendChild(element)
     const createdId = element.getAttribute('id') || undefined
     return createdId ? [createdId] : []
   }
-  const id = safeId(operation.id)
-  if (!id) throw new Error(`${op || 'operation'} requires a valid id`)
-  const element = findById(document, id)
-  if (!element || element === rootOf(document)) throw new Error(`SVG element not found or protected: ${id}`)
+  const element = requireAttached(document, prepared.element ?? operationElement(document, operation), 'element')
+  const originalReference = element.getAttribute('id') || handleOf(rootOf(document), element)
   if (op === 'delete') {
     element.parentNode?.removeChild(element)
-    return [id]
+    return [originalReference]
   }
   if (op === 'update') {
     const attrs = operation.attributes && typeof operation.attributes === 'object' && !Array.isArray(operation.attributes)
       ? operation.attributes as Record<string, unknown>
       : {}
     for (const [name, rawValue] of Object.entries(attrs)) {
+      if (name.toLowerCase() === 'xmlns' || name.toLowerCase().startsWith('xmlns:')) {
+        throw new Error('namespace declarations are only supported by set-document')
+      }
       if (rawValue === null) {
         element.removeAttribute(name)
         continue
@@ -346,26 +425,35 @@ function applyEditOperation(document: Document, operation: Record<string, unknow
       element.setAttribute(name, value)
     }
     if (Array.isArray(operation.removeAttributes)) {
-      for (const name of operation.removeAttributes) if (typeof name === 'string') element.removeAttribute(name)
+      for (const name of operation.removeAttributes) {
+        if (typeof name !== 'string' || !/^[A-Za-z_:][\w:.-]*$/.test(name)) {
+          throw new Error(`invalid SVG attribute name: ${String(name)}`)
+        }
+        if (name.toLowerCase() === 'xmlns' || name.toLowerCase().startsWith('xmlns:')) {
+          throw new Error('namespace declarations are only supported by set-document')
+        }
+        element.removeAttribute(name)
+      }
     }
     if (typeof operation.text === 'string') element.textContent = operation.text
-    return [id]
+    return [element.getAttribute('id') || originalReference]
   }
   if (op === 'reparent') {
-    const parentId = safeId(operation.parentId)
-    const parent = parentId ? findById(document, parentId) : null
-    if (!parent) throw new Error(`parent not found: ${String(operation.parentId ?? '')}`)
+    const parent = requireAttached(document, prepared.parent ?? operationParent(document, operation), 'parent')
+    if (parent === element || isDescendantOf(parent, element)) {
+      throw new Error(`cannot reparent ${originalReference} into itself or its descendant`)
+    }
     parent.appendChild(element)
-    return [id]
+    return [element.getAttribute('id') || handleOf(rootOf(document), element)]
   }
   if (op === 'reorder') {
     const parent = element.parentNode
-    if (!parent) throw new Error(`element has no parent: ${id}`)
+    if (!parent) throw new Error(`element has no parent: ${originalReference}`)
     const position = operation.position
     if (position === 'front') parent.appendChild(element)
     else if (position === 'back') parent.insertBefore(element, parent.firstChild)
     else throw new Error('reorder position must be front or back')
-    return [id]
+    return [element.getAttribute('id') || handleOf(rootOf(document), element)]
   }
   throw new Error(`unsupported SVG edit op: ${op}`)
 }
@@ -373,7 +461,7 @@ function applyEditOperation(document: Document, operation: Record<string, unknow
 function animationElement(document: Document, input: Record<string, unknown>): { target: Element; animation: Element; ids: string[] } {
   const targetId = safeId(input.targetId)
   if (!targetId) throw new Error('animation targetId is required')
-  const target = findById(document, targetId)
+    const target = findUniqueById(document, targetId, 'animation target')
   if (!target) throw new Error(`animation target not found: ${targetId}`)
   const requestedId = input.id
   const id = requestedId === undefined ? `anim_${randomBytes(4).toString('hex')}` : safeId(requestedId)
@@ -489,7 +577,12 @@ async function svgFileContext(context: ToolHostContext, write: boolean) {
   if (context.guiDesignMode !== true || !artifact || artifact.kind !== 'svg') {
     throw new Error('SVG tools require an active Design-mode SVG artifact turn')
   }
-  const resolved = await resolveWorkspacePath(artifact.relativePath, context)
+  // GUI-reserved artifacts must stay inside the active workspace even when the
+  // thread otherwise runs with danger-full-access. A planted .kun-design
+  // directory symlink must never redirect this scoped tool to an external file.
+  const resolved = await resolveWorkspacePath(artifact.relativePath, context, {
+    enforceWorkspaceBoundary: true
+  })
   if (!resolved.relativePath.startsWith('.kun-design/') || !/\/v\d+\.svg$/i.test(resolved.relativePath)) {
     throw new Error('SVG artifact path must be a versioned file under .kun-design')
   }
@@ -500,15 +593,17 @@ async function svgFileContext(context: ToolHostContext, write: boolean) {
 async function readSvg(context: ToolHostContext) {
   const file = await svgFileContext(context, false)
   const source = await readFile(file.absolutePath, 'utf8')
-  if (Buffer.byteLength(source, 'utf8') > MAX_SOURCE_BYTES) throw new Error(`SVG exceeds ${MAX_SOURCE_BYTES} bytes`)
+  assertSvgSourceSize(source)
   const parsed = parseSvg(source)
   return { ...file, source, ...parsed }
 }
 
-async function atomicWrite(path: string, content: string): Promise<void> {
+async function atomicWrite(path: string, content: string, signal?: AbortSignal): Promise<void> {
   const temp = `${path}.kun-${process.pid}-${randomBytes(4).toString('hex')}.tmp`
   try {
+    if (signal?.aborted) throw new Error('SVG write aborted before start')
     await writeFile(temp, content, 'utf8')
+    if (signal?.aborted) throw new Error('SVG write aborted before atomic rename')
     await rename(temp, path)
   } finally {
     await unlink(temp).catch(() => undefined)
@@ -519,22 +614,87 @@ function revision(content: string): string {
   return createHash('sha256').update(content).digest('hex').slice(0, 16)
 }
 
+function expectedRevision(value: unknown): string | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || !/^[a-f0-9]{16}$/i.test(value.trim())) {
+    throw new Error('expectedRevision must be the 16-character revision returned by design_svg_inspect')
+  }
+  return value.trim().toLowerCase()
+}
+
+function assertExpectedRevision(source: string, expected: string | undefined): void {
+  if (expected && revision(source) !== expected) {
+    throw new Error('SVG revision conflict: inspect the current artifact and retry against its latest revision')
+  }
+}
+
+async function assertFileUnchanged(path: string, originalSource: string): Promise<void> {
+  const latest = await readFile(path, 'utf8')
+  if (revision(latest) !== revision(originalSource)) {
+    throw new Error('SVG revision conflict: the artifact changed before write; inspect and retry')
+  }
+}
+
 function toolError(error: unknown) {
   return { output: { ok: false, error: error instanceof Error ? error.message : String(error) }, isError: true }
+}
+
+function diagnosticEnvelope(diagnostics: readonly SvgDiagnostic[]) {
+  return {
+    diagnostics: diagnostics.slice(0, MAX_RETURNED_DIAGNOSTICS).map((diagnostic) => ({
+      ...diagnostic,
+      message: diagnostic.message.length > 1_000
+        ? `${diagnostic.message.slice(0, 1_000)}...`
+        : diagnostic.message,
+      ...(diagnostic.elementId
+        ? { elementId: diagnostic.elementId.slice(0, 128) }
+        : {})
+    })),
+    diagnosticCount: diagnostics.length,
+    diagnosticsTruncated: diagnostics.length > MAX_RETURNED_DIAGNOSTICS
+  }
+}
+
+function serializeValidatedSvg(document: Document) {
+  const content = new XMLSerializer().serializeToString(document)
+  assertSvgSourceSize(content)
+  // Validate the exact bytes that will be written. Namespace declarations can
+  // change the namespaceURI seen after a serialize/parse round trip, and only
+  // the reparsed document represents what the renderer will consume.
+  const reparsed = parseSvg(content)
+  const diagnostics = validateDocument(reparsed.document, reparsed.errors)
+  const errors = diagnostics.filter((item) => item.severity === 'error')
+  if (errors.length) {
+    const shown = errors.slice(0, 20).map((item) => item.message.slice(0, 1_000)).join(' ')
+    throw new Error(`${shown}${errors.length > 20 ? ` (${errors.length - 20} more validation errors)` : ''}`)
+  }
+  return { content, diagnostics }
 }
 
 export function createDesignSvgInspectTool(): LocalTool {
   return LocalToolHost.defineTool({
     name: DESIGN_SVG_INSPECT_TOOL_NAME,
     description: 'Inspect the active SVG artifact as a compact element tree with ids, attributes, animations, and validation findings.',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    inputSchema: {
+      type: 'object',
+      properties: {
+        offset: { type: 'integer', minimum: 0, maximum: 5_000 },
+        limit: { type: 'integer', minimum: 1, maximum: MAX_INSPECT_ELEMENTS }
+      },
+      additionalProperties: false
+    },
     toolKind: 'tool_call',
     policy: 'auto',
     shouldAdvertise: advertised,
-    execute: async (_args, context) => withToolBoundary(async () => {
+    execute: async (args, context) => withToolBoundary(async () => {
       try {
+        const offset = args.offset === undefined ? 0 : Number(args.offset)
+        const limit = args.limit === undefined ? MAX_INSPECT_ELEMENTS : Number(args.limit)
+        if (!Number.isInteger(offset) || offset < 0 || offset > 5_000) throw new Error('offset must be an integer from 0 to 5000')
+        if (!Number.isInteger(limit) || limit < 1 || limit > MAX_INSPECT_ELEMENTS) throw new Error(`limit must be an integer from 1 to ${MAX_INSPECT_ELEMENTS}`)
         const current = await readSvg(context)
-        return { output: { ok: true, path: current.relativePath, revision: revision(current.source), ...inspectDocument(current.document), diagnostics: validateDocument(current.document, current.errors) } }
+        const diagnostics = validateDocument(current.document, current.errors)
+        return { output: { ok: true, path: current.relativePath, revision: revision(current.source), ...inspectDocument(current.document, { offset, limit }), ...diagnosticEnvelope(diagnostics) } }
       } catch (error) {
         return toolError(error)
       }
@@ -542,13 +702,17 @@ export function createDesignSvgInspectTool(): LocalTool {
   })
 }
 
-export function createDesignSvgEditTool(): LocalTool {
+export function createDesignSvgEditTool(options: DesignSvgMutationToolOptions = {}): LocalTool {
   return LocalToolHost.defineTool({
     name: DESIGN_SVG_EDIT_TOOL_NAME,
     description: 'Atomically set document geometry or add, update, delete, reparent, and reorder SVG elements in the active SVG artifact. Use stable element ids and batch related edits.',
     inputSchema: {
       type: 'object',
       properties: {
+        expectedRevision: {
+          type: 'string',
+          description: 'Revision returned by design_svg_inspect. Required whenever an op uses handle or parentHandle; recommended for every edit to prevent lost updates.'
+        },
         ops: {
           type: 'array', minItems: 1, maxItems: MAX_BATCH_OPS,
           items: {
@@ -559,8 +723,10 @@ export function createDesignSvgEditTool(): LocalTool {
                 enum: ['set-document', 'add', 'update', 'delete', 'reparent', 'reorder'],
                 description: 'set-document changes viewBox/size; add creates a child; update changes attributes/text; delete removes a subtree; reparent moves an element; reorder moves it to front/back.'
               },
-              id: { type: 'string', description: 'Stable id of an existing element for update/delete/reparent/reorder.' },
+              id: { type: 'string', description: 'Stable id of an existing element for update/delete/reparent/reorder. Use either id or a fresh inspect handle.' },
+              handle: { type: 'string', description: 'Version-local structural handle returned by design_svg_inspect, used to repair an element that has no usable id.' },
               parentId: { type: 'string', description: 'Existing parent id. Add defaults to the #artwork group.' },
+              parentHandle: { type: 'string', description: 'Structural handle returned by a fresh inspect result for an id-less parent.' },
               position: { type: 'string', enum: ['front', 'back'] },
               attributes: {
                 type: 'object',
@@ -605,20 +771,36 @@ export function createDesignSvgEditTool(): LocalTool {
       try {
         const file = await svgFileContext(context, true)
         return await withFileMutationQueue(file.absolutePath, async () => {
+          if (context.abortSignal.aborted) throw new Error('SVG edit aborted before start')
           const current = await readSvg(context)
           if (current.errors.length) throw new Error(`cannot edit invalid SVG: ${current.errors[0]}`)
+          const expected = expectedRevision(args.expectedRevision)
           const ops = Array.isArray(args.ops) ? args.ops : []
           if (ops.length === 0 || ops.length > MAX_BATCH_OPS) throw new Error(`ops must contain 1-${MAX_BATCH_OPS} operations`)
-          const affectedIds = new Set<string>()
+          const operationRecords: Record<string, unknown>[] = []
+          let usesStructuralHandle = false
           for (const value of ops) {
             if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('every SVG op must be an object')
-            for (const id of applyEditOperation(current.document, value as Record<string, unknown>)) affectedIds.add(id)
+            const operation = value as Record<string, unknown>
+            if (typeof operation.handle === 'string' || typeof operation.parentHandle === 'string') usesStructuralHandle = true
+            operationRecords.push(operation)
           }
-          const diagnostics = validateDocument(current.document)
-          const errors = diagnostics.filter((item) => item.severity === 'error')
-          if (errors.length) throw new Error(errors.map((item) => item.message).join(' '))
-          const content = new XMLSerializer().serializeToString(current.document)
-          await atomicWrite(file.absolutePath, content)
+          if (usesStructuralHandle && !expected) {
+            throw new Error('expectedRevision is required when using handle or parentHandle')
+          }
+          assertExpectedRevision(current.source, expected)
+          // Resolve all references against the inspected version before applying
+          // structural changes, so an earlier delete/reorder cannot retarget a
+          // later handle in the same batch.
+          const preparedOperations = prepareEditOperations(current.document, operationRecords)
+          const affectedIds = new Set<string>()
+          for (const prepared of preparedOperations) {
+            for (const id of applyEditOperation(current.document, prepared)) affectedIds.add(id)
+          }
+          const { content, diagnostics } = serializeValidatedSvg(current.document)
+          await options.beforeCommit?.(file.absolutePath)
+          await assertFileUnchanged(file.absolutePath, current.source)
+          await atomicWrite(file.absolutePath, content, context.abortSignal)
           return { output: { ok: true, path: file.relativePath, revision: revision(content), affectedIds: [...affectedIds], diagnostics } }
         })
       } catch (error) {
@@ -628,13 +810,17 @@ export function createDesignSvgEditTool(): LocalTool {
   })
 }
 
-export function createDesignSvgAnimateTool(): LocalTool {
+export function createDesignSvgAnimateTool(options: DesignSvgMutationToolOptions = {}): LocalTool {
   return LocalToolHost.defineTool({
     name: DESIGN_SVG_ANIMATE_TOOL_NAME,
     description: 'Add declarative SVG animations to existing element ids: attribute, transform, motion-path, or path-draw effects. The result remains a standalone animated SVG with no scripts.',
     inputSchema: {
       type: 'object',
       properties: {
+        expectedRevision: {
+          type: 'string',
+          description: 'Optional current artifact revision from design_svg_inspect, used to reject stale animation edits.'
+        },
         animations: {
           type: 'array', minItems: 1, maxItems: 100,
           items: {
@@ -668,20 +854,24 @@ export function createDesignSvgAnimateTool(): LocalTool {
       try {
         const file = await svgFileContext(context, true)
         return await withFileMutationQueue(file.absolutePath, async () => {
+          if (context.abortSignal.aborted) throw new Error('SVG animation edit aborted before start')
           const current = await readSvg(context)
           if (current.errors.length) throw new Error(`cannot animate invalid SVG: ${current.errors[0]}`)
+          assertExpectedRevision(current.source, expectedRevision(args.expectedRevision))
           const inputs = Array.isArray(args.animations) ? args.animations : []
           if (inputs.length === 0 || inputs.length > 100) throw new Error('animations must contain 1-100 entries')
           const affectedIds = new Set<string>()
           for (const value of inputs) {
             if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('every animation must be an object')
-            const input = value as Record<string, unknown>
+            // path-draw is normalized below; clone so tool execution never
+            // mutates the model arguments retained in history/journaling.
+            const input = { ...(value as Record<string, unknown>) }
             if (input.kind === 'path-draw') {
               input.attributeName = 'stroke-dashoffset'
               input.from = input.from ?? 1
               input.to = input.to ?? 0
               const targetId = safeId(input.targetId)
-              const target = targetId ? findById(current.document, targetId) : null
+              const target = targetId ? findUniqueById(current.document, targetId, 'animation target') : null
               if (!target) throw new Error(`animation target not found: ${String(input.targetId ?? '')}`)
               if (elementName(target) !== 'path') throw new Error('path-draw animation requires a <path> target')
               target.setAttribute('pathLength', '1')
@@ -692,11 +882,10 @@ export function createDesignSvgAnimateTool(): LocalTool {
             const created = animationElement(current.document, input)
             for (const id of created.ids) affectedIds.add(id)
           }
-          const diagnostics = validateDocument(current.document)
-          const errors = diagnostics.filter((item) => item.severity === 'error')
-          if (errors.length) throw new Error(errors.map((item) => item.message).join(' '))
-          const content = new XMLSerializer().serializeToString(current.document)
-          await atomicWrite(file.absolutePath, content)
+          const { content, diagnostics } = serializeValidatedSvg(current.document)
+          await options.beforeCommit?.(file.absolutePath)
+          await assertFileUnchanged(file.absolutePath, current.source)
+          await atomicWrite(file.absolutePath, content, context.abortSignal)
           return { output: { ok: true, path: file.relativePath, revision: revision(content), affectedIds: [...affectedIds], diagnostics } }
         })
       } catch (error) {
@@ -718,7 +907,15 @@ export function createDesignSvgValidateTool(): LocalTool {
       try {
         const current = await readSvg(context)
         const diagnostics = validateDocument(current.document, current.errors)
-        return { output: { ok: !diagnostics.some((item) => item.severity === 'error'), path: current.relativePath, revision: revision(current.source), diagnostics, ...inspectDocument(current.document) }, isError: diagnostics.some((item) => item.severity === 'error') }
+        const inspected = inspectDocument(current.document, { limit: 1 })
+        const summary = {
+          viewBox: inspected.viewBox,
+          width: inspected.width,
+          height: inspected.height,
+          elementCount: inspected.elementCount,
+          animationCount: inspected.animationCount
+        }
+        return { output: { ok: !diagnostics.some((item) => item.severity === 'error'), path: current.relativePath, revision: revision(current.source), ...diagnosticEnvelope(diagnostics), ...summary }, isError: diagnostics.some((item) => item.severity === 'error') }
       } catch (error) {
         return toolError(error)
       }

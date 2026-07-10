@@ -11,7 +11,6 @@ import {
   prepareDesignPreviewFile,
   type PrepareDesignPreviewFileResult
 } from '../design-preview-file'
-import { buildSvgArtifactSkeleton } from '../canvas/svg-artifact-lifecycle'
 import type { ResolvedDesignTurnTarget } from './target'
 
 type DesignTurnSetupApi = {
@@ -87,44 +86,19 @@ export async function prepareDesignTurnFiles(
     if (typeof api?.readWorkspaceFile !== 'function' || typeof api.writeWorkspaceFile !== 'function') {
       return { ok: false, phase: 'preview', message: 'SVG workspace file access is unavailable.' }
     }
-    const artifact = options.artifacts.find((item) => item.id === options.resolvedTarget.svgArtifactId)
     const targetPath = options.resolvedTarget.artifactRelativePath
-    let source = ''
-    let previewSource: 'base' | 'skeleton' = 'skeleton'
-    if (options.resolvedTarget.basePath) {
-      const base = await api.readWorkspaceFile({
-        path: options.resolvedTarget.basePath,
-        workspaceRoot: options.workspaceRoot
-      }).catch(() => null)
-      if (base?.ok) {
-        source = base.content
-        previewSource = 'base'
-      }
-    } else {
-      const current = await api.readWorkspaceFile({
-        path: targetPath,
-        workspaceRoot: options.workspaceRoot
-      }).catch(() => null)
-      if (current?.ok) source = current.content
-    }
-    if (!source) {
-      source = buildSvgArtifactSkeleton({
-        title: artifact?.title ?? 'SVG motion',
-        brief: options.promptText,
-        width: artifact?.node?.width ?? 640,
-        height: artifact?.node?.height ?? 480
-      })
-    }
-    const write = await api.writeWorkspaceFile({
+    const prepared = await api.readWorkspaceFile({
       path: targetPath,
-      workspaceRoot: options.workspaceRoot,
-      content: source
-    }).catch((error: unknown): WorkspaceFileWriteResult => ({
-      ok: false,
-      message: error instanceof Error ? error.message : String(error)
-    }))
-    if (!write.ok) {
-      return { ok: false, phase: 'preview', message: `SVG preview setup failed: ${write.message}` }
+      workspaceRoot: options.workspaceRoot
+    }).catch(() => null)
+    if (!prepared?.ok || prepared.truncated) {
+      return {
+        ok: false,
+        phase: 'preview',
+        message: prepared?.ok
+          ? `SVG preview setup failed: ${targetPath} is too large to read safely.`
+          : `SVG preview setup failed: prepared file ${targetPath} is missing.`
+      }
     }
     const notes = await writeDesignNotes({
       api,
@@ -137,7 +111,11 @@ export async function prepareDesignTurnFiles(
     if (!notes.ok) {
       return { ok: false, phase: 'notes', message: `Design notes setup failed: ${notes.message}` }
     }
-    return { ok: true, previewSource, notesWritten: notes.written }
+    return {
+      ok: true,
+      previewSource: options.resolvedTarget.basePath ? 'base' : 'skeleton',
+      notesWritten: notes.written
+    }
   }
   const preview: PrepareDesignPreviewFileResult = await prepareDesignPreviewFile(
     options.workspaceRoot,

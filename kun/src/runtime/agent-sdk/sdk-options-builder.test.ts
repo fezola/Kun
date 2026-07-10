@@ -148,8 +148,10 @@ describe('assembleSdkOptions', () => {
     expect(opts.settingSources).toEqual([])
   })
 
-  test('allowSdkBuiltins:false yields only bridged tools', () => {
+  test('allowSdkBuiltins:false disables the built-in catalog and yields only bridged tools', () => {
     const opts = assembleSdkOptions({ ...base, allowSdkBuiltins: false })
+    expect(opts.tools).toEqual([])
+    expect(opts.strictMcpConfig).toBe(true)
     expect(opts.allowedTools).toEqual(base.bridgedToolModelNames)
   })
 

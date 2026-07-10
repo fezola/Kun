@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { EventEmitter } from 'node:events'
+import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -229,6 +230,65 @@ describe('registerAppIpcHandlers', () => {
         mimeType: 'image/png'
       })).resolves.toEqual({ ok: true, path: target })
       expect(readFileSync(target, 'utf8')).toBe('generated-image')
+    } finally {
+      rmSync(temp, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps workspace watches alive across atomic replacements and releases the sender listener', async () => {
+    const temp = mkdtempSync(join(tmpdir(), 'kun-watch-atomic-'))
+    const target = join(temp, 'motion.svg')
+    writeFileSync(target, '<svg id="one"/>')
+    const sender = Object.assign(new EventEmitter(), {
+      id: 73,
+      send: vi.fn(),
+      isDestroyed: () => false
+    })
+
+    try {
+      registerAppIpcHandlers(registerOptions())
+      const watchHandler = handlers.get('file:watch-workspace')
+      const unwatchHandler = handlers.get('file:unwatch-workspace')
+      const result = await watchHandler?.({ sender }, { path: 'motion.svg', workspaceRoot: temp }) as {
+        ok: boolean
+        watchId?: string
+      }
+      expect(result.ok).toBe(true)
+      expect(result.watchId).toBeTruthy()
+      expect(sender.listenerCount('destroyed')).toBe(1)
+      writeFileSync(join(temp, 'other.svg'), '<svg/>')
+      const secondResult = await watchHandler?.({ sender }, { path: 'other.svg', workspaceRoot: temp }) as {
+        ok: boolean
+        watchId?: string
+      }
+      expect(secondResult.ok).toBe(true)
+      expect(sender.listenerCount('destroyed')).toBe(1)
+
+      const replace = (source: string, content: string): void => {
+        const staged = join(temp, source)
+        writeFileSync(staged, content)
+        renameSync(staged, target)
+      }
+      replace('.motion-first.tmp', '<svg id="two"/>')
+      await vi.waitFor(() => {
+        expect(sender.send).toHaveBeenCalledWith(
+          'file:workspace-changed',
+          expect.objectContaining({ ok: true, content: '<svg id="two"/>' })
+        )
+      }, { timeout: 2_000 })
+
+      replace('.motion-second.tmp', '<svg id="three"/>')
+      await vi.waitFor(() => {
+        expect(sender.send).toHaveBeenCalledWith(
+          'file:workspace-changed',
+          expect.objectContaining({ ok: true, content: '<svg id="three"/>' })
+        )
+      }, { timeout: 2_000 })
+
+      await expect(unwatchHandler?.({}, result.watchId)).resolves.toBe(true)
+      expect(sender.listenerCount('destroyed')).toBe(1)
+      await expect(unwatchHandler?.({}, secondResult.watchId)).resolves.toBe(true)
+      expect(sender.listenerCount('destroyed')).toBe(0)
     } finally {
       rmSync(temp, { recursive: true, force: true })
     }

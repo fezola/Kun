@@ -36,6 +36,7 @@ type ScreenOverlayProps = {
   screenY: number
   screenWidth: number
   screenHeight: number
+  zIndex: number
   zoom: number
   active: boolean
   interactive: boolean
@@ -55,6 +56,7 @@ function ScreenOverlayInner({
   screenY,
   screenWidth,
   screenHeight,
+  zIndex,
   zoom,
   active,
   interactive,
@@ -352,6 +354,7 @@ function ScreenOverlayInner({
         top: screenY,
         width: screenWidth,
         height: screenHeight,
+        zIndex,
         pointerEvents: htmlFrameOverlayPointerEvents({ panning, interactive, editing }),
         borderRadius: frameRadius
       }}

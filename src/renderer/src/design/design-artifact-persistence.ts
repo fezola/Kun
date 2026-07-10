@@ -144,8 +144,83 @@ function versionsWithCurrentPresent(
   return currentIndex < 0 ? [fallback, ...list] : list
 }
 
-/** Parse a persisted meta.json into a DesignArtifact, defaulting from the dir id. */
-export function parseArtifactMeta(raw: string, dirId: string): DesignArtifact | null {
+function svgRootAttribute(source: string, name: string): string | undefined {
+  const root = /<svg\b[^>]*>/i.exec(source)?.[0]
+  if (!root) return undefined
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`\\s${escaped}\\s*=\\s*["']([^"']+)["']`, 'i').exec(root)?.[1]?.trim()
+}
+
+function svgNumericLength(value: string | undefined): number | null {
+  if (!value) return null
+  const match = /^(\d+(?:\.\d+)?)(?:px)?$/i.exec(value.trim())
+  if (!match) return null
+  const parsed = Number(match[1])
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+}
+
+/** Infer a sensible whiteboard frame from a hand-authored SVG without meta.json. */
+export function inferSvgArtifactNode(source: string, index = 0): DesignArtifactNode {
+  const fallback = defaultDesignArtifactNode(index)
+  const viewBox = svgRootAttribute(source, 'viewBox')
+    ?.split(/[\s,]+/)
+    .map(Number)
+  const viewBoxWidth = viewBox?.length === 4 && Number.isFinite(viewBox[2]) && viewBox[2] > 0
+    ? viewBox[2]
+    : null
+  const viewBoxHeight = viewBox?.length === 4 && Number.isFinite(viewBox[3]) && viewBox[3] > 0
+    ? viewBox[3]
+    : null
+  let width = svgNumericLength(svgRootAttribute(source, 'width'))
+  let height = svgNumericLength(svgRootAttribute(source, 'height'))
+  if (width === null && height !== null && viewBoxWidth && viewBoxHeight) {
+    width = height * (viewBoxWidth / viewBoxHeight)
+  }
+  if (height === null && width !== null && viewBoxWidth && viewBoxHeight) {
+    height = width * (viewBoxHeight / viewBoxWidth)
+  }
+  width ??= viewBoxWidth
+  height ??= viewBoxHeight
+  if (width === null || height === null) return fallback
+  return {
+    ...fallback,
+    width: Math.min(4096, Math.max(64, Math.round(width))),
+    height: Math.min(4096, Math.max(64, Math.round(height))),
+    sizeMode: 'manual',
+    viewMode: 'preview'
+  }
+}
+
+function safeArtifactDirectory(artifactDir: string, dirId: string): string | null {
+  const normalized = artifactDir.replace(/\/+$/, '')
+  const segments = normalized.split('/')
+  if (
+    segments[0] !== DESIGN_DIR ||
+    (segments.length !== 2 && segments.length !== 3) ||
+    segments.at(-1) !== dirId ||
+    segments.slice(1).some((segment) =>
+      !segment || segment === '.' || segment === '..' || !/^[A-Za-z0-9._-]+$/.test(segment)
+    )
+  ) {
+    return null
+  }
+  return normalized
+}
+
+function artifactFileInDirectory(
+  relativePath: string,
+  artifactDir: string,
+  kind: DesignArtifact['kind']
+): boolean {
+  if (!relativePath.startsWith(`${artifactDir}/`)) return false
+  const name = relativePath.slice(artifactDir.length + 1)
+  if (!name || name.includes('/') || name.includes('\\')) return false
+  if (kind === 'canvas') return name === 'canvas.json'
+  return kind === 'svg' ? /^v\d+\.svg$/i.test(name) : /^v\d+\.html$/i.test(name)
+}
+
+/** Parse persisted metadata while binding every identity/path to its actual artifact directory. */
+export function parseArtifactMeta(raw: string, dirId: string, actualArtifactDir?: string): DesignArtifact | null {
   let o: Record<string, unknown>
   try {
     o = JSON.parse(raw) as Record<string, unknown>
@@ -154,21 +229,28 @@ export function parseArtifactMeta(raw: string, dirId: string): DesignArtifact | 
   }
   const relativePath = isStr(o.relativePath) ? o.relativePath : ''
   if (!relativePath) return null
-  const id = isStr(o.id) ? o.id : dirId
+  const artifactDir = safeArtifactDirectory(actualArtifactDir ?? artifactDirOf(relativePath), dirId)
+  if (!artifactDir) return null
+  const kind: DesignArtifact['kind'] =
+    o.kind === 'canvas' ? 'canvas' : o.kind === 'svg' ? 'svg' : 'html'
+  if (!artifactFileInDirectory(relativePath, artifactDir, kind)) return null
+  const id = dirId
   const createdAt = isStr(o.createdAt) ? o.createdAt : new Date(0).toISOString()
   const updatedAt = isStr(o.updatedAt) ? o.updatedAt : createdAt
   const versions = Array.isArray(o.versions)
     ? o.versions
         .filter((v): v is Record<string, unknown> => Boolean(v) && typeof v === 'object')
-        .map((v) => ({
-          id: isStr(v.id) ? v.id : id,
-          relativePath: isStr(v.relativePath) ? v.relativePath : relativePath,
-          createdAt: isStr(v.createdAt) ? v.createdAt : createdAt,
-          summary: isStr(v.summary) ? v.summary : ''
-        }))
+        .map((v) => {
+          const versionPath = isStr(v.relativePath) ? v.relativePath : relativePath
+          return {
+            id: versionIdForRelativePath(id, versionPath),
+            relativePath: versionPath,
+            createdAt: isStr(v.createdAt) ? v.createdAt : createdAt,
+            summary: isStr(v.summary) ? v.summary : ''
+          }
+        })
+        .filter((version) => artifactFileInDirectory(version.relativePath, artifactDir, kind))
     : []
-  const kind: DesignArtifact['kind'] =
-    o.kind === 'canvas' ? 'canvas' : o.kind === 'svg' ? 'svg' : 'html'
   const parsedNode = parseNode(
     o.node,
     kind === 'svg' ? { width: 64, height: 64 } : undefined
@@ -190,7 +272,7 @@ export function parseArtifactMeta(raw: string, dirId: string): DesignArtifact | 
     updatedAt,
     versions: normalizedVersions,
     ...(kind !== 'canvas'
-      ? { designMdPath: isStr(o.designMdPath) ? o.designMdPath : artifactDesignMdPathOf(relativePath) }
+      ? { designMdPath: `${artifactDir}/DESIGN.md` }
       : {}),
     ...(previewStatus ? { previewStatus } : {}),
     ...(parsedNode ? { node: parsedNode } : {}),
@@ -208,7 +290,11 @@ export function parseArtifactMeta(raw: string, dirId: string): DesignArtifact | 
  * `artifactDir` is the artifact's full workspace-relative directory (nested:
  * `.kun-design/<docId>/<id>`, or legacy-flat: `.kun-design/<id>`).
  */
-export function reconstructArtifact(artifactDir: string, entries: WorkspaceEntry[]): DesignArtifact | null {
+export function reconstructArtifact(
+  artifactDir: string,
+  entries: WorkspaceEntry[],
+  options?: { svgSource?: string }
+): DesignArtifact | null {
   const normalizedDir = artifactDir.startsWith(`${DESIGN_DIR}/`) ? artifactDir : `${DESIGN_DIR}/${artifactDir}`
   const dirId = normalizedDir.slice(normalizedDir.lastIndexOf('/') + 1)
   const files = entries.filter((e) => e.type === 'file')
@@ -253,7 +339,9 @@ export function reconstructArtifact(artifactDir: string, entries: WorkspaceEntry
     updatedAt: now,
     versions,
     ...(kind !== 'canvas' ? { designMdPath: `${normalizedDir}/DESIGN.md` } : {}),
-    node: defaultDesignArtifactNode(0)
+    node: kind === 'svg' && options?.svgSource
+      ? inferSvgArtifactNode(options.svgSource)
+      : defaultDesignArtifactNode(0)
   }
 }
 
@@ -272,7 +360,16 @@ export function persistArtifactMeta(workspaceRoot: string, artifact: DesignArtif
 /** Fire-and-forget delete of an artifact's whole on-disk dir (keeps disk in sync with the list). */
 export function deleteArtifactDir(workspaceRoot: string, relativePath: string): void {
   if (!workspaceRoot || typeof window.kunGui?.deleteWorkspaceEntry !== 'function') return
+  const dir = artifactDirOf(relativePath)
+  const dirId = dir.slice(dir.lastIndexOf('/') + 1)
+  const safeDir = safeArtifactDirectory(dir, dirId)
+  const validFile = safeDir && (
+    artifactFileInDirectory(relativePath, safeDir, 'canvas') ||
+    artifactFileInDirectory(relativePath, safeDir, 'html') ||
+    artifactFileInDirectory(relativePath, safeDir, 'svg')
+  )
+  if (!safeDir || !validFile) return
   void window.kunGui
-    .deleteWorkspaceEntry({ path: artifactDirOf(relativePath), workspaceRoot })
+    .deleteWorkspaceEntry({ path: safeDir, workspaceRoot })
     .catch(() => undefined)
 }

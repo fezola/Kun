@@ -1,5 +1,9 @@
-export const MAX_SVG_SOURCE_CHARS = 1_000_000
+/** Keep renderer admission aligned with the structured SVG tool's UTF-8 byte cap. */
+export const MAX_SVG_SOURCE_BYTES = 1_000_000
+/** @deprecated Use MAX_SVG_SOURCE_BYTES; retained for source compatibility. */
+export const MAX_SVG_SOURCE_CHARS = MAX_SVG_SOURCE_BYTES
 export const MAX_SVG_ELEMENTS = 5_000
+export const SVG_NAMESPACE = 'http://www.w3.org/2000/svg'
 
 const ALLOWED_ELEMENTS = new Set([
   'svg', 'g', 'defs', 'title', 'desc', 'metadata',
@@ -17,6 +21,12 @@ const ALLOWED_ELEMENTS = new Set([
 ])
 
 const ANIMATION_ELEMENTS = new Set(['animate', 'animatetransform', 'animatemotion', 'set'])
+const VISUAL_ELEMENTS = new Set([
+  'path', 'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon', 'text', 'use', 'image'
+])
+const NON_VISUAL_CONTAINERS = new Set([
+  'defs', 'symbol', 'clippath', 'mask', 'marker', 'pattern', 'filter'
+])
 const SAFE_ANIMATED_ATTRIBUTES = new Set([
   'cx', 'cy', 'r', 'rx', 'ry', 'x', 'y', 'x1', 'x2', 'y1', 'y2',
   'width', 'height', 'opacity', 'fill', 'fill-opacity', 'stroke',
@@ -37,6 +47,7 @@ export type SanitizedSvgDocument = {
   animationCount: number
   visualElementCount: number
   durationMs: number
+  loopsIndefinitely: boolean
   viewBox?: string
 }
 
@@ -55,18 +66,138 @@ function diagnostic(
   return { severity, code, message }
 }
 
-function durationMs(value: string | null): number {
+/** Parse the static subset of SVG/SMIL clock values used for timeline controls. */
+function durationMs(value: string | null): number | null {
   const text = value?.trim().toLowerCase() ?? ''
-  if (!text) return 0
+  if (!text) return null
   const ms = /^([\d.]+)ms$/.exec(text)
-  if (ms) return Number(ms[1]) || 0
+  if (ms) {
+    const value = Number(ms[1])
+    return Number.isFinite(value) ? value : null
+  }
   const seconds = /^([\d.]+)s$/.exec(text)
-  if (seconds) return (Number(seconds[1]) || 0) * 1000
+  if (seconds) {
+    const value = Number(seconds[1]) * 1000
+    return Number.isFinite(value) ? value : null
+  }
+  const minutes = /^([\d.]+)min$/.exec(text)
+  if (minutes) {
+    const value = Number(minutes[1]) * 60_000
+    return Number.isFinite(value) ? value : null
+  }
+  const hours = /^([\d.]+)h$/.exec(text)
+  if (hours) {
+    const value = Number(hours[1]) * 3_600_000
+    return Number.isFinite(value) ? value : null
+  }
   const clock = /^(\d+):(\d{2}):(\d{2}(?:\.\d+)?)$/.exec(text)
   if (clock) {
-    return (Number(clock[1]) * 3600 + Number(clock[2]) * 60 + Number(clock[3])) * 1000
+    const value = (Number(clock[1]) * 3600 + Number(clock[2]) * 60 + Number(clock[3])) * 1000
+    return Number.isFinite(value) ? value : null
   }
-  return 0
+  const partialClock = /^(\d{1,2}):(\d{2}(?:\.\d+)?)$/.exec(text)
+  if (partialClock) {
+    const value = (Number(partialClock[1]) * 60 + Number(partialClock[2])) * 1000
+    return Number.isFinite(value) && Number(partialClock[2]) < 60 ? value : null
+  }
+  return null
+}
+
+export function svgAnimationTiming(attributes: {
+  dur?: string | null
+  begin?: string | null
+  repeatCount?: string | null
+  repeatDur?: string | null
+}): { endMs: number; mayContinue: boolean } {
+  const durationText = attributes.dur?.trim().toLowerCase() ?? ''
+  const simpleDuration = durationMs(durationText)
+  const beginText = attributes.begin?.trim() ?? ''
+  const beginEntries = beginText ? beginText.split(';').map((entry) => entry.trim()).filter(Boolean) : ['0s']
+  const beginTimes = beginEntries.map((entry) => durationMs(entry))
+  // Syncbase/event begins cannot be resolved without running the SVG. Never
+  // hard-stop the whiteboard clock based on an invented one-second duration.
+  const dynamicBegin = beginTimes.some((value) => value === null)
+  if (durationText === 'indefinite' || dynamicBegin) return { endMs: 0, mayContinue: true }
+
+  const repeatDurationText = attributes.repeatDur?.trim().toLowerCase() ?? ''
+  const repeatDuration = repeatDurationText === 'indefinite' ? Infinity : durationMs(repeatDurationText)
+  const repeatText = attributes.repeatCount?.trim().toLowerCase() ?? ''
+  // repeatDur itself is a repetition request; SVG's common `dur="1s"
+  // repeatDur="10s" form repeats for ten seconds even without repeatCount.
+  const repeatCount = repeatText === 'indefinite'
+    ? Infinity
+    : repeatText
+      ? Number(repeatText)
+      : repeatDuration === null ? 1 : Infinity
+  const simple = simpleDuration ?? 0
+  const repeated = Number.isFinite(repeatCount) && repeatCount > 0 ? simple * repeatCount : Infinity
+  const activeDuration = repeatDuration === null ? repeated : Math.min(repeated, repeatDuration)
+  if (!Number.isFinite(activeDuration)) return { endMs: 0, mayContinue: true }
+  const lastBegin = Math.max(0, ...beginTimes.map((value) => Math.max(0, value ?? 0)))
+  return { endMs: lastBegin + activeDuration, mayContinue: false }
+}
+
+function animationTiming(element: Element): { endMs: number; mayContinue: boolean } {
+  return svgAnimationTiming({
+    dur: element.getAttribute('dur'),
+    begin: element.getAttribute('begin'),
+    repeatCount: element.getAttribute('repeatCount'),
+    repeatDur: element.getAttribute('repeatDur')
+  })
+}
+
+export function validSvgRootNamespace(
+  namespaceUri: string | null,
+  prefix: string | null,
+  declaredNamespace: string | null
+): boolean {
+  // srcDoc is subsequently parsed as HTML. Prefixed SVG element names (for
+  // example <s:svg>) are not reliably promoted into SVG elements there, so the
+  // renderer accepts only the standalone unprefixed form it can preserve.
+  if (prefix) return false
+  if (declaredNamespace && declaredNamespace !== SVG_NAMESPACE) return false
+  if (namespaceUri === SVG_NAMESPACE) return true
+  // A plain, unprefixed <svg> without xmlns is repairable by adding the
+  // standalone namespace before serialization. A prefixed/wrong-namespace root
+  // is not: changing its default xmlns attribute does not change namespaceURI.
+  return namespaceUri === null && !prefix
+}
+
+export function isVisualSvgElement(tagName: string, ancestorTagNames: readonly string[]): boolean {
+  return VISUAL_ELEMENTS.has(tagName.toLowerCase()) &&
+    !ancestorTagNames.some((tag) => NON_VISUAL_CONTAINERS.has(tag.toLowerCase()))
+}
+
+function countVisualElements(root: Element): number {
+  return Array.from(root.querySelectorAll('*')).filter((element) => {
+    const ancestors: string[] = []
+    let parent = element.parentElement
+    while (parent && parent !== root) {
+      ancestors.push(parent.localName)
+      parent = parent.parentElement
+    }
+    return isVisualSvgElement(element.localName, ancestors) && !isExplicitlyHiddenSvgElement(element, root)
+  }).length
+}
+
+function isExplicitlyHiddenSvgElement(element: Element, root: Element): boolean {
+  let current: Element | null = element
+  while (current) {
+    const display = current.getAttribute('display')?.trim().toLowerCase()
+    const visibility = current.getAttribute('visibility')?.trim().toLowerCase()
+    const opacity = Number(current.getAttribute('opacity'))
+    const style = current.getAttribute('style')?.replace(/\s+/g, '').toLowerCase() ?? ''
+    if (
+      display === 'none' ||
+      visibility === 'hidden' ||
+      visibility === 'collapse' ||
+      (current.hasAttribute('opacity') && Number.isFinite(opacity) && opacity <= 0) ||
+      /(?:^|;)display:none(?:;|$)|(?:^|;)visibility:(?:hidden|collapse)(?:;|$)|(?:^|;)opacity:(?:0(?:\.0+)?|0%)(?:;|$)/.test(style)
+    ) return true
+    if (current === root) break
+    current = current.parentElement
+  }
+  return false
 }
 
 function validViewBox(value: string): boolean {
@@ -129,10 +260,10 @@ function sanitizeElementAttributes(element: Element, diagnostics: SvgDiagnostic[
 
 export function parseAndSanitizeSvgDocument(raw: string): SvgDocumentResult {
   const diagnostics: SvgDiagnostic[] = []
-  if (raw.length > MAX_SVG_SOURCE_CHARS) {
+  if (new TextEncoder().encode(raw).byteLength > MAX_SVG_SOURCE_BYTES) {
     return {
       ok: false,
-      diagnostics: [diagnostic('error', 'source-too-large', `SVG exceeds ${MAX_SVG_SOURCE_CHARS} characters.`)]
+      diagnostics: [diagnostic('error', 'source-too-large', `SVG exceeds ${MAX_SVG_SOURCE_BYTES} bytes.`)]
     }
   }
   if (typeof DOMParser === 'undefined' || typeof XMLSerializer === 'undefined') {
@@ -156,7 +287,7 @@ export function parseAndSanitizeSvgDocument(raw: string): SvgDocumentResult {
   }
   const root = document.documentElement
   const namespace = root.getAttribute('xmlns')
-  if (namespace && namespace !== 'http://www.w3.org/2000/svg') {
+  if (!validSvgRootNamespace(root.namespaceURI, root.prefix, namespace)) {
     return {
       ok: false,
       diagnostics: [diagnostic('error', 'invalid-namespace', 'SVG root uses an invalid XML namespace.')]
@@ -170,6 +301,12 @@ export function parseAndSanitizeSvgDocument(raw: string): SvgDocumentResult {
     }
   }
   const elements = [root, ...all]
+  if (elements.some((element) => element.prefix)) {
+    return {
+      ok: false,
+      diagnostics: [diagnostic('error', 'prefixed-svg-element', 'SVG artifact elements must not use XML namespace prefixes.')]
+    }
+  }
   for (const element of elements.reverse()) {
     const tag = element.localName.toLowerCase()
     if (!ALLOWED_ELEMENTS.has(tag)) {
@@ -179,7 +316,7 @@ export function parseAndSanitizeSvgDocument(raw: string): SvgDocumentResult {
     }
     sanitizeElementAttributes(element, diagnostics)
   }
-  if (!namespace) root.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+  if (!namespace) root.setAttribute('xmlns', SVG_NAMESPACE)
   const viewBox = root.getAttribute('viewBox')
   if (!viewBox) {
     diagnostics.push(diagnostic('warning', 'missing-viewbox', 'SVG should define a viewBox for responsive scaling.'))
@@ -208,17 +345,13 @@ export function parseAndSanitizeSvgDocument(raw: string): SvgDocumentResult {
   }
 
   const animations = Array.from(root.querySelectorAll('animate, animateTransform, animateMotion, set'))
-  const visualElementCount = root.querySelectorAll(
-    'path, rect, circle, ellipse, line, polyline, polygon, text, use, image'
-  ).length
-  const maxDuration = animations.reduce((max, element) => {
-    const own = durationMs(element.getAttribute('dur'))
-    const begin = durationMs(element.getAttribute('begin'))
-    const repeatText = element.getAttribute('repeatCount')?.trim().toLowerCase() ?? ''
-    const repeat = repeatText && repeatText !== 'indefinite' ? Number(repeatText) : 1
-    const cycles = Number.isFinite(repeat) && repeat > 0 ? Math.min(repeat, 1000) : 1
-    return Math.max(max, own * cycles + begin)
-  }, 0)
+  const visualElementCount = countVisualElements(root)
+  const timing = animations.map(animationTiming)
+  // `loopsIndefinitely` also includes event/syncbase starts whose end cannot
+  // be computed statically. Keeping the clock monotonic is safer than freezing
+  // a valid interactive animation after a guessed finite duration.
+  const loopsIndefinitely = timing.some((item) => item.mayContinue)
+  const maxDuration = timing.reduce((max, item) => Math.max(max, item.endMs), 0)
   root.setAttribute('width', '100%')
   root.setAttribute('height', '100%')
   root.setAttribute('preserveAspectRatio', root.getAttribute('preserveAspectRatio') || 'xMidYMid meet')
@@ -228,7 +361,8 @@ export function parseAndSanitizeSvgDocument(raw: string): SvgDocumentResult {
     diagnostics,
     animationCount: animations.length,
     visualElementCount,
-    durationMs: Math.max(1000, maxDuration || 4000),
+    durationMs: animations.length > 0 ? Math.max(1, maxDuration || 1000) : 4000,
+    loopsIndefinitely,
     ...(viewBox ? { viewBox } : {})
   }
 }

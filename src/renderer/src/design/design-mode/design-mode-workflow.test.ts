@@ -121,4 +121,13 @@ describe('design mode workflow', () => {
       status: 'blocked'
     })
   })
+
+  it('keeps export handoff available for an SVG-only design document', () => {
+    const plan = buildDesignModeWorkflowPlan(manifestPatch({ svgArtifactCount: 1 }))
+
+    expect(plan.steps.find((step) => step.id === 'export-handoff')).toMatchObject({
+      status: 'available',
+      reason: expect.stringContaining('1 SVG artifact(s)')
+    })
+  })
 })

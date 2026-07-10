@@ -227,6 +227,11 @@ type WorkspaceFileWatchRecord = {
   timer: ReturnType<typeof setTimeout> | null
 }
 
+type WorkspaceFileWatchSenderRecord = {
+  sender: WebContents
+  onDestroyed: () => void
+}
+
 type RegisterAppIpcHandlersOptions = {
   store: JsonSettingsStore
   getMainWindow: () => BrowserWindow | null
@@ -448,6 +453,18 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     getMainWindow()?.webContents.send('speech:local-whisper:progress', payload)
   })
   const workspaceFileWatchers = new Map<string, WorkspaceFileWatchRecord>()
+  const workspaceFileWatchSenders = new Map<number, WorkspaceFileWatchSenderRecord>()
+
+  const releaseWorkspaceFileWatchSender = (sender: WebContents): void => {
+    const stillUsed = Array.from(workspaceFileWatchers.values()).some(
+      (record) => record.sender.id === sender.id
+    )
+    if (stillUsed) return
+    const record = workspaceFileWatchSenders.get(sender.id)
+    if (!record) return
+    record.sender.removeListener('destroyed', record.onDestroyed)
+    workspaceFileWatchSenders.delete(sender.id)
+  }
 
   const disposeWorkspaceFileWatch = (watchId: string): boolean => {
     const record = workspaceFileWatchers.get(watchId)
@@ -462,6 +479,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       })
     }
     workspaceFileWatchers.delete(watchId)
+    releaseWorkspaceFileWatchSender(record.sender)
     return true
   }
 
@@ -471,6 +489,16 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
         disposeWorkspaceFileWatch(watchId)
       }
     }
+  }
+
+  const retainWorkspaceFileWatchSender = (sender: WebContents): void => {
+    if (workspaceFileWatchSenders.has(sender.id)) return
+    const onDestroyed = (): void => {
+      workspaceFileWatchSenders.delete(sender.id)
+      disposeWorkspaceFileWatchesForSender(sender)
+    }
+    workspaceFileWatchSenders.set(sender.id, { sender, onDestroyed })
+    sender.once('destroyed', onDestroyed)
   }
 
   const emitWorkspaceFileChange = async (watchId: string): Promise<void> => {
@@ -1402,7 +1430,14 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
 
     const watchId = randomUUID()
     try {
-      const watcher = watch(watchedPath, { persistent: false }, () => {
+      const watchedDirectory = dirname(watchedPath)
+      const watchedName = basename(watchedPath)
+      // Watch the containing directory rather than the file inode. Workspace
+      // writes are atomic (`rename(temp, target)`), which replaces the inode and
+      // permanently detaches a file-level watcher after its first update on
+      // macOS/Linux. The directory remains stable across every replacement.
+      const watcher = watch(watchedDirectory, { persistent: false }, (_eventType, filename) => {
+        if (filename && basename(filename.toString()) !== watchedName) return
         scheduleWorkspaceFileChange(watchId)
       })
       workspaceFileWatchers.set(watchId, {
@@ -1412,7 +1447,28 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
         workspaceRoot: request.workspaceRoot,
         timer: null
       })
-      event.sender.once('destroyed', () => disposeWorkspaceFileWatchesForSender(event.sender))
+      retainWorkspaceFileWatchSender(event.sender)
+      // Close the read → watch race: a file can be atomically replaced after
+      // the first read but before the directory watch starts. Re-read only
+      // after the watch is live, so callers never bootstrap a stale SVG and a
+      // later write is still delivered by the watcher.
+      if (initial.ok) {
+        const refreshed = await readWorkspaceFile(request)
+        if (!refreshed.ok) {
+          disposeWorkspaceFileWatch(watchId)
+          return refreshed
+        }
+        initialContent = refreshed.content
+        initialSize = refreshed.size
+        initialTruncated = refreshed.truncated
+      } else {
+        const refreshed = await readWorkspaceImage(request)
+        if (!refreshed.ok) {
+          disposeWorkspaceFileWatch(watchId)
+          return refreshed
+        }
+        initialSize = refreshed.size
+      }
       return {
         ok: true as const,
         watchId,

@@ -5,7 +5,7 @@ import {
   syncDesignArtifactsToBoardDocument,
   syncSvgFrameNodesToArtifacts
 } from './design-board-svg'
-import { createEmptyDocument, createSvgFrameShape, isSvgFrame } from './canvas/canvas-types'
+import { createDefaultShape, createEmptyDocument, createSvgFrameShape, isSvgFrame } from './canvas/canvas-types'
 import { useCanvasViewportStore } from './canvas/canvas-viewport-store'
 import { useDesignWorkspaceStore } from './design-workspace-store'
 import { artifact, installDesignDocument } from './design-board.test-helpers'
@@ -54,8 +54,52 @@ describe('SVG artifact board synchronization', () => {
       y: 80,
       width: 320,
       height: 240,
+      parentId: synced.document.rootId,
+      frameId: null,
       embeddedArtifact: { id: 'motion', kind: 'svg' }
     })
+  })
+
+  it('repairs legacy nested SVG frames back to the root tree', () => {
+    const motion = artifact('motion', 'svg')
+    const document = createEmptyDocument()
+    const container = createSvgFrameShape('Wrong parent', 0, 0, 'other')
+    delete container.embeddedArtifact
+    container.type = 'group'
+    container.parentId = document.rootId
+    const frame = createSvgFrameShape('Motion', 20, 30, motion.id)
+    frame.parentId = container.id
+    frame.frameId = container.id
+    container.children = [frame.id]
+    document.objects[container.id] = container
+    document.objects[frame.id] = frame
+    document.objects[document.rootId].children = [container.id]
+
+    const synced = syncDesignArtifactsToBoardDocument(document, [motion])
+
+    expect(synced.updatedFrameIds).toContain(frame.id)
+    expect(synced.document.objects[frame.id]).toMatchObject({
+      parentId: synced.document.rootId,
+      frameId: null
+    })
+    expect(synced.document.objects[container.id].children).not.toContain(frame.id)
+    expect(synced.document.objects[synced.document.rootId].children).toContain(frame.id)
+  })
+
+  it('keeps DOM-backed artifact frames in the explicit top portal layer', () => {
+    const motion = artifact('motion', 'svg')
+    const document = createEmptyDocument()
+    const frame = createSvgFrameShape('Motion', 20, 30, motion.id)
+    const rect = createDefaultShape('rect', 20, 30)
+    frame.parentId = document.rootId
+    rect.parentId = document.rootId
+    document.objects[frame.id] = frame
+    document.objects[rect.id] = rect
+    // A regular canvas shape cannot actually paint above an iframe portal.
+    document.objects[document.rootId].children = [frame.id, rect.id]
+
+    const synced = syncDesignArtifactsToBoardDocument(document, [motion])
+    expect(synced.document.objects[synced.document.rootId].children).toEqual([rect.id, frame.id])
   })
 
   it('removes duplicate SVG links and detects deletion of the last linked frame', () => {

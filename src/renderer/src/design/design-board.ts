@@ -421,6 +421,26 @@ export function syncHtmlArtifactsToBoardDocument(
     const defaultDevicePreset = defaultDevicePresetForArtifact(artifact, designTarget)
     if (!existing && artifact.node?.boardHidden) return
     if (existing) {
+      const rootHasFrame = root.children.includes(existing.id)
+      if (existing.parentId !== workingDoc.rootId || !rootHasFrame || existing.frameId !== null) {
+        if (!next) next = cloneDocument(workingDoc)
+        const current = next.objects[existing.id]
+        const currentRoot = next.objects[next.rootId]
+        if (current && currentRoot) {
+          if (current.parentId && current.parentId !== next.rootId && next.objects[current.parentId]) {
+            const oldParent = next.objects[current.parentId]
+            next.objects[current.parentId] = {
+              ...oldParent,
+              children: oldParent.children.filter((childId) => childId !== current.id)
+            }
+          }
+          next.objects[current.id] = { ...current, parentId: next.rootId, frameId: null }
+          if (!currentRoot.children.includes(current.id)) {
+            next.objects[next.rootId] = { ...currentRoot, children: [...currentRoot.children, current.id] }
+          }
+          if (!updatedFrameIds.includes(current.id)) updatedFrameIds.push(current.id)
+        }
+      }
       const patch: Partial<CanvasShape> = {}
       const nextName = artifact.title || existing.name
       if (existing.name !== nextName) patch.name = nextName
@@ -459,7 +479,7 @@ export function syncHtmlArtifactsToBoardDocument(
       if (Object.keys(patch).length > 0) {
         if (!next) next = cloneDocument(workingDoc)
         next.objects[existing.id] = { ...next.objects[existing.id], ...patch }
-        updatedFrameIds.push(existing.id)
+        if (!updatedFrameIds.includes(existing.id)) updatedFrameIds.push(existing.id)
       }
       return
     }
@@ -483,6 +503,7 @@ export function syncHtmlArtifactsToBoardDocument(
     frame.width = rect.width
     frame.height = rect.height
     frame.name = artifact.title || frame.name
+    frame.parentId = next.rootId
     if (customNode) occupiedAutoRects.push({ x: frame.x, y: frame.y, width: frame.width, height: frame.height })
     else placedAutoRects.push({ x: frame.x, y: frame.y, width: frame.width, height: frame.height })
 

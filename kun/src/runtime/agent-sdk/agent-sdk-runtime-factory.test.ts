@@ -151,13 +151,18 @@ describe('createAgentSdkRuntime handlesProvider', () => {
 })
 
 describe('createAgentSdkRuntime turn context', () => {
-  test('exposes Design tools and the Design intent policy only for Design canvas turns', async () => {
-    const listedContexts: Array<{ guiDesignCanvas?: boolean; guiDesignArtifact?: { kind: 'svg'; artifactId: string; relativePath: string } }> = []
-    const executedContexts: Array<{ guiDesignCanvas?: boolean; guiDesignArtifact?: { kind: 'svg'; artifactId: string; relativePath: string } }> = []
+  test('scopes dedicated SVG turns to structured tools and the artifact-specific policy', async () => {
+    type DesignContext = {
+      guiDesignCanvas?: boolean
+      guiDesignArtifact?: { kind: 'svg'; artifactId: string; relativePath: string }
+      allowedToolNames?: readonly string[]
+    }
+    const listedContexts: DesignContext[] = []
+    const executedContexts: DesignContext[] = []
     const designTurn = {
       id: 'tn',
-      prompt: '做一个登录页',
-      guiDesignCanvas: true,
+      prompt: '制作轨道动画',
+      mode: 'plan',
       guiDesignMode: true,
       guiDesignArtifact: {
         kind: 'svg',
@@ -167,13 +172,15 @@ describe('createAgentSdkRuntime turn context', () => {
     } as ThreadRecord['turns'][number]
     const runtime = createAgentSdkRuntime({
       registry: {
-        listTools: (context: { guiDesignCanvas?: boolean; guiDesignArtifact?: { kind: 'svg'; artifactId: string; relativePath: string } }) => {
+        listTools: (context: DesignContext) => {
           listedContexts.push(context)
-          return context.guiDesignCanvas
-            ? [{ name: 'design_create_screen', description: 'Create screens', inputSchema: {} }]
-            : []
+          return [
+            { name: 'write', description: 'Raw write', inputSchema: {} },
+            { name: 'design_svg_edit', description: 'Edit SVG', inputSchema: {} },
+            { name: 'design_svg_validate', description: 'Validate SVG', inputSchema: {} }
+          ].filter((tool) => !context.allowedToolNames || context.allowedToolNames.includes(tool.name))
         },
-        resolveTool: (_name: string, context: { guiDesignCanvas?: boolean; guiDesignArtifact?: { kind: 'svg'; artifactId: string; relativePath: string } }) => ({
+        resolveTool: (_name: string, context: DesignContext) => ({
           tool: {
             execute: async () => {
               executedContexts.push(context)
@@ -185,7 +192,7 @@ describe('createAgentSdkRuntime turn context', () => {
       toolHost: {
         id: 'test-host',
         listTools: async () => [],
-        execute: async (_call: unknown, context: { guiDesignCanvas?: boolean; guiDesignArtifact?: { kind: 'svg'; artifactId: string; relativePath: string } }) => {
+        execute: async (_call: unknown, context: DesignContext) => {
           executedContexts.push(context)
           return { item: { kind: 'tool_result', output: { ok: true } }, approved: true }
         }
@@ -199,7 +206,7 @@ describe('createAgentSdkRuntime turn context', () => {
           kind: 'user_message',
           role: 'user',
           status: 'completed',
-          text: '做一个登录页',
+          text: '制作轨道动画',
           createdAt: '2026-07-10T00:00:00.000Z'
         }]
       } as never,
@@ -222,6 +229,9 @@ describe('createAgentSdkRuntime turn context', () => {
         loadTurnContext(threadId: string, turnId: string): Promise<{
           contextInstructions?: string[]
           bridgeableTools: Array<{ name: string }>
+          allowSdkBuiltins?: boolean
+          requireSvgCompletion?: boolean
+          planMode?: boolean
         } | null>
         executeKunTool(
           threadId: string,
@@ -233,20 +243,26 @@ describe('createAgentSdkRuntime turn context', () => {
     }).deps
 
     const context = await deps.loadTurnContext('th', 'tn')
-    await deps.executeKunTool('th', 'tn', 'design_create_screen', { name: 'Login' })
+    await deps.executeKunTool('th', 'tn', 'design_svg_edit', { ops: [] })
 
     expect(listedContexts).toEqual([expect.objectContaining({
-      guiDesignCanvas: true,
-      guiDesignArtifact: { kind: 'svg', artifactId: 'motion', relativePath: '.kun-design/doc/motion/v1.svg' }
+      guiDesignArtifact: { kind: 'svg', artifactId: 'motion', relativePath: '.kun-design/doc/motion/v1.svg' },
+      allowedToolNames: expect.arrayContaining(['design_svg_edit', 'design_svg_validate'])
     })])
     expect(executedContexts).toEqual([expect.objectContaining({
-      guiDesignCanvas: true,
-      guiDesignArtifact: { kind: 'svg', artifactId: 'motion', relativePath: '.kun-design/doc/motion/v1.svg' }
+      guiDesignArtifact: { kind: 'svg', artifactId: 'motion', relativePath: '.kun-design/doc/motion/v1.svg' },
+      allowedToolNames: expect.arrayContaining(['design_svg_edit', 'design_svg_validate'])
     })])
-    expect(context?.bridgeableTools.map((tool) => tool.name)).toContain('design_create_screen')
-    expect(context?.contextInstructions?.join('\n')).toContain('SINGLE SCREEN')
-    expect(context?.contextInstructions?.join('\n')).toContain('COMPLETE MULTI-SCREEN EXPERIENCE')
+    expect(context?.bridgeableTools.map((tool) => tool.name)).toEqual(['design_svg_edit', 'design_svg_validate'])
+    expect(context).toMatchObject({
+      allowSdkBuiltins: false,
+      requireSvgCompletion: true,
+      planMode: false
+    })
+    expect(context?.contextInstructions?.join('\n')).toContain('already-reserved file')
+    expect(context?.contextInstructions?.join('\n')).not.toContain('SINGLE SCREEN')
   })
+
 
   test('does not fall back to the process workspace when a thread or turn has disappeared', async () => {
     const runtime = createAgentSdkRuntime({

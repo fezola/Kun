@@ -107,7 +107,7 @@ describe('prepareDesignTurnFiles', () => {
     }))
   })
 
-  it('copies the previous SVG version and writes its design notes before the SVG turn', async () => {
+  it('verifies the already-reserved SVG version and writes its design notes before the SVG turn', async () => {
     const baseSvg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 240"><title>Orbit</title><desc>Loader</desc><g id="artwork" /></svg>'
     const api = {
       readWorkspaceFile: vi.fn(async ({ path }: { path: string }) => ({
@@ -136,9 +136,11 @@ describe('prepareDesignTurnFiles', () => {
     })
 
     expect(result).toEqual({ ok: true, previewSource: 'base', notesWritten: true })
-    expect(api.writeWorkspaceFile).toHaveBeenCalledWith(expect.objectContaining({
-      path: '.kun-design/doc/orbit/v2.svg',
-      content: baseSvg
+    expect(api.readWorkspaceFile).toHaveBeenCalledWith(expect.objectContaining({
+      path: '.kun-design/doc/orbit/v2.svg'
+    }))
+    expect(api.writeWorkspaceFile).not.toHaveBeenCalledWith(expect.objectContaining({
+      path: '.kun-design/doc/orbit/v2.svg'
     }))
     expect(api.writeWorkspaceFile).toHaveBeenCalledWith(expect.objectContaining({
       path: '.kun-design/doc/orbit/DESIGN.md',

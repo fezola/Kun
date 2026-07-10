@@ -202,6 +202,10 @@ export function assembleSdkOptions(params: AssembleSdkOptionsParams): SdkQueryOp
   const options: SdkQueryOptions = {
     cwd: params.cwd,
     systemPrompt: buildClaudeSystemPrompt(params.kunSystemPrompt, params.threadPersona),
+    // `allowedTools` is an auto-approval list, not an availability boundary.
+    // Dedicated artifact turns need `tools: []` so Claude Code cannot expose
+    // native Read/Write/Edit/Bash alongside the structured kun MCP tools.
+    ...(params.allowSdkBuiltins === false ? { tools: [], strictMcpConfig: true } : {}),
     allowedTools,
     disallowedTools: [...DEFAULT_SDK_DISALLOWED_TOOLS],
     permissionMode: mapApprovalPolicyToPermissionMode(

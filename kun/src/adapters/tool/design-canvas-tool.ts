@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { LocalToolHost, type LocalTool } from './local-tool-host.js'
 
 export const DESIGN_CANVAS_TOOL_NAME = 'design_canvas'
@@ -69,7 +70,10 @@ export function createDesignSvgCreateTool(): LocalTool {
       'Use this for vector logos, icons, loaders, illustrations, path animation, and reusable animated assets; do not use it for HTML product screens or raster imagery.',
       'After this call the renderer reserves and selects the SVG artifact, then starts a dedicated SVG turn with structured edit and animation tools.'
     ].join(' '),
-    toolKind: 'tool_call',
+    // The renderer reserves an SVG file when it applies this result. Model the
+    // operation as a file mutation so read-only/external sandboxes cannot expose
+    // a tool whose GUI-side continuation would violate the turn policy.
+    toolKind: 'file_change',
     policy: 'auto',
     shouldAdvertise: (context) => context.guiDesignCanvas === true && context.guiDesignMode === true,
     inputSchema: {
@@ -85,7 +89,7 @@ export function createDesignSvgCreateTool(): LocalTool {
       required: ['name', 'brief'],
       additionalProperties: false
     },
-    execute: async (args) => {
+    execute: async (args, context) => {
       const name = stringArg(args.name)
       const brief = stringArg(args.brief)
       if (!name || !brief) return designToolError('design_svg_create requires name and brief')
@@ -97,8 +101,16 @@ export function createDesignSvgCreateTool(): LocalTool {
       if (height !== undefined && (height < 64 || height > 4096)) {
         return designToolError('design_svg_create height must be between 64 and 4096')
       }
+      // Stable across SSE replay, renderer remounts, and app restarts. The
+      // renderer uses this id as the durable exactly-once key for artifact
+      // reservation instead of inventing a new random directory on each replay.
+      const artifactId = `svg-${createHash('sha256')
+        .update(`${context.threadId}\0${context.turnId}\0${name}\0${brief}`)
+        .digest('hex')
+        .slice(0, 12)}`
       return designToolOutput(DESIGN_SVG_CREATE_TOOL_NAME, 'create_svg', [{
         op: 'add-svg-artifact',
+        artifactId,
         name,
         brief,
         ...(finiteNumber(args.x) !== undefined ? { x: finiteNumber(args.x) } : {}),

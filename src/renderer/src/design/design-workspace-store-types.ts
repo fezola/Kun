@@ -155,7 +155,15 @@ export type DesignWorkspaceState = {
       height?: number
       title?: string
     }
-  ) => { artifactId: string; relativePath: string; basePath?: string; designMdPath: string }
+  ) => Promise<{
+    artifactId: string
+    relativePath: string
+    basePath?: string
+    designMdPath: string
+    newlyCreated: boolean
+    versionCreated: boolean
+    rollbackPreparedVersion?: () => Promise<void>
+  }>
   setAiRailCollapsed: (collapsed: boolean) => void
   setCanvasAssistantOpen: (open: boolean) => void
   toggleCanvasAssistantOpen: () => void

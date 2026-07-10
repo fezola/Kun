@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { InMemoryEventBus } from '../adapters/in-memory-event-bus.js'
 import { InMemorySessionStore } from '../adapters/in-memory-session-store.js'
 import { InMemoryThreadStore } from '../adapters/in-memory-thread-store.js'
-import { LocalToolHost, echoTool } from '../adapters/tool/local-tool-host.js'
+import { LocalToolHost, echoTool, type LocalTool } from '../adapters/tool/local-tool-host.js'
 import { createImmutablePrefix } from '../cache/immutable-prefix.js'
 import { emptyUsageSnapshot } from '../contracts/usage.js'
 import { createThreadRecord } from '../domain/thread.js'
@@ -17,6 +17,7 @@ import {
   isStalePlanContext,
   resolvePlanModeToolSpecs,
   shouldInjectInitialRuntimeContext,
+  svgArtifactCompletionState,
   turnHasUnverifiedSourceChanges
 } from './agent-loop.js'
 import { SequentialIdGenerator } from '../ports/id-generator.js'
@@ -80,6 +81,7 @@ class AbortAwareModel implements ModelClient {
       })
     }
     this.abortObserved = request.abortSignal.aborted
+    for (const chunk of [] as ModelStreamChunk[]) yield chunk
   }
 
   waitForStreamStart(): Promise<void> {
@@ -115,6 +117,109 @@ class CapturingCompleteModel implements ModelClient {
     yield { kind: 'assistant_text_delta', text: 'Done.' }
     yield { kind: 'completed', stopReason: 'stop' }
   }
+}
+
+type SvgModelAction = 'stop' | 'edit' | 'validate'
+
+class ScriptedSvgModel implements ModelClient {
+  readonly provider = 'test'
+  readonly model = 'scripted-svg-model'
+  readonly requests: ModelRequest[] = []
+  private index = 0
+
+  constructor(private readonly actions: readonly SvgModelAction[]) {}
+
+  async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+    this.requests.push(request)
+    const action = this.actions[this.index] ?? 'stop'
+    this.index += 1
+    if (action !== 'stop') {
+      yield {
+        kind: 'tool_call_complete',
+        callId: `${action}_${this.index}`,
+        toolName: action === 'edit' ? 'design_svg_edit' : 'design_svg_validate',
+        arguments: { attempt: this.index }
+      }
+      yield { kind: 'completed', stopReason: 'tool_calls' }
+      return
+    }
+    yield { kind: 'assistant_text_delta', text: 'Done.' }
+    yield { kind: 'completed', stopReason: 'stop' }
+  }
+}
+
+function svgGateTool(
+  name: 'design_svg_edit' | 'design_svg_validate' | 'write',
+  result: { output: unknown; isError?: boolean }
+): LocalTool {
+  return LocalToolHost.defineTool({
+    name,
+    description: name,
+    inputSchema: { type: 'object', additionalProperties: true },
+    toolKind: name === 'design_svg_validate' ? 'tool_call' : 'file_change',
+    policy: 'auto',
+    shouldAdvertise: (context) => context.guiDesignArtifact?.kind === 'svg',
+    execute: async () => result
+  })
+}
+
+async function svgLoopHarness(input: {
+  model: ModelClient
+  tools: LocalTool[]
+  skillRuntime?: ConstructorParameters<typeof AgentLoop>[0]['skillRuntime']
+}) {
+  const sessionStore = new InMemorySessionStore()
+  const threadStore = new InMemoryThreadStore()
+  const eventBus = new InMemoryEventBus()
+  const inflight = new InflightTracker()
+  const steering = new SteeringQueue()
+  const ids = new SequentialIdGenerator()
+  const nowIso = () => '2026-07-10T00:00:00.000Z'
+  const events = new RuntimeEventRecorder({
+    eventBus, sessionStore, allocateSeq: (id) => eventBus.allocateSeq(id), nowIso
+  })
+  const turns = new TurnService({
+    threadStore, sessionStore, events, inflight, steering, compactor: new ContextCompactor(), ids, nowIso
+  })
+  const loop = new AgentLoop({
+    threadStore,
+    sessionStore,
+    approvalGate: new AllowApprovalGate(),
+    userInputGate: new NoopUserInputGate(),
+    model: input.model,
+    toolHost: new LocalToolHost({ tools: input.tools }),
+    usage: new UsageService(),
+    events,
+    turns,
+    inflight,
+    steering,
+    compactor: new ContextCompactor(),
+    prefix: createImmutablePrefix({ systemPrompt: 'test system prompt' }),
+    ids,
+    nowIso,
+    ...(input.skillRuntime ? { skillRuntime: input.skillRuntime } : {})
+  })
+  const threadId = 'thr_svg_gate'
+  await threadStore.upsert(createThreadRecord({
+    id: threadId,
+    title: 'SVG gate',
+    workspace: '/tmp/workspace',
+    model: input.model.model,
+    mode: 'plan'
+  }))
+  const started = await turns.startTurn({
+    threadId,
+    request: {
+      prompt: 'make the reserved svg',
+      model: input.model.model,
+      guiDesignCanvas: true,
+      guiDesignMode: true,
+      guiDesignArtifact: {
+        kind: 'svg', artifactId: 'motion', relativePath: '.kun-design/doc/motion/v1.svg'
+      }
+    }
+  })
+  return { loop, sessionStore, threadId, turnId: started.turnId }
 }
 
 describe('AgentLoop interruption', () => {
@@ -183,6 +288,59 @@ describe('AgentLoop interruption', () => {
     expect(model.requests[0]?.modeInstruction).toContain('SINGLE SCREEN')
     expect(model.requests[0]?.modeInstruction).toContain('COMPLETE MULTI-SCREEN EXPERIENCE')
     expect(model.requests[0]?.modeInstruction).toContain('MODIFY EXISTING DESIGN')
+  })
+
+  it('recovers a dedicated SVG turn until mutation and matching validation succeed', async () => {
+    const model = new ScriptedSvgModel(['stop', 'edit', 'stop', 'validate', 'stop'])
+    const harness = await svgLoopHarness({
+      model,
+      tools: [
+        svgGateTool('design_svg_edit', { output: { ok: true, revision: 'rev_1' } }),
+        svgGateTool('design_svg_validate', { output: { ok: true, revision: 'rev_1' } }),
+        svgGateTool('write', { output: { ok: true } })
+      ],
+      skillRuntime: {
+        resolveTurn: async () => ({
+          activeSkillIds: ['unrelated-restricted-skill'],
+          activations: [],
+          instructions: [],
+          injectedBytes: 0,
+          allowedToolNames: ['read']
+        })
+      } as never
+    })
+
+    await expect(harness.loop.runTurn(harness.threadId, harness.turnId)).resolves.toBe('completed')
+    expect(model.requests).toHaveLength(5)
+    expect(model.requests[0].modeInstruction).toContain('dedicated Kun SVG artifact turn')
+    expect(model.requests[0].modeInstruction).not.toContain('PLAN MODE')
+    expect(model.requests[0].tools.map((tool) => tool.name)).toEqual([
+      'design_svg_edit', 'design_svg_validate'
+    ])
+    expect(model.requests[2].requiredToolName).toBe('design_svg_validate')
+    const items = await harness.sessionStore.loadItems(harness.threadId)
+    expect(items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'error', code: 'required_svg_mutation_missing' }),
+      expect.objectContaining({ kind: 'error', code: 'required_svg_validation_missing' })
+    ]))
+  })
+
+  it('fails after three structured SVG calls make no completion progress', async () => {
+    const model = new ScriptedSvgModel(['edit', 'edit', 'edit', 'stop'])
+    const harness = await svgLoopHarness({
+      model,
+      tools: [
+        svgGateTool('design_svg_edit', { output: { ok: false, error: 'bad edit' }, isError: true }),
+        svgGateTool('design_svg_validate', { output: { ok: true, revision: 'unused' } })
+      ]
+    })
+
+    await expect(harness.loop.runTurn(harness.threadId, harness.turnId)).resolves.toBe('failed')
+    expect(model.requests).toHaveLength(3)
+    const items = await harness.sessionStore.loadItems(harness.threadId)
+    expect(items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'error', code: 'svg_completion_gate_exhausted' })
+    ]))
   })
 
   it('aborts an in-flight model stream when the turn service interrupts the turn', async () => {
@@ -329,6 +487,57 @@ function result(input: {
     createdAt: '2000-01-02T03:04:05.000Z'
   }
 }
+
+function svgResult(
+  id: string,
+  toolName: 'design_svg_edit' | 'design_svg_animate' | 'design_svg_validate',
+  revision: string,
+  options: { isError?: boolean; ok?: boolean; turnId?: string } = {}
+) {
+  return {
+    id,
+    threadId: 'thread_1',
+    turnId: options.turnId ?? 'turn_1',
+    role: 'tool' as const,
+    kind: 'tool_result' as const,
+    toolName,
+    callId: `call_${id}`,
+    toolKind: toolName === 'design_svg_validate' ? 'tool_call' as const : 'file_change' as const,
+    output: { ok: options.ok ?? true, revision },
+    isError: options.isError ?? false,
+    status: 'completed' as const,
+    createdAt: '2000-01-02T03:04:05.000Z'
+  }
+}
+
+describe('svgArtifactCompletionState', () => {
+  it('requires a successful mutation followed by matching-revision validation', () => {
+    expect(svgArtifactCompletionState([
+      svgResult('edit', 'design_svg_edit', 'r1'),
+      svgResult('validate', 'design_svg_validate', 'r1')
+    ], 'turn_1')).toMatchObject({
+      mutationSucceeded: true,
+      validationAfterMutation: true,
+      mutationRevision: 'r1',
+      validationRevision: 'r1'
+    })
+  })
+
+  it('rejects validation before mutation, stale revisions, failed results, and other turns', () => {
+    expect(svgArtifactCompletionState([
+      svgResult('before', 'design_svg_validate', 'r0'),
+      svgResult('failed', 'design_svg_edit', 'r1', { isError: true }),
+      svgResult('other', 'design_svg_edit', 'r2', { turnId: 'turn_2' }),
+      svgResult('edit', 'design_svg_animate', 'r2'),
+      svgResult('stale', 'design_svg_validate', 'r1')
+    ], 'turn_1')).toMatchObject({
+      mutationSucceeded: true,
+      validationAfterMutation: false,
+      mutationRevision: 'r2',
+      validationRevision: 'r1'
+    })
+  })
+})
 
 describe('turnHasUnverifiedSourceChanges', () => {
   it('flags an unverified source edit so the optional nudge can appear', () => {

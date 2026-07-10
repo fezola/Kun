@@ -45,17 +45,18 @@ export type ResolvedDesignTurnTarget = {
   selectedFrame?: CanvasShape
   htmlFrameContext?: DesignFrameContext
   canvasSnapshot?: CanvasSnapshot
+  rollbackPreparedVersion?: () => Promise<void>
 }
 
-function resolveSvgArtifactTarget(
+async function resolveSvgArtifactTarget(
   options: ResolveDesignTurnTargetOptions,
   artifactId: string
-): ResolvedDesignTurnTarget | null {
+): Promise<ResolvedDesignTurnTarget | null> {
   const artifact = options.workspaceState.artifacts.find(
     (item) => item.id === artifactId && item.kind === 'svg'
   )
   if (!artifact || !options.workspaceState.prepareSvgTurn) return null
-  const prep = options.workspaceState.prepareSvgTurn(options.promptText, {
+  const prep = await options.workspaceState.prepareSvgTurn(options.promptText, {
     artifactId: artifact.id,
     forceNew: false,
     activate: false,
@@ -67,6 +68,7 @@ function resolveSvgArtifactTarget(
     basePath: prep.basePath,
     svgArtifactId: prep.artifactId,
     designNotesPath: prep.designMdPath,
+    ...(prep.rollbackPreparedVersion ? { rollbackPreparedVersion: prep.rollbackPreparedVersion } : {}),
     visibleTargets: resolveVisibleTargets(options),
     targetAutoRepairKey: designAutoRepairArtifactKey(artifact.id),
     nextIntentMode: 'modify'
@@ -200,9 +202,9 @@ function resolveHtmlArtifactTarget(
   }
 }
 
-export function resolveDesignTurnTarget(options: ResolveDesignTurnTargetOptions): ResolvedDesignTurnTarget {
+export async function resolveDesignTurnTarget(options: ResolveDesignTurnTargetOptions): Promise<ResolvedDesignTurnTarget> {
   if (options.explicitSvgArtifactId) {
-    const svgTarget = resolveSvgArtifactTarget(options, options.explicitSvgArtifactId)
+    const svgTarget = await resolveSvgArtifactTarget(options, options.explicitSvgArtifactId)
     if (svgTarget) return svgTarget
   }
   const visibleTargets = resolveVisibleTargets(options)
@@ -214,7 +216,7 @@ export function resolveDesignTurnTarget(options: ResolveDesignTurnTargetOptions)
     return resolveHtmlArtifactTarget(options, primaryTarget)
   }
   if (primaryTarget?.kind === 'svg-artifact' || primaryTarget?.kind === 'svg-artifact-frame') {
-    const svgTarget = resolveSvgArtifactTarget(options, primaryTarget.artifact.id)
+    const svgTarget = await resolveSvgArtifactTarget(options, primaryTarget.artifact.id)
     if (svgTarget) return svgTarget
   }
   const selectedIds = primaryTarget?.kind === 'canvas-selection'

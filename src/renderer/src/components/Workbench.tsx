@@ -610,9 +610,9 @@ export function Workbench(): ReactElement {
             const screenPrompt = brief?.trim() || userPrompt || 'Design this screen'
             sendDesignPrompt(screenPrompt, { screenShapeId: shapeId })
           },
-          onSvgCreated: (artifactId, shapeId, userPrompt, brief) => {
+          onSvgCreated: async (artifactId, shapeId, userPrompt, brief) => {
             selectCanvasShape(shapeId)
-            sendDesignPrompt(brief || userPrompt || 'Create this SVG motion design', {
+            return sendDesignPrompt(brief || userPrompt || 'Create this SVG motion design', {
               svgArtifactId: artifactId
             })
           },

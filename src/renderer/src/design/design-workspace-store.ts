@@ -343,6 +343,12 @@ export const useDesignWorkspaceStore = create<DesignWorkspaceState>((set, get) =
     },
 
     setArtifactPreviewStatus: (artifactId, status) => {
+      const currentArtifact = get().artifacts.find((item) => item.id === artifactId)
+      if (
+        !currentArtifact ||
+        !isFileDesignArtifactKind(currentArtifact.kind) ||
+        currentArtifact.previewStatus === status
+      ) return
       let changedAny = false
       set((state) =>
         applyToActiveDoc(state, (artifacts) =>

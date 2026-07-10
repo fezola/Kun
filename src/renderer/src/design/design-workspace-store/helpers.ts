@@ -3,6 +3,7 @@ import { readBrowserStorageItem } from '../../lib/browser-storage'
 import {
   artifactDesignMdPathOf,
   deleteArtifactDir,
+  inferSvgArtifactNode,
   parseArtifactMeta,
   reconstructArtifact,
   serializeArtifactMeta
@@ -91,6 +92,18 @@ function sortArtifacts(items: DesignArtifact[]): DesignArtifact[] {
     .map((item, index) => ({ ...item, node: item.node ?? defaultDesignArtifactNode(index) }))
 }
 
+async function inferMissingSvgNode(
+  artifact: DesignArtifact,
+  workspaceRoot: string,
+  api: NonNullable<typeof window.kunGui>
+): Promise<DesignArtifact> {
+  if (artifact.kind !== 'svg' || artifact.node) return artifact
+  const svgRead = await api.readWorkspaceFile({ path: artifact.relativePath, workspaceRoot }).catch(() => null)
+  return svgRead?.ok && !svgRead.truncated
+    ? { ...artifact, node: inferSvgArtifactNode(svgRead.content) }
+    : artifact
+}
+
 /** Load one artifact from its on-disk dir (meta.json sidecar, else reconstruct). */
 async function loadArtifactDir(
   workspaceRoot: string,
@@ -103,11 +116,21 @@ async function loadArtifactDir(
   }
   const metaRead = await api.readWorkspaceFile({ path: `${artifactDir}/meta.json`, workspaceRoot }).catch(() => null)
   if (metaRead && metaRead.ok) {
-    const parsed = parseArtifactMeta(metaRead.content, artifactId)
-    if (parsed) return parsed
+    const parsed = parseArtifactMeta(metaRead.content, artifactId, artifactDir)
+    if (parsed) return inferMissingSvgNode(parsed, workspaceRoot, api)
   }
   const sub = await api.listWorkspaceDirectory({ path: artifactDir, workspaceRoot }).catch(() => null)
-  if (sub && sub.ok) return reconstructArtifact(artifactDir, sub.entries)
+  if (sub && sub.ok) {
+    const reconstructed = reconstructArtifact(artifactDir, sub.entries)
+    if (reconstructed?.kind !== 'svg') return reconstructed
+    const svgRead = await api.readWorkspaceFile({
+      path: reconstructed.relativePath,
+      workspaceRoot
+    }).catch(() => null)
+    return svgRead?.ok && !svgRead.truncated
+      ? { ...reconstructed, node: inferSvgArtifactNode(svgRead.content) }
+      : reconstructed
+  }
   return null
 }
 
@@ -202,7 +225,10 @@ async function migrateLegacyToDefaultDoc(
     if (!sub || !sub.ok) continue
     let artifact: DesignArtifact | null = null
     const metaRead = await api.readWorkspaceFile({ path: `${dir}/meta.json`, workspaceRoot }).catch(() => null)
-    if (metaRead && metaRead.ok) artifact = parseArtifactMeta(metaRead.content, entry.name)
+    if (metaRead && metaRead.ok) {
+      const parsed = parseArtifactMeta(metaRead.content, entry.name, dir)
+      artifact = parsed ? await inferMissingSvgNode(parsed, workspaceRoot, api) : null
+    }
     if (!artifact) artifact = reconstructArtifact(dir, sub.entries)
     if (artifact) legacy.push({ artifact, entries: sub.entries })
   }

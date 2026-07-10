@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { DesignArtifact, DesignDocument } from '../../design/design-types'
 import {
+  getDesignSidebarArtifactVersionBadge,
   getDesignSidebarDocumentArtifactCount,
   getDesignSidebarDocumentLabel,
   getDesignSidebarDocumentScreenCount,
@@ -57,6 +58,28 @@ describe('DesignSidebar helpers', () => {
   it('keeps visible SVG artifacts in the sidebar artifact list', () => {
     const svg = artifact('motion-logo', 'svg')
     expect(getDesignSidebarVisibleArtifacts([svg])).toEqual([svg])
+  })
+
+  it('shows the current sparse SVG version number instead of the history length', () => {
+    const svg = artifact('motion-logo', 'svg', {
+      relativePath: '.kun-design/motion-logo/v3.svg',
+      versions: [
+        {
+          id: 'motion-logo-v3',
+          relativePath: '.kun-design/motion-logo/v3.svg',
+          createdAt: '2026-06-20T03:00:00.000Z',
+          summary: 'Latest'
+        },
+        {
+          id: 'motion-logo-v1',
+          relativePath: '.kun-design/motion-logo/v1.svg',
+          createdAt: '2026-06-20T00:00:00.000Z',
+          summary: 'Initial'
+        }
+      ]
+    })
+
+    expect(getDesignSidebarArtifactVersionBadge(svg)).toBe('v3')
   })
 
   it('uses the document ID as the sidebar label', () => {

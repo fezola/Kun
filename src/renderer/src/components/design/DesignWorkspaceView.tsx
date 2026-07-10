@@ -15,7 +15,12 @@ type Props = {
   onOpenAgentSettings?: () => void
   onImplementDesign?: (artifact: DesignArtifact) => void
   onScreenCreated?: (shapeId: string, userPrompt: string, brief?: string) => void
-  onSvgCreated?: (artifactId: string, shapeId: string, userPrompt: string, brief: string) => void
+  onSvgCreated?: (
+    artifactId: string,
+    shapeId: string,
+    userPrompt: string,
+    brief: string
+  ) => boolean | Promise<boolean>
   onUseElementAsContext?: (context: DesignHtmlElementContext | null, promptSeed?: string) => void
   onRuntimeQualityFindings?: (payload: DesignRuntimeQualityPayload) => void
   onRequestQualityRepair?: (payload: DesignRuntimeQualityPayload) => void

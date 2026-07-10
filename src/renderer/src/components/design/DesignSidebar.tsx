@@ -22,7 +22,14 @@ import { useTranslation } from 'react-i18next'
 import type { SettingsRouteSection } from '../../store/chat-store'
 import { WorkspaceModeTabs } from '../chat/WorkspaceModeTabs'
 import { useDesignWorkspaceStore } from '../../design/design-workspace-store'
-import { isFileDesignArtifactKind, type DesignArtifact, type DesignDocument } from '../../design/design-types'
+import {
+  currentDesignArtifactVersion,
+  designArtifactVersionLabel,
+  designArtifactVersionNumber,
+  isFileDesignArtifactKind,
+  type DesignArtifact,
+  type DesignDocument
+} from '../../design/design-types'
 import { collectAgentDrawingArtifactIds, groupDesignArtifacts } from '../../design/design-artifact-actions'
 import { findDesignBoardArtifact } from '../../design/design-board'
 import { useCanvasShapeStore } from '../../design/canvas/canvas-shape-store'
@@ -61,6 +68,13 @@ export function getDesignSidebarDocumentArtifactCount(doc: Pick<DesignDocument, 
 
 export function getDesignSidebarDocumentLabel(doc: Pick<DesignDocument, 'id'>): string {
   return doc.id
+}
+
+export function getDesignSidebarArtifactVersionBadge(artifact: DesignArtifact): string | null {
+  const current = currentDesignArtifactVersion(artifact)
+  const versionNumber = current ? designArtifactVersionNumber(current) : null
+  if ((versionNumber ?? artifact.versions.length) <= 1 && artifact.versions.length <= 1) return null
+  return designArtifactVersionLabel(current, Math.max(1, artifact.versions.length))
 }
 
 /**
@@ -267,6 +281,7 @@ export function DesignSidebar({
       {items.map((artifact) => {
         const active = artifact.id === activeArtifactId || artifact.id === selectedEmbeddedArtifactId
         const status = renderArtifactStatus(artifact)
+        const versionBadge = getDesignSidebarArtifactVersionBadge(artifact)
         return (
           <li key={artifact.id}>
             {editingId === artifact.id ? (
@@ -295,8 +310,8 @@ export function DesignSidebar({
                 buttonClassName="items-center gap-2 px-2.5 py-2"
                 trailing={
                   <>
-                    {artifact.versions.length > 1 ? (
-                      <span className="text-[11.5px] text-ds-faint">v{artifact.versions.length}</span>
+                    {versionBadge ? (
+                      <span className="text-[11.5px] text-ds-faint">{versionBadge}</span>
                     ) : null}
                     {status}
                   </>
@@ -337,6 +352,7 @@ export function DesignSidebar({
           {items.map((artifact) => {
             const active = artifact.id === activeArtifactId || artifact.id === selectedHtmlArtifactId
             const status = renderArtifactStatus(artifact)
+            const versionBadge = getDesignSidebarArtifactVersionBadge(artifact)
             return (
               <li key={artifact.id}>
                 {editingId === artifact.id ? (
@@ -363,8 +379,8 @@ export function DesignSidebar({
                     buttonClassName="items-center gap-2 px-2.5 py-2"
                     trailing={
                       <>
-                        {artifact.versions.length > 1 ? (
-                          <span className="text-[11.5px] text-ds-faint">v{artifact.versions.length}</span>
+                        {versionBadge ? (
+                          <span className="text-[11.5px] text-ds-faint">{versionBadge}</span>
                         ) : null}
                         {status}
                       </>
