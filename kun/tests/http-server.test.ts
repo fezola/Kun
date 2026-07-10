@@ -1089,6 +1089,22 @@ describe('HTTP server', () => {
     expect(events.filter((event) => event.kind === 'user_input_resolved')).toHaveLength(2)
   })
 
+  it('rejects answers that do not match pending user input questions', async () => {
+    const h = buildHarness()
+    const pending = h.userInputGate.request({
+      id: 'in_validate', threadId: 'thr_1', turnId: 'turn_1', itemId: 'item_in_validate', prompt: 'Pick',
+      questions: [{ header: 'Pick', id: 'choice', question: 'Choose', options: [{ label: 'Yes', description: '' }], selectionMode: 'single' }]
+    })
+    const invalid = await dispatchRequest(h.router, new Request('http://localhost/v1/user-inputs/in_validate', {
+      method: 'POST', headers: { authorization: 'Bearer tok-1', 'content-type': 'application/json' },
+      body: JSON.stringify({ answers: [{ id: 'choice', label: 'No', value: 'no' }] })
+    }))
+    expect(invalid.status).toBe(400)
+    expect(h.userInputGate.get('in_validate')).toBeDefined()
+    h.userInputGate.resolve('in_validate', { status: 'cancelled' })
+    await expect(pending).resolves.toEqual({ status: 'cancelled' })
+  })
+
   it('forks a thread with copied history and lineage metadata', async () => {
     const h = buildHarness()
     await h.threadService.create(
