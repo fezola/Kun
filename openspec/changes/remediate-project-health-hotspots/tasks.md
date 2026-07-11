@@ -62,7 +62,7 @@
 - [x] 6.1 Capture graph order, branching, retries, approval, cancellation, timeout,
   schedule, hook, and single-node execution transcripts.
 - [x] 6.2 Extract graph planner and validated execution plan types.
-- [ ] 6.3 Extract run coordinator and terminal-state/cancellation ownership.
+- [x] 6.3 Extract run coordinator and terminal-state/cancellation ownership.
 - [ ] 6.4 Introduce a typed node executor registry and move AI, HTTP, condition,
   transform, delay, and integration node families behind adapters.
 - [ ] 6.5 Extract workflow scheduler and live-status projection.

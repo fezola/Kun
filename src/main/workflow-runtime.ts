@@ -45,6 +45,7 @@ import {
 } from './schedule-runtime-helpers'
 import { resolveCodexOAuthApiKey } from './codex-auth'
 import { createWorkflowExecutionPlan, selectWorkflowTrigger } from './workflow-graph-planner'
+import { WorkflowRunCoordinator } from './workflow-run-coordinator'
 
 const MAX_NODE_EXECUTIONS = 200
 const MAX_RUN_DURATION_MS = 30 * 60_000
@@ -928,20 +929,10 @@ function summarizeWorkflowForAgent(workflow: WorkflowV1): string {
 export class WorkflowRuntime {
   private readonly deps: ScheduleRuntimeDeps
   private scheduler: ReturnType<typeof setInterval> | null = null
-  private runningWorkflowIds = new Set<string>()
-  private cancelRequested = new Set<string>()
+  private readonly runCoordinator = new WorkflowRunCoordinator()
   /** Recursion guard: true while a hook-triggered workflow is running, so its own
    * tool calls (via AI-agent nodes) don't re-trigger hooks and loop forever. */
   private hookRunActive = false
-  /** token -> paused human-approval node awaiting a decision. */
-  private pendingApprovals = new Map<
-    string,
-    { entry: WorkflowPendingApprovalV1; resolve: (decision: WorkflowApprovalDecision) => void }
-  >()
-  /** workflowId -> nodeId -> live status, surfaced to the canvas via status(). */
-  private liveNodeStatus = new Map<string, Map<string, WorkflowNodeRunStatus>>()
-  /** workflowId -> nodeId -> latest per-node result (input/output/timing), surfaced live during a run. */
-  private liveNodeResults = new Map<string, Map<string, WorkflowNodeRunResultV1>>()
   private powerSaveBlockerId: number | null = null
   private webhookServer: Server | null = null
   private webhookServerKey = ''
@@ -1187,7 +1178,7 @@ export class WorkflowRuntime {
     input: unknown,
     workspaceOverride?: string
   ): Promise<{ ok: boolean; status: WorkflowRunStatus; message: string; output: string; runId: string }> {
-    if (this.runningWorkflowIds.has(workflow.id)) {
+    if (this.runCoordinator.isRunning(workflow.id)) {
       return { ok: false, status: 'error', message: 'Workflow is already running.', output: '', runId: '' }
     }
     // Prefer an enabled trigger (manual > schedule > webhook); fall back to any trigger.
@@ -1222,36 +1213,19 @@ export class WorkflowRuntime {
   }
 
   async status(): Promise<WorkflowRuntimeStatus> {
-    const nodeStatus: Record<string, Record<string, WorkflowNodeRunStatus>> = {}
-    for (const [workflowId, map] of this.liveNodeStatus) {
-      nodeStatus[workflowId] = Object.fromEntries(map)
-    }
-    const nodeResults: Record<string, Record<string, WorkflowNodeRunResultV1>> = {}
-    for (const [workflowId, map] of this.liveNodeResults) {
-      nodeResults[workflowId] = Object.fromEntries(map)
-    }
-    return {
-      runningWorkflowIds: [...this.runningWorkflowIds],
-      nodeStatus,
-      nodeResults,
-      powerSaveBlockerActive: this.isPowerSaveBlockerActive(),
-      pendingApprovals: [...this.pendingApprovals.values()].map((pending) => pending.entry)
-    }
+    return this.runCoordinator.status(this.isPowerSaveBlockerActive())
   }
 
   /** Resolve a paused human-approval node. Returns false if the token is unknown (e.g. already decided). */
   resolveApproval(token: string, decision: WorkflowApprovalDecision): boolean {
-    const pending = this.pendingApprovals.get(token)
-    if (!pending) return false
-    pending.resolve(decision)
-    return true
+    return this.runCoordinator.resolveApproval(token, decision)
   }
 
   async runWorkflow(workflowId: string, input?: unknown): Promise<WorkflowRunResult> {
     const settings = await this.deps.store.load()
     const workflow = settings.workflow.workflows.find((item) => item.id === workflowId)
     if (!workflow) return { ok: false, message: 'Workflow not found.' }
-    if (this.runningWorkflowIds.has(workflowId)) return { ok: false, message: 'Workflow is already running.' }
+    if (this.runCoordinator.isRunning(workflowId)) return { ok: false, message: 'Workflow is already running.' }
     const trigger = selectWorkflowTrigger(workflow)
     if (!trigger) return { ok: false, message: 'Workflow has no trigger node.' }
     const inputSchema = trigger.type === 'manual-trigger' ? trigger.config.inputSchema : undefined
@@ -1265,12 +1239,7 @@ export class WorkflowRuntime {
   }
 
   async stopWorkflow(workflowId: string): Promise<WorkflowRunResult> {
-    if (!this.runningWorkflowIds.has(workflowId)) return { ok: false, message: 'Workflow is not running.' }
-    this.cancelRequested.add(workflowId)
-    // Unblock any human-approval node paused in this run so it can wind down.
-    for (const pending of this.pendingApprovals.values()) {
-      if (pending.entry.workflowId === workflowId) pending.resolve('rejected')
-    }
+    if (!this.runCoordinator.requestCancel(workflowId)) return { ok: false, message: 'Workflow is not running.' }
     return { ok: true, runId: '', status: 'running', message: 'Stopping' }
   }
 
@@ -1282,15 +1251,14 @@ export class WorkflowRuntime {
     if (!node) return { ok: false, message: 'Node not found.' }
     const runId = randomUUID()
     void (async () => {
-      const live = new Map<string, WorkflowNodeRunStatus>([[nodeId, 'running']])
-      this.liveNodeStatus.set(workflowId, live)
+      const live = this.runCoordinator.beginSingleNode(workflowId, nodeId)
       try {
         await this.executeNode(node, { json: {}, text: '' }, settings, undefined, 0, resolveRunWorkspace(workflow, settings))
         live.set(nodeId, 'success')
       } catch {
         live.set(nodeId, 'error')
       } finally {
-        setTimeout(() => this.liveNodeStatus.delete(workflowId), LIVE_STATUS_LINGER_MS)
+        this.runCoordinator.finishSingleNode(workflowId, LIVE_STATUS_LINGER_MS)
       }
     })()
     return { ok: true, runId, status: 'running', message: 'Started' }
@@ -1387,7 +1355,7 @@ export class WorkflowRuntime {
     const fresh = await this.deps.store.load()
     const now = Date.now()
     for (const workflow of fresh.workflow.workflows) {
-      if (!workflow.enabled || this.runningWorkflowIds.has(workflow.id)) continue
+      if (!workflow.enabled || this.runCoordinator.isRunning(workflow.id)) continue
       const trigger = activeScheduleTriggers(workflow)[0]
       if (!trigger) continue
       const dueAt = Date.parse(workflow.nextRunAt)
@@ -1404,9 +1372,9 @@ export class WorkflowRuntime {
     let changed = false
     const now = new Date()
     const workflows = settings.workflow.workflows.map((workflow) => {
-      const wasInterrupted = workflow.lastStatus === 'running' && !this.runningWorkflowIds.has(workflow.id)
+      const wasInterrupted = workflow.lastStatus === 'running' && !this.runCoordinator.isRunning(workflow.id)
       const scheduled = workflowHasScheduleTrigger(workflow)
-      if (!workflow.enabled || !scheduled || this.runningWorkflowIds.has(workflow.id)) {
+      if (!workflow.enabled || !scheduled || this.runCoordinator.isRunning(workflow.id)) {
         if (!wasInterrupted) return workflow
         changed = true
         return {
@@ -1452,17 +1420,12 @@ export class WorkflowRuntime {
   }
 
   private setLive(workflowId: string, nodeId: string, status: WorkflowNodeRunStatus): void {
-    const map = this.liveNodeStatus.get(workflowId) ?? new Map<string, WorkflowNodeRunStatus>()
-    map.set(nodeId, status)
-    this.liveNodeStatus.set(workflowId, map)
+    this.runCoordinator.setLive(workflowId, nodeId, status)
   }
 
   /** Surface a per-node result (input/output/timing) live so the editor can show run logs as it runs. */
   private setLiveResult(workflowId: string | undefined, result: WorkflowNodeRunResultV1): void {
-    if (!workflowId) return
-    const map = this.liveNodeResults.get(workflowId) ?? new Map<string, WorkflowNodeRunResultV1>()
-    map.set(result.nodeId, result)
-    this.liveNodeResults.set(workflowId, map)
+    this.runCoordinator.setLiveResult(workflowId, result)
   }
 
   private async runWorkflowInternal(
@@ -1473,16 +1436,10 @@ export class WorkflowRuntime {
     initialPayload: WorkflowPayload = { json: {}, text: '' },
     workspaceOverride?: string
   ): Promise<WorkflowRunResult> {
-    if (this.runningWorkflowIds.has(workflow.id)) {
+    if (this.runCoordinator.isRunning(workflow.id)) {
       return { ok: false, message: 'Workflow is already running.' }
     }
-    this.runningWorkflowIds.add(workflow.id)
-    this.cancelRequested.delete(workflow.id)
-
-    const liveStatus = new Map<string, WorkflowNodeRunStatus>()
-    workflow.nodes.forEach((node) => liveStatus.set(node.id, 'pending'))
-    this.liveNodeStatus.set(workflow.id, liveStatus)
-    this.liveNodeResults.set(workflow.id, new Map())
+    this.runCoordinator.begin(workflow.id, workflow.nodes.map((node) => node.id))
 
     const startedAt = new Date()
     const run: WorkflowRunV1 = {
@@ -1538,15 +1495,7 @@ export class WorkflowRuntime {
             : entry
         )
       }))
-      this.runningWorkflowIds.delete(workflow.id)
-      this.cancelRequested.delete(workflow.id)
-      for (const [token, pending] of this.pendingApprovals) {
-        if (pending.entry.runId === runId) this.pendingApprovals.delete(token)
-      }
-      setTimeout(() => {
-        this.liveNodeStatus.delete(workflow.id)
-        this.liveNodeResults.delete(workflow.id)
-      }, LIVE_STATUS_LINGER_MS)
+      this.runCoordinator.finish(workflow.id, runId, LIVE_STATUS_LINGER_MS)
     }
     return { ok: runStatus !== 'error', runId, status: runStatus, message: runMessage }
   }
@@ -1592,7 +1541,7 @@ export class WorkflowRuntime {
     const setLive = (nodeId: string, status: WorkflowNodeRunStatus): void => {
       if (ctx.statusWorkflowId) this.setLive(ctx.statusWorkflowId, nodeId, status)
     }
-    const isCanceled = (): boolean => (ctx.cancelId ? this.cancelRequested.has(ctx.cancelId) : false)
+    const isCanceled = (): boolean => this.runCoordinator.isCanceled(ctx.cancelId)
 
     const planned = createWorkflowExecutionPlan(workflow, triggerNodeId)
     if (!planned.ok) {
@@ -2243,18 +2192,11 @@ export class WorkflowRuntime {
           instruction: redactSecrets(approvalSecrets, interpolate(node.config.instruction, payload, scope)),
           createdAt: new Date().toISOString()
         }
-        const decision = await new Promise<WorkflowApprovalDecision>((resolve) => {
-          let timer: ReturnType<typeof setTimeout> | undefined
-          const settle = (value: WorkflowApprovalDecision): void => {
-            if (timer) clearTimeout(timer)
-            this.pendingApprovals.delete(token)
-            resolve(value)
-          }
-          if (node.config.timeoutMs > 0) {
-            timer = setTimeout(() => settle(node.config.onTimeout), node.config.timeoutMs)
-          }
-          this.pendingApprovals.set(token, { entry, resolve: settle })
-        })
+        const decision = await this.runCoordinator.awaitApproval(
+          entry,
+          node.config.timeoutMs,
+          node.config.onTimeout
+        )
         if (decision === 'rejected') return { payload, message: 'rejected', branch: 'rejected' }
         const approvedJson =
           payload.json && typeof payload.json === 'object' && !Array.isArray(payload.json)
