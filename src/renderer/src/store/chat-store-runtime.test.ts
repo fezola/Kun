@@ -562,6 +562,71 @@ describe('thread event sink runtime errors', () => {
     })
   })
 
+  it('keeps pending child lifecycle repair state isolated per thread stream', () => {
+    const first = makeSinkHarness({
+      activeThreadId: 'thread-first',
+      busy: false,
+      currentTurnId: null,
+      currentTurnUserId: null,
+      blocks: []
+    })
+    const second = makeSinkHarness({
+      activeThreadId: 'thread-second',
+      busy: false,
+      currentTurnId: null,
+      currentTurnUserId: null,
+      blocks: []
+    })
+    const firstSink = buildThreadEventSink(first.set, first.get, { threadId: 'thread-first' })
+    const secondSink = buildThreadEventSink(second.set, second.get, { threadId: 'thread-second' })
+
+    firstSink.onTool({
+      itemId: 'child_lifecycle_shared-child',
+      summary: 'child completed',
+      status: 'success',
+      updateOnly: true,
+      createdAt: '2026-07-04T00:00:02.000Z',
+      toolKind: 'tool_call',
+      detail: JSON.stringify({ childId: 'shared-child', status: 'completed', detached: true }),
+      meta: {
+        child: {
+          parentThreadId: 'thread-first',
+          parentTurnId: 'turn-first',
+          childId: 'shared-child',
+          childStatus: 'completed',
+          detached: true
+        }
+      }
+    })
+
+    secondSink.onTool({
+      itemId: 'tool_delegate_second',
+      summary: 'delegate_task',
+      status: 'running',
+      createdAt: '2026-07-04T00:00:03.000Z',
+      toolKind: 'tool_call',
+      detail: JSON.stringify({ childId: 'shared-child', status: 'queued', detached: true }),
+      meta: {
+        child: {
+          parentThreadId: 'thread-second',
+          parentTurnId: 'turn-second',
+          childId: 'shared-child',
+          childStatus: 'queued',
+          detached: true
+        }
+      }
+    })
+
+    expect(first.getState().blocks).toEqual([])
+    expect(second.getState().blocks).toHaveLength(1)
+    expect(second.getState().blocks[0]).toMatchObject({
+      kind: 'tool',
+      id: 'tool_delegate_second',
+      status: 'running',
+      meta: { child: { childId: 'shared-child', childStatus: 'queued' } }
+    })
+  })
+
   it('adds model request retry events as runtime status instead of a banner error', () => {
     const { getState, set, get } = makeSinkHarness({
       activeThreadId: 'thread-current',

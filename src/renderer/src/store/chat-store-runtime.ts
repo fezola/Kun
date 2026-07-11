@@ -70,10 +70,10 @@ const LEGACY_RUNTIME_STREAM_RECOVERING_VALUE = 'runtimeStreamRecovering'
 const COMPLETION_NOTIFICATION_DEDUPE_LIMIT = 200
 export const MAX_WATCHED_COMPLETION_NOTIFICATIONS = 200
 export const MAX_PENDING_CLAW_FEISHU_MIRRORS = 50
+export const MAX_PENDING_CHILD_TOOL_UPDATES = 200
 const completionNotificationKeys: string[] = []
 const completionNotificationKeySet = new Set<string>()
 const watchCompletionNotificationKeys = new Map<string, string>()
-const pendingChildToolUpdates = new Map<string, ToolEventPayload>()
 
 export type PendingClawFeishuMirror = {
   threadId: string
@@ -760,6 +760,10 @@ export function buildThreadEventSink(
 ): ThreadEventSink {
   const boundThreadId = binding.threadId?.trim() ?? ''
   let appliedDeltaSeqFloor = binding.sinceSeq ?? 0
+  // Update-only child lifecycle events can race their parent tool card. Keep
+  // that short-lived repair state inside this one stream so reconnects and
+  // other threads cannot consume each other's child ids.
+  const pendingChildToolUpdates = new Map<string, ToolEventPayload>()
   const loadThreadDetail = binding.getThreadDetail ?? ((threadId: string) => getProvider().getThreadDetail(threadId))
   const isCurrentStream = (): boolean => {
     if (binding.signal?.aborted) return false
@@ -888,7 +892,15 @@ export function buildThreadEventSink(
           )
         )
         if (!existing && event.updateOnly) {
-          if (eventChildId) pendingChildToolUpdates.set(eventChildId, event)
+          if (eventChildId) {
+            pendingChildToolUpdates.delete(eventChildId)
+            pendingChildToolUpdates.set(eventChildId, event)
+            while (pendingChildToolUpdates.size > MAX_PENDING_CHILD_TOOL_UPDATES) {
+              const oldestChildId = pendingChildToolUpdates.keys().next().value
+              if (!oldestChildId) break
+              pendingChildToolUpdates.delete(oldestChildId)
+            }
+          }
           return {}
         }
         let projectedEvent = event
