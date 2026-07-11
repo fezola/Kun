@@ -1,9 +1,8 @@
 import { spawn } from 'node:child_process'
-import { randomBytes, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdir, writeFile } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
-import { isAbsolute, join, resolve } from 'node:path'
+import { join } from 'node:path'
 import { compileFunction, runInNewContext } from 'node:vm'
 import type {
   AppSettingsV1,
@@ -26,27 +25,21 @@ import type {
   WorkflowScheduleV1,
   WorkflowV1
 } from '../shared/app-settings'
-import { resolveKunImageGenerationSettings } from '../shared/app-settings'
 import { MAX_WORKFLOW_RUNS } from '../shared/app-settings-workflow'
 import {
   SCHEDULER_INTERVAL_MS,
   hasEnabledScheduledTask,
   parseJsonObject,
   readRequestBody,
-  resolveScheduleModelConfig,
-  runPromptViaRuntime,
   sleep,
-  summarizeTaskResult,
   writeJson,
   type ScheduleRuntimeDeps
 } from './schedule-runtime-helpers'
-import { resolveCodexOAuthApiKey } from './codex-auth'
 import { createWorkflowExecutionPlan, selectWorkflowTrigger } from './workflow-graph-planner'
 import { WorkflowRunCoordinator } from './workflow-run-coordinator'
 import { WorkflowScheduler } from './workflow-scheduler'
 import { createWorkflowNodeExecutorRegistry } from './workflow-node-executor-registry'
 import {
-  buildAiPrompt,
   evaluateCondition,
   getByPath,
   interpolate,
@@ -58,12 +51,13 @@ import {
 } from './workflow-expression'
 import { executeCoreWorkflowNode } from './workflow-core-node-adapter'
 import { executeHttpWorkflowNode } from './workflow-http-node-adapter'
+import { executeAiWorkflowNode } from './workflow-ai-node-adapter'
+import { executeImageWorkflowNode } from './workflow-image-node-adapter'
 
 const MAX_NODE_EXECUTIONS = 200
 const MAX_RUN_DURATION_MS = 30 * 60_000
 /** Sentinel branch that matches no output handle (e.g. switch with no rule + no fallback). */
 const NO_BRANCH = '__none__'
-const AI_NODE_RESPONSE_TIMEOUT_MS = 30 * 60_000
 const LIVE_STATUS_LINGER_MS = 8_000
 
 type ScheduleTriggerNode = Extract<WorkflowNodeV1, { type: 'schedule-trigger' }>
@@ -323,39 +317,6 @@ function runCommandNode(
   })
 }
 
-/**
- * Resolve the image-generation config for a generate-image node. When the node
- * picks its own provider/model we patch them into the runtime image config and
- * reuse the shared resolver, so a node-selected provider goes through the exact
- * same provider→image-capability resolution as the global Settings path. Empty
- * fields fall back to whatever is configured in Settings.
- */
-function resolveWorkflowImageGen(
-  settings: AppSettingsV1,
-  nodeProviderId: string,
-  nodeModel: string
-): ReturnType<typeof resolveKunImageGenerationSettings> {
-  const providerId = nodeProviderId.trim()
-  const model = nodeModel.trim()
-  if (!providerId && !model) return resolveKunImageGenerationSettings(settings)
-  const kun = settings.agents.kun
-  const patched: AppSettingsV1 = {
-    ...settings,
-    agents: {
-      ...settings.agents,
-      kun: {
-        ...kun,
-        imageGeneration: {
-          ...kun.imageGeneration,
-          ...(providerId ? { providerId } : {}),
-          ...(model ? { model } : {})
-        }
-      }
-    }
-  }
-  return resolveKunImageGenerationSettings(patched)
-}
-
 /** Coerce a custom node's stored string values into typed $fields for its module. */
 function coerceModuleFields(
   module: WorkflowCustomModuleV1,
@@ -496,27 +457,6 @@ function missingRequiredInput(schema: WorkflowInputFieldV1[] | undefined, input:
   return null
 }
 
-/** Parse a JSON object out of an LLM reply, tolerating ```json fences and surrounding prose. */
-function extractJsonObject(raw: string): Record<string, unknown> | null {
-  const text = raw
-    .trim()
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/```\s*$/i, '')
-    .trim()
-  const tryParse = (candidate: string): Record<string, unknown> | null => {
-    try {
-      const parsed = JSON.parse(candidate)
-      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null
-    } catch {
-      return null
-    }
-  }
-  const direct = tryParse(text)
-  if (direct) return direct
-  const match = text.match(/\{[\s\S]*\}/)
-  return match ? tryParse(match[0]) : null
-}
-
 /** Run `fn` over items with at most `limit` in flight, preserving result order. */
 async function mapWithConcurrency<T, R>(
   items: T[],
@@ -637,24 +577,6 @@ function resolveRunWorkspace(
   // {{$env.X}}), so the working directory itself can be passed in as a parameter.
   const triggerWorkspace = (payload ? interpolate(rawWorkspace, payload, scope) : rawWorkspace).trim()
   return triggerWorkspace || settings.workflow.defaultWorkspaceRoot.trim() || settings.workspaceRoot
-}
-
-/**
- * Resolve where a generate-image node saves its file. Absolute paths are used
- * as-is; relative paths resolve against the workspace; empty defaults to
- * <workspace>/workflow-images.
- */
-function resolveImageOutputDir(workspace: string, configuredRaw: string): string {
-  const configured = configuredRaw.trim()
-  if (configured) {
-    if (isAbsolute(configured)) return resolve(configured)
-    if (!workspace) throw new Error('Output folder is relative but no workspace is configured.')
-    return resolve(join(workspace, configured))
-  }
-  if (!workspace) {
-    throw new Error('No workspace configured to save the image — set an output folder on the node.')
-  }
-  return join(workspace, 'workflow-images')
 }
 
 function summarizeRun(results: WorkflowNodeRunResultV1[]): string {
@@ -1551,6 +1473,12 @@ export class WorkflowRuntime {
     runVars: Record<string, unknown>,
     runRef?: { workflowId: string; runId: string }
   ): Promise<NodeOutcome> {
+    if (node.type === 'ai-agent' || node.type === 'parameter-extractor' || node.type === 'question-classifier') {
+      return executeAiWorkflowNode({ node, payload, settings, deps: this.deps, runWorkspace, scope })
+    }
+    if (node.type === 'generate-image') {
+      return executeImageWorkflowNode({ node, payload, settings, runWorkspace, scope })
+    }
     const coreOutcome = await executeCoreWorkflowNode({
       node,
       payload,
@@ -1566,85 +1494,6 @@ export class WorkflowRuntime {
       case 'webhook-trigger':
         // Triggers emit the run's initial payload (e.g. a webhook request body).
         return { payload, message: 'Triggered' }
-      case 'ai-agent': {
-        const modelConfig = resolveScheduleModelConfig(
-          settings,
-          {
-            providerId: node.config.providerId,
-            model: node.config.model.trim() || settings.agents.kun.model,
-            reasoningEffort: node.config.reasoningEffort
-          },
-          settings.workflow.providerId?.trim() || ''
-        )
-        const workspace =
-          interpolate(node.config.workspaceRoot, payload, scope).trim() ||
-          runWorkspace ||
-          settings.workflow.defaultWorkspaceRoot.trim() ||
-          settings.workspaceRoot
-        const result = await runPromptViaRuntime(this.deps, settings, {
-          prompt: buildAiPrompt(node.config.prompt, payload, scope),
-          title: `[Workflow] ${node.name || 'AI task'}`.trim(),
-          workspaceRoot: workspace,
-          model: modelConfig.model,
-          ...(modelConfig.providerId ? { providerId: modelConfig.providerId } : {}),
-          reasoningEffort: modelConfig.reasoningEffort,
-          mode: node.config.mode,
-          waitForResult: true,
-          responseTimeoutMs: AI_NODE_RESPONSE_TIMEOUT_MS
-        })
-        if (!result.ok) throw new Error(result.message)
-        const text = result.text ?? ''
-        return { payload: { json: { text }, text }, message: summarizeTaskResult(text), threadId: result.threadId }
-      }
-      case 'generate-image': {
-        const imageGen = resolveWorkflowImageGen(settings, node.config.providerId, node.config.model)
-        // A node that names its own provider/model opts itself in, even if the
-        // global image toggle is off; otherwise require the Settings switch.
-        const nodeDriven = Boolean(node.config.providerId.trim() || node.config.model.trim())
-        if (!imageGen.enabled && !nodeDriven) {
-          throw new Error('Image generation is not configured in Settings.')
-        }
-        if (!imageGen.baseUrl.trim() || !imageGen.apiKey.trim() || !imageGen.model.trim()) {
-          throw new Error('Image generation is missing a provider, API key, or model.')
-        }
-        const workspace = (
-          runWorkspace ||
-          settings.workflow.defaultWorkspaceRoot.trim() ||
-          settings.workspaceRoot
-        ).trim()
-        const outputDir = resolveImageOutputDir(workspace, interpolate(node.config.outputDir, payload, scope))
-        // Lazy import keeps the kun image module out of the unit-test graph.
-        const { createImageGenClient, mapImageSize } = await import('../../kun/src/adapters/tool/image-gen-tool-provider.js')
-        const imageAuth = resolveCodexOAuthApiKey(imageGen.apiKey)
-        const client = createImageGenClient({
-          ...imageGen,
-          apiKey: imageAuth.apiKey,
-          ...(imageAuth.headers ? { headers: imageAuth.headers } : {})
-        })
-        const size = node.config.size.trim() || imageGen.defaultSize.trim() || mapImageSize(
-          undefined,
-          undefined,
-          undefined,
-          imageGen.defaultResolution
-        )
-        const image = await client.generate({
-          prompt: interpolate(node.config.prompt, payload, scope),
-          model: imageGen.model.trim(),
-          quality: imageGen.quality,
-          ...(size && size !== 'auto' ? { size } : {}),
-          timeoutMs: imageGen.timeoutMs,
-          signal: AbortSignal.timeout(imageGen.timeoutMs)
-        })
-        const ext = image.mimeType === 'image/jpeg' ? 'jpg' : image.mimeType === 'image/webp' ? 'webp' : 'png'
-        await mkdir(outputDir, { recursive: true })
-        const fileName = `image-${Date.now().toString(36)}-${randomBytes(2).toString('hex')}.${ext}`
-        const filePath = join(outputDir, fileName)
-        await writeFile(filePath, image.data)
-        return {
-          payload: { json: { imagePath: filePath, mimeType: image.mimeType }, text: filePath },
-          message: `image saved: ${fileName}`
-        }
-      }
       case 'condition': {
         const matched = evaluateCondition(node.config, payload, scope)
         return { payload, message: matched ? 'true' : 'false', branch: matched ? 'true' : 'false' }
@@ -1887,77 +1736,6 @@ export class WorkflowRuntime {
           return { payload: { json: value, text: safeJson(value) }, message: 'output' }
         }
         return { payload, message: 'output' }
-      }
-      case 'parameter-extractor': {
-        const modelConfig = resolveScheduleModelConfig(
-          settings,
-          { providerId: node.config.providerId, model: node.config.model.trim() || settings.agents.kun.model, reasoningEffort: node.config.reasoningEffort },
-          settings.workflow.providerId?.trim() || ''
-        )
-        const workspace =
-          runWorkspace || settings.workflow.defaultWorkspaceRoot.trim() || settings.workspaceRoot
-        const sourceText = node.config.source.trim() ? interpolate(node.config.source, payload, scope) : payload.text
-        const fieldList = node.config.fields
-          .map(
-            (field) =>
-              `- ${field.key}${field.required ? ' (required)' : ''}: ${field.type}` +
-              `${field.description ? ` — ${field.description}` : ''}` +
-              `${field.type === 'select' && field.options.length ? ` (one of: ${field.options.join(', ')})` : ''}`
-          )
-          .join('\n')
-        const prompt =
-          `${node.config.instruction ? `${node.config.instruction}\n\n` : ''}` +
-          `Extract these fields from the text and reply with ONLY a JSON object using exactly these keys (no markdown, no prose):\n${fieldList}\n\nText:\n${sourceText}`
-        const result = await runPromptViaRuntime(this.deps, settings, {
-          prompt,
-          title: `[Workflow] ${node.name || 'Extract'}`.trim(),
-          workspaceRoot: workspace,
-          model: modelConfig.model,
-          ...(modelConfig.providerId ? { providerId: modelConfig.providerId } : {}),
-          reasoningEffort: modelConfig.reasoningEffort,
-          mode: 'agent',
-          waitForResult: true,
-          responseTimeoutMs: AI_NODE_RESPONSE_TIMEOUT_MS
-        })
-        if (!result.ok) throw new Error(result.message)
-        const parsed = extractJsonObject(result.text ?? '')
-        const json: Record<string, unknown> = {}
-        for (const field of node.config.fields) {
-          json[field.key] = coerceInputFieldValue(field, parsed?.[field.key])
-        }
-        return { payload: { json, text: safeJson(json) }, message: 'extracted', threadId: result.threadId }
-      }
-      case 'question-classifier': {
-        const categories = node.config.categories
-        if (categories.length === 0) return { payload, message: 'no categories' }
-        const modelConfig = resolveScheduleModelConfig(
-          settings,
-          { providerId: node.config.providerId, model: node.config.model.trim() || settings.agents.kun.model, reasoningEffort: node.config.reasoningEffort },
-          settings.workflow.providerId?.trim() || ''
-        )
-        const workspace =
-          runWorkspace || settings.workflow.defaultWorkspaceRoot.trim() || settings.workspaceRoot
-        const sourceText = node.config.source.trim() ? interpolate(node.config.source, payload, scope) : payload.text
-        const list = categories.map((category, index) => `${index + 1}. ${category.label}`).join('\n')
-        const prompt =
-          `${node.config.instruction ? `${node.config.instruction}\n\n` : ''}` +
-          `Classify the text into exactly one of these categories. Reply with ONLY the category number (1-${categories.length}):\n${list}\n\nText:\n${sourceText}`
-        const result = await runPromptViaRuntime(this.deps, settings, {
-          prompt,
-          title: `[Workflow] ${node.name || 'Classify'}`.trim(),
-          workspaceRoot: workspace,
-          model: modelConfig.model,
-          ...(modelConfig.providerId ? { providerId: modelConfig.providerId } : {}),
-          reasoningEffort: modelConfig.reasoningEffort,
-          mode: 'agent',
-          waitForResult: true,
-          responseTimeoutMs: AI_NODE_RESPONSE_TIMEOUT_MS
-        })
-        if (!result.ok) throw new Error(result.message)
-        const num = Number.parseInt((result.text ?? '').match(/\d+/)?.[0] ?? '', 10)
-        const index = Number.isFinite(num) && num >= 1 && num <= categories.length ? num - 1 : 0
-        const chosen = categories[index]
-        return { payload, message: `→ ${chosen.label}`, branch: chosen.id, threadId: result.threadId }
       }
       case 'human-approval': {
         // Pause the run until a decision arrives. Routes to the approved/rejected branch.
