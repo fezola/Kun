@@ -100,7 +100,7 @@
   normalization, migration, IPC schemas, presets, and UI patches.
 - [x] 9.2 Establish canonical domain modules for provider/Kun/runtime settings rules.
 - [x] 9.3 Route IPC schemas and main consumers through canonical normalizers.
-- [ ] 9.4 Route provider and agent settings UI patches through canonical helpers and
+- [x] 9.4 Route provider and agent settings UI patches through canonical helpers and
   split node-size settings sections into focused panels.
 - [x] 9.5 Verify all supported legacy settings fixtures normalize and save to the same
   current shape without restoring legacy runtimes.
