@@ -2,8 +2,6 @@ import { randomUUID } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type {
   AppSettingsV1,
-  WorkflowConnectionV1,
-  WorkflowEnvVarV1,
   WorkflowInputFieldV1,
   WorkflowApprovalDecision,
   WorkflowNodeRunResultV1,
@@ -27,16 +25,12 @@ import {
   writeJson,
   type ScheduleRuntimeDeps
 } from './schedule-runtime-helpers'
-import { createWorkflowExecutionPlan, selectWorkflowTrigger } from './workflow-graph-planner'
+import { selectWorkflowTrigger } from './workflow-graph-planner'
 import { WorkflowRunCoordinator } from './workflow-run-coordinator'
 import { WorkflowScheduler } from './workflow-scheduler'
 import { createWorkflowNodeExecutorRegistry } from './workflow-node-executor-registry'
 import {
-  getByPath,
-  interpolate,
-  resolveExpr,
   safeJson,
-  stringifyValue,
   type InterpScope,
   type WorkflowPayload
 } from './workflow-expression'
@@ -51,16 +45,15 @@ import {
 import { executeNestedWorkflowNode } from './workflow-nested-node-adapter'
 import { executeApprovalWorkflowNode } from './workflow-approval-node-adapter'
 import {
-  collectWorkflowSecretValues,
-  redactWorkflowSecrets
-} from './workflow-secret-redaction'
+  executeWorkflowGraph,
+  resolveWorkflowEnv as resolveEnv,
+  resolveWorkflowRunWorkspace as resolveRunWorkspace,
+  type WorkflowGraphExecutionContext,
+  type WorkflowGraphRunResult
+} from './workflow-graph-executor'
 
 export { checkWorkflowCode } from './workflow-code-node-adapter'
 
-const MAX_NODE_EXECUTIONS = 200
-const MAX_RUN_DURATION_MS = 30 * 60_000
-/** Sentinel branch that matches no output handle (e.g. switch with no rule + no fallback). */
-const NO_BRANCH = '__none__'
 const LIVE_STATUS_LINGER_MS = 8_000
 
 type ScheduleTriggerNode = Extract<WorkflowNodeV1, { type: 'schedule-trigger' }>
@@ -196,21 +189,6 @@ export function computeWorkflowNextRunAt(workflow: WorkflowV1, from: Date): stri
   return candidates[0] ?? ''
 }
 
-function buildAdjacency(connections: WorkflowConnectionV1[]): Map<string, WorkflowConnectionV1[]> {
-  const map = new Map<string, WorkflowConnectionV1[]>()
-  for (const edge of connections) {
-    const list = map.get(edge.source) ?? []
-    list.push(edge)
-    map.set(edge.source, list)
-  }
-  return map
-}
-
-/**
- * The run's working directory: the firing trigger's workspaceRoot, else the
- * workflow-settings default, else the app workspace. Used as the default cwd
- * for AI / image / code nodes that don't set their own.
- */
 function coerceInputFieldValue(field: WorkflowInputFieldV1, raw: unknown): unknown {
   const asString = typeof raw === 'string' ? raw : raw === undefined || raw === null ? '' : String(raw)
   switch (field.type) {
@@ -266,86 +244,6 @@ function missingRequiredInput(schema: WorkflowInputFieldV1[] | undefined, input:
 }
 
 /** Coerce a resolved node-input value to its declared type. */
-function coerceNodeInputValue(type: 'text' | 'number' | 'boolean' | 'json', raw: unknown): unknown {
-  switch (type) {
-    case 'number': {
-      const n = typeof raw === 'number' ? raw : Number(String(raw ?? '').trim())
-      return Number.isFinite(n) ? n : 0
-    }
-    case 'boolean':
-      return raw === true || raw === 'true' || raw === 1 || raw === '1'
-    case 'json': {
-      if (raw && typeof raw === 'object') return raw
-      try {
-        return JSON.parse(String(raw ?? ''))
-      } catch {
-        return raw ?? null
-      }
-    }
-    default:
-      return typeof raw === 'string' ? raw : raw == null ? '' : safeJson(raw)
-  }
-}
-
-/**
- * Resolve a node's typed inputs (bound to upstream output) into a {{$input.key}}
- * lookup. A single `{{ expr }}` source yields the raw value (object/number/…);
- * anything else is interpolated as a string. Returns undefined when no inputs.
- */
-function resolveNodeInputs(
-  node: WorkflowNodeV1,
-  payload: WorkflowPayload,
-  scope: InterpScope
-): Record<string, unknown> | undefined {
-  const bindings = node.inputs
-  if (!bindings || bindings.length === 0) return undefined
-  const out: Record<string, unknown> = {}
-  for (const binding of bindings) {
-    const key = binding.key.trim()
-    if (!key) continue
-    const single = binding.source.trim().match(/^\{\{([^}]+)\}\}$/)
-    const raw = single ? resolveExpr(payload, single[1], scope) : interpolate(binding.source, payload, scope)
-    out[key] = coerceNodeInputValue(binding.type, raw)
-  }
-  return out
-}
-
-/** Coerce a workflow's env vars into a {{$env.key}} lookup (secrets are plain values here). */
-function resolveEnv(env: WorkflowEnvVarV1[]): Record<string, unknown> {
-  const out: Record<string, unknown> = {}
-  for (const entry of env) {
-    if (!entry.key) continue
-    out[entry.key] =
-      entry.type === 'number'
-        ? Number(entry.value) || 0
-        : entry.type === 'boolean'
-          ? entry.value === 'true'
-          : entry.value
-  }
-  return out
-}
-
-function resolveRunWorkspace(
-  workflow: WorkflowV1,
-  settings: AppSettingsV1,
-  triggerNodeId?: string,
-  payload?: WorkflowPayload,
-  scope?: InterpScope
-): string {
-  const triggers = workflow.nodes.filter(
-    (node) =>
-      node.type === 'manual-trigger' || node.type === 'schedule-trigger' || node.type === 'webhook-trigger'
-  )
-  const trigger = (triggerNodeId ? triggers.find((node) => node.id === triggerNodeId) : undefined) ?? triggers[0]
-  const rawWorkspace =
-    trigger && typeof (trigger.config as { workspaceRoot?: unknown }).workspaceRoot === 'string'
-      ? (trigger.config as { workspaceRoot: string }).workspaceRoot
-      : ''
-  // The trigger's working directory may reference the run input ({{json.dir}} /
-  // {{$env.X}}), so the working directory itself can be passed in as a parameter.
-  const triggerWorkspace = (payload ? interpolate(rawWorkspace, payload, scope) : rawWorkspace).trim()
-  return triggerWorkspace || settings.workflow.defaultWorkspaceRoot.trim() || settings.workspaceRoot
-}
 
 function summarizeRun(results: WorkflowNodeRunResultV1[]): string {
   const lastMeaningful = [...results].reverse().find((result) => result.status === 'success' && result.message.trim())
@@ -949,259 +847,35 @@ export class WorkflowRuntime {
    * nodes unreachable — so joins (Merge) wait only for branches that fire.
    * Pure: no persistence. Used by both top-level runs and sub-workflow nodes.
    */
-  private async runGraph(
+  private runGraph(
     workflow: WorkflowV1,
     triggerNodeId: string,
     initialPayload: WorkflowPayload,
-    ctx: {
-      settings: AppSettingsV1
-      statusWorkflowId?: string
-      cancelId?: string
-      /** Run id, for keying human-approval pauses to this run. */
-      runId?: string
-      depth: number
-      workspaceOverride?: string
-      /** Loop frame for body sub-runs, exposed via {{$loop.*}}. */
-      loop?: { index: number; item: unknown; total: number }
-      /** Run-scoped vars shared across the run (set-fields scope=run). */
-      runVars?: Record<string, unknown>
-    }
-  ): Promise<{
-    status: WorkflowRunStatus
-    errorMessage: string
-    nodeResults: WorkflowNodeRunResultV1[]
-    output: WorkflowPayload
-  }> {
-    const { settings } = ctx
-    const env = resolveEnv(workflow.env)
-    const runVars = ctx.runVars ?? {}
-    // The trigger's working directory can read the run input ({{json.dir}}), so a
-    // caller can pass the working directory in as a run parameter.
-    const runWorkspace =
-      ctx.workspaceOverride?.trim() ||
-      resolveRunWorkspace(workflow, settings, triggerNodeId, initialPayload, { env, run: runVars, loop: ctx.loop })
-    const setLive = (nodeId: string, status: WorkflowNodeRunStatus): void => {
-      if (ctx.statusWorkflowId) this.setLive(ctx.statusWorkflowId, nodeId, status)
-    }
-    const isCanceled = (): boolean => this.runCoordinator.isCanceled(ctx.cancelId)
-
-    const planned = createWorkflowExecutionPlan(workflow, triggerNodeId)
-    if (!planned.ok) {
-      return { status: 'error', errorMessage: planned.error, nodeResults: [], output: initialPayload }
-    }
-    const nodeById = planned.plan.nodeById
-    const outEdges = planned.plan.outgoingByNodeId
-    const inEdges = planned.plan.incomingByNodeId
-
-    const nodeResults: WorkflowNodeRunResultV1[] = []
-    const delivered = new Set<string>()
-    const prunedEdges = new Set<string>()
-    const payloadByEdge = new Map<string, WorkflowPayload>()
-    const settledNodes = new Set<string>()
-    const readyQueue: string[] = []
-    const deadline = Date.now() + MAX_RUN_DURATION_MS
-    let executions = 0
-    let status: WorkflowRunStatus = 'success'
-    let errorMessage = ''
-    let output = initialPayload
-
-    // Interpolation scope shared across the run: completed-node outputs ($nodes),
-    // workflow env ($env), run-scoped vars ($run), and the loop frame ($loop).
-    const nodeOutputs: Record<string, WorkflowPayload> = {}
-    // Global secret set so this run also masks secrets owned by sub-workflows / loop
-    // bodies whose output or error flows back across the workflow boundary.
-    const secretValues = collectWorkflowSecretValues(settings)
-    const redact = (text: string): string => redactWorkflowSecrets(secretValues, text)
-    const scopeFor = (): InterpScope => ({ nodes: nodeOutputs, env, run: runVars, loop: ctx.loop })
-
-    const incoming = (nodeId: string): readonly WorkflowConnectionV1[] => inEdges.get(nodeId) ?? []
-    const edgeResolved = (edge: WorkflowConnectionV1): boolean =>
-      delivered.has(edge.id) || prunedEdges.has(edge.id)
-    const allResolved = (nodeId: string): boolean => incoming(nodeId).every(edgeResolved)
-    const hasLiveInput = (nodeId: string): boolean => incoming(nodeId).some((edge) => delivered.has(edge.id))
-    const markReady = (nodeId: string): void => {
-      if (!settledNodes.has(nodeId) && !readyQueue.includes(nodeId)) readyQueue.push(nodeId)
-    }
-    function pruneEdge(edge: WorkflowConnectionV1): void {
-      if (delivered.has(edge.id) || prunedEdges.has(edge.id)) return
-      prunedEdges.add(edge.id)
-      settleTarget(edge.target)
-    }
-    function pruneNode(nodeId: string): void {
-      if (settledNodes.has(nodeId)) return
-      settledNodes.add(nodeId)
-      for (const edge of outEdges.get(nodeId) ?? []) pruneEdge(edge)
-    }
-    function settleTarget(nodeId: string): void {
-      if (settledNodes.has(nodeId) || !allResolved(nodeId)) return
-      if (hasLiveInput(nodeId)) markReady(nodeId)
-      else pruneNode(nodeId)
-    }
-    const handleActive = (outcome: NodeOutcome | null, sourceHandle: string): boolean => {
-      if (!outcome || outcome.branch === undefined) return true
-      return sourceHandle === outcome.branch
-    }
-
-    markReady(triggerNodeId)
-    try {
-      while (readyQueue.length > 0) {
-        if (isCanceled()) {
-          status = 'error'
-          errorMessage = 'Canceled.'
-          break
-        }
-        if (Date.now() > deadline) {
-          status = 'error'
-          errorMessage = 'Workflow exceeded the maximum run duration.'
-          break
-        }
-        if (executions >= MAX_NODE_EXECUTIONS) {
-          status = 'error'
-          errorMessage = 'Workflow exceeded the maximum node count.'
-          break
-        }
-        const nodeId = readyQueue.shift()
-        if (!nodeId || settledNodes.has(nodeId)) continue
-        const node = nodeById.get(nodeId)
-        settledNodes.add(nodeId)
-        if (!node) continue
-        executions += 1
-
-        const inputs = incoming(nodeId)
-          .filter((edge) => delivered.has(edge.id))
-          .map((edge) => payloadByEdge.get(edge.id))
-          .filter((value): value is WorkflowPayload => Boolean(value))
-        const primary = inputs[0] ?? (nodeId === triggerNodeId ? initialPayload : { json: {}, text: '' })
-
-        let outcome: NodeOutcome | null
-        if (node.disabled) {
-          setLive(node.id, 'skipped')
-          outcome = null
-        } else {
-          setLive(node.id, 'running')
-          const nodeStartedAt = new Date()
-          const inputJson = redact(safeJson(primary.json))
-          // Surface the input immediately so the run log shows it while the node runs.
-          this.setLiveResult(ctx.statusWorkflowId, {
-            nodeId: node.id,
-            status: 'running',
-            startedAt: nodeStartedAt.toISOString(),
-            finishedAt: '',
-            message: '',
-            outputJson: '',
-            inputJson,
-            retries: 0,
-            threadId: '',
-            error: ''
-          })
-          const maxRetries = node.retries ?? 0
-          let attempt = 0
-          let produced: NodeOutcome | null = null
-          let lastError = ''
-          // Retry, then apply onError: 'fail' (default) stops the run; 'continue'/'fallback' resume.
-          while (true) {
-            try {
-              const baseScope = scopeFor()
-              const nodeInputs = resolveNodeInputs(node, primary, baseScope)
-              produced = await this.executeNode(
-                node,
-                primary,
-                settings,
-                inputs.length ? inputs : [primary],
-                ctx.depth,
-                runWorkspace,
-                nodeInputs ? { ...baseScope, input: nodeInputs } : baseScope,
-                runVars,
-                ctx.statusWorkflowId && ctx.runId
-                  ? { workflowId: ctx.statusWorkflowId, runId: ctx.runId }
-                  : undefined
-              )
-              break
-            } catch (error) {
-              lastError = error instanceof Error ? error.message : String(error)
-              if (attempt < maxRetries) {
-                attempt += 1
-                if (node.retryDelayMs) await sleep(node.retryDelayMs)
-                continue
-              }
-              const mode = node.onError ?? 'fail'
-              if (mode === 'continue' || mode === 'fallback') {
-                let fallback: unknown = null
-                if (mode === 'fallback' && node.fallbackJson) {
-                  try {
-                    fallback = JSON.parse(node.fallbackJson)
-                  } catch {
-                    fallback = node.fallbackJson
-                  }
-                }
-                produced = {
-                  payload: { json: fallback, text: mode === 'fallback' ? safeJson(fallback) : '' },
-                  message: `error handled (${mode}): ${lastError}`
-                }
-              }
-              break
-            }
-          }
-          if (produced) {
-            const result: WorkflowNodeRunResultV1 = {
-              nodeId: node.id,
-              status: 'success',
-              startedAt: nodeStartedAt.toISOString(),
-              finishedAt: new Date().toISOString(),
-              message: redact(produced.message),
-              outputJson: redact(safeJson(produced.payload.json)),
-              inputJson,
-              retries: attempt,
-              threadId: produced.threadId ?? '',
-              error: lastError ? redact(lastError) : ''
-            }
-            nodeResults.push(result)
-            this.setLiveResult(ctx.statusWorkflowId, result)
-            setLive(node.id, 'success')
-            outcome = produced
-            output = produced.payload
-            nodeOutputs[node.id] = produced.payload
-          } else {
-            const result: WorkflowNodeRunResultV1 = {
-              nodeId: node.id,
-              status: 'error',
-              startedAt: nodeStartedAt.toISOString(),
-              finishedAt: new Date().toISOString(),
-              message: '',
-              outputJson: '',
-              inputJson,
-              retries: attempt,
-              threadId: '',
-              error: redact(lastError)
-            }
-            nodeResults.push(result)
-            this.setLiveResult(ctx.statusWorkflowId, result)
-            setLive(node.id, 'error')
-            status = 'error'
-            errorMessage = redact(lastError)
-            break
-          }
-        }
-
-        const outPayload = outcome ? outcome.payload : primary
-        const edges = outEdges.get(node.id) ?? []
-        for (const edge of edges) {
-          if (handleActive(outcome, edge.sourceHandle || 'out')) {
-            delivered.add(edge.id)
-            payloadByEdge.set(edge.id, outPayload)
-          } else {
-            prunedEdges.add(edge.id)
-          }
-        }
-        for (const edge of edges) settleTarget(edge.target)
-      }
-    } catch (error) {
-      status = 'error'
-      errorMessage = redact(error instanceof Error ? error.message : String(error))
-      this.deps.logError('workflow', 'Workflow graph failed', { message: errorMessage, workflowId: workflow.id })
-    }
-
-    return { status, errorMessage, nodeResults, output }
+    context: WorkflowGraphExecutionContext
+  ): Promise<WorkflowGraphRunResult> {
+    return executeWorkflowGraph({
+      workflow,
+      triggerNodeId,
+      initialPayload,
+      context,
+      executeNode: (request) => this.executeNode(
+        request.node,
+        request.payload,
+        request.settings,
+        request.inputs,
+        request.depth,
+        request.runWorkspace,
+        request.scope,
+        request.runVars,
+        request.runRef
+      ),
+      setLive: (nodeId, status) => {
+        if (context.statusWorkflowId) this.setLive(context.statusWorkflowId, nodeId, status)
+      },
+      setLiveResult: (result) => this.setLiveResult(context.statusWorkflowId, result),
+      isCanceled: () => this.runCoordinator.isCanceled(context.cancelId),
+      logError: (message, details) => this.deps.logError('workflow', message, details)
+    })
   }
 
   private async executeNode(

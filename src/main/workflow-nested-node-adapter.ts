@@ -1,8 +1,6 @@
 import type {
   AppSettingsV1,
-  WorkflowNodeRunResultV1,
   WorkflowNodeV1,
-  WorkflowRunStatus,
   WorkflowV1
 } from '../shared/app-settings'
 import {
@@ -13,15 +11,9 @@ import {
   type WorkflowPayload
 } from './workflow-expression'
 import type { WorkflowNodeOutcome } from './workflow-core-node-adapter'
+import type { WorkflowGraphRunResult } from './workflow-graph-executor'
 
 type NestedNode = Extract<WorkflowNodeV1, { type: 'subworkflow' | 'loop' }>
-
-export type WorkflowGraphRunResult = {
-  status: WorkflowRunStatus
-  errorMessage: string
-  nodeResults: WorkflowNodeRunResultV1[]
-  output: WorkflowPayload
-}
 
 export type RunNestedWorkflowGraph = (
   workflow: WorkflowV1,
