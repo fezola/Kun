@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
 import {
   ExtensionHostProcess,
   ExtensionLogWriter,
@@ -107,6 +107,12 @@ describe('extension host protocol', () => {
 })
 
 describe('extension host processes', () => {
+  let builtinRunnerPath: string
+
+  beforeAll(async () => {
+    builtinRunnerPath = await buildBuiltinRunner()
+  }, 60_000)
+
   it('rejects mismatched API or RPC handshakes before requesting extension entrypoint load', async () => {
     const root = await mkdtemp(join(tmpdir(), 'kun-extension-host-handshake-'))
     try {
@@ -140,7 +146,6 @@ describe('extension host processes', () => {
     const root = await mkdtemp(join(tmpdir(), 'kun-extension-real-runner-'))
     let unregisterCalls = 0
     try {
-      const runnerPath = await buildBuiltinRunner()
       const packagePath = join(root, 'extension')
       await mkdir(packagePath, { recursive: true })
       await writeFile(join(packagePath, 'main.mjs'), `
@@ -194,7 +199,7 @@ export async function migrateState(state, context) {
           packageRoot: join(root, 'packages'),
           dataRoot: join(root, 'data')
         }),
-        runnerPath,
+        runnerPath: builtinRunnerPath,
         limits: {
           activationTimeoutMs: 4_000,
           operationTimeoutMs: 4_000,
