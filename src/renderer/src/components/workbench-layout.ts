@@ -286,10 +286,6 @@ export function useWorkbenchLayout({
     previewThreadId.current = activeThreadId
     autoOpenedPreviewUrlRef.current = null
     if (rightPanelMode === BUILTIN_RIGHT_PANEL_IDS.browser) setRightPanelMode(null)
-    if (rightPanelMode === BUILTIN_RIGHT_PANEL_IDS.file) {
-      setRightPanelMode(null)
-      setFilePreviewTarget(null)
-    }
   }, [activeThreadId, rightPanelMode])
 
   useEffect(() => {

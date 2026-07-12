@@ -340,10 +340,12 @@ export function Workbench(): ReactElement {
     ) selectExtensionSurface(null)
   }, [activeExtensionSurface, activeExtensionSurfaceId, extensionContributionSnapshotReady, selectExtensionSurface])
   const {
-    composerFileReferences, fileTreeSidePanelOpen, fileTreeSidePanelView, openFilePreviewTargets, fileTreeWorkspaceRoot,
+    composerFileReferences, fileTreeSidePanelOpen, fileTreeSidePanelView, openFilePreviewTargets,
+    pinnedFilePreviewTargetKeys, preserveFilePreviewTargets, fileTreeWorkspaceRoot,
     clearComposerFileReferences, addComposerFileReference, pickComposerFileReferences,
     removeComposerFileReference, openWorkspaceFilePreviewTarget, previewWorkspaceFileFromSidebar,
-    closeWorkspaceFilePreviewTarget, addWorkspaceReferenceFromSidebar, toggleFileTreeSidePanel,
+    closeWorkspaceFilePreviewTarget, togglePinnedFilePreviewTarget, closeOtherFilePreviewTargets,
+    togglePreserveFilePreviewTargets, addWorkspaceReferenceFromSidebar, toggleFileTreeSidePanel,
     openFileTreeSidePanel, openDesignFileTreeSidePanel, setFileTreeSidePanelView,
     clearFilePreviewTargets
   } = useWorkbenchFileTreeController({
@@ -474,6 +476,7 @@ export function Workbench(): ReactElement {
     getAttachmentScope,
     handlePickAttachments,
     handlePasteClipboardImage,
+    removeComposerAttachments,
     removeComposerAttachment,
     setAttachmentUploadError,
     webAccessAvailable
@@ -553,9 +556,9 @@ export function Workbench(): ReactElement {
     activeClawChannelId, activeClawChannelModel: activeClawChannel?.model,
     activeClawChannelProviderId: activeClawChannel?.providerId,
     activeSddDraft: Boolean(activeSddDraft), activeThreadId, attachmentUploadEnabled,
-    buildCodeCanvasOutboundPrompt, clearComposerAttachments, clearComposerFileReferences,
+    buildCodeCanvasOutboundPrompt, clearComposerAttachments, removeComposerAttachments, clearComposerFileReferences,
     composerAttachments, composerFileReferences, composerMode, composerModelGroups,
-    composerReasoningEffort, ensureWriteThreadForWorkspace, getAttachmentScope,
+    composerReasoningEffort, getAttachmentScope,
     handleGuiPlanCommand, input, resetClawChannelSession, rightPanelMode, route,
     selectClawChannel, sendMessage, sendPlanTurn, sendSddAssistantPrompt,
     setAttachmentUploadError, setClawChannelModel, setError, setInput, threads, workspaceRoot,
@@ -724,7 +727,12 @@ export function Workbench(): ReactElement {
       openTargets: openFilePreviewTargets,
       workspaceRoot,
       onSelectTarget: openWorkspaceFilePreviewTarget,
-      onCloseTarget: closeWorkspaceFilePreviewTarget
+      onCloseTarget: closeWorkspaceFilePreviewTarget,
+      pinnedTargetKeys: pinnedFilePreviewTargetKeys,
+      preserveAcrossThreads: preserveFilePreviewTargets,
+      onTogglePinnedTarget: togglePinnedFilePreviewTarget,
+      onCloseOtherTargets: closeOtherFilePreviewTargets,
+      onTogglePreserveAcrossThreads: togglePreserveFilePreviewTargets
     },
     extensionView: activeExtensionRightPanel,
     workspaceRoot
