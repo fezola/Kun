@@ -98,6 +98,24 @@ describe('setInlineCompletionEnabled', () => {
     expect(useWriteWorkspaceStore.getState().inlineCompletion.enabled).toBe(false)
   })
 
+  it('keeps a pending toggle when a later settings load returns a stale snapshot', async () => {
+    const toggleWrite = deferred<AppSettingsV1>()
+    const settingsLoad = deferred<AppSettingsV1>()
+    vi.spyOn(rendererRuntimeClient, 'setSettings').mockReturnValue(toggleWrite.promise)
+    vi.spyOn(rendererRuntimeClient, 'getSettings').mockReturnValue(settingsLoad.promise)
+    useWriteWorkspaceStore.setState({ initializeWorkspace: vi.fn(async () => undefined) })
+
+    const toggling = useWriteWorkspaceStore.getState().setInlineCompletionEnabled(false)
+    await vi.waitFor(() => expect(rendererRuntimeClient.setSettings).toHaveBeenCalled())
+    const loading = useWriteWorkspaceStore.getState().loadWriteSettings()
+    toggleWrite.resolve(settingsFor('/workspace/default'))
+    await toggling
+    settingsLoad.resolve(settingsFor('/workspace/default'))
+    await loading
+
+    expect(useWriteWorkspaceStore.getState().inlineCompletion.enabled).toBe(false)
+  })
+
   it('updates immediately and persists only the focused Write setting', async () => {
     const setSettings = vi.spyOn(rendererRuntimeClient, 'setSettings')
       .mockResolvedValue(undefined as never)

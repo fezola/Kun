@@ -68,11 +68,15 @@ export function createWriteSettingsActions({ set, get }: WriteSettingsActionCont
   const requestIsCurrent = (generation: number): boolean => generation === settingsRequestGeneration
   const applySettingsResponse = (
     settings: Awaited<ReturnType<typeof rendererRuntimeClient.getSettings>>,
-    inlineRevisionAtRequest: number
+    inlineRevisionAtRequest: number,
+    inlineWritePendingAtRequest: boolean
   ): ReturnType<typeof withResolvedInlineCompletionSettings> => {
     const latestEnabled = get().inlineCompletion.enabled
     const write = applyWriteSettingsState(set, settings)
-    if (inlineRevisionAtRequest !== inlineCompletionSettingsRevision) {
+    if (
+      inlineWritePendingAtRequest ||
+      inlineRevisionAtRequest !== inlineCompletionSettingsRevision
+    ) {
       set((state) => ({
         inlineCompletion: { ...state.inlineCompletion, enabled: latestEnabled }
       }))
@@ -85,11 +89,16 @@ export function createWriteSettingsActions({ set, get }: WriteSettingsActionCont
       if (get().settingsLoading) return
       const generation = nextSettingsRequest()
       const inlineRevisionAtRequest = inlineCompletionSettingsRevision
+      const inlineWritePendingAtRequest = pendingInlineCompletionWrites > 0
       set({ settingsLoading: true, settingsError: null })
       try {
         const settings = await rendererRuntimeClient.getSettings({ forceRefresh: true })
         if (!requestIsCurrent(generation)) return
-        const write = applySettingsResponse(settings, inlineRevisionAtRequest)
+        const write = applySettingsResponse(
+          settings,
+          inlineRevisionAtRequest,
+          inlineWritePendingAtRequest
+        )
         await get().initializeWorkspace(write.activeWorkspaceRoot)
         if (!requestIsCurrent(generation)) return
         set({ settingsLoading: false })
@@ -148,6 +157,7 @@ export function createWriteSettingsActions({ set, get }: WriteSettingsActionCont
       if (!normalized) return
       const generation = nextSettingsRequest()
       const inlineRevisionAtRequest = inlineCompletionSettingsRevision
+      const inlineWritePendingAtRequest = pendingInlineCompletionWrites > 0
       const roots = compactWorkspaceRoots([normalized, ...get().workspaceRoots])
       set({ workspaceRoots: roots, settingsLoading: false })
       try {
@@ -158,7 +168,11 @@ export function createWriteSettingsActions({ set, get }: WriteSettingsActionCont
           }
         })
         if (!requestIsCurrent(generation)) return
-        const write = applySettingsResponse(settings, inlineRevisionAtRequest)
+        const write = applySettingsResponse(
+          settings,
+          inlineRevisionAtRequest,
+          inlineWritePendingAtRequest
+        )
         await get().initializeWorkspace(write.activeWorkspaceRoot)
       } catch (error) {
         if (!requestIsCurrent(generation)) return
@@ -171,6 +185,7 @@ export function createWriteSettingsActions({ set, get }: WriteSettingsActionCont
       if (!normalized) return
       const generation = nextSettingsRequest()
       const inlineRevisionAtRequest = inlineCompletionSettingsRevision
+      const inlineWritePendingAtRequest = pendingInlineCompletionWrites > 0
       const roots = compactWorkspaceRoots([normalized, ...get().workspaceRoots])
       set({ settingsLoading: false })
       try {
@@ -181,7 +196,11 @@ export function createWriteSettingsActions({ set, get }: WriteSettingsActionCont
           }
         })
         if (!requestIsCurrent(generation)) return
-        const write = applySettingsResponse(settings, inlineRevisionAtRequest)
+        const write = applySettingsResponse(
+          settings,
+          inlineRevisionAtRequest,
+          inlineWritePendingAtRequest
+        )
         await get().initializeWorkspace(write.activeWorkspaceRoot)
       } catch (error) {
         if (!requestIsCurrent(generation)) return
@@ -194,6 +213,7 @@ export function createWriteSettingsActions({ set, get }: WriteSettingsActionCont
       if (!normalized) return
       const generation = nextSettingsRequest()
       const inlineRevisionAtRequest = inlineCompletionSettingsRevision
+      const inlineWritePendingAtRequest = pendingInlineCompletionWrites > 0
       set({ settingsLoading: false })
       const state = get()
       const fallback = state.defaultWorkspaceRoot ||
@@ -214,7 +234,11 @@ export function createWriteSettingsActions({ set, get }: WriteSettingsActionCont
           }
         })
         if (!requestIsCurrent(generation)) return
-        const write = applySettingsResponse(settings, inlineRevisionAtRequest)
+        const write = applySettingsResponse(
+          settings,
+          inlineRevisionAtRequest,
+          inlineWritePendingAtRequest
+        )
         if (normalizePath(get().workspaceRoot) === normalized) {
           await get().initializeWorkspace(write.activeWorkspaceRoot)
         }

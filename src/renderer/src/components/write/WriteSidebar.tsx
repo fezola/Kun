@@ -132,9 +132,14 @@ export function WriteSidebar({
     void loadWriteSettings()
   }, [loadWriteSettings])
 
-  useEffect(() => () => {
+  useEffect(() => {
+    setRevealError(null)
     if (revealErrorTimerRef.current) window.clearTimeout(revealErrorTimerRef.current)
-  }, [])
+    revealErrorTimerRef.current = null
+    return () => {
+      if (revealErrorTimerRef.current) window.clearTimeout(revealErrorTimerRef.current)
+    }
+  }, [workspaceRoot])
 
   const root = rootDirectory || workspaceRoot
   const rootLoading = Boolean(
