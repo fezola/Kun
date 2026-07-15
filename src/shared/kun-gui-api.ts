@@ -18,6 +18,7 @@ import type {
 } from './app-settings'
 import type { EditorListResult, EditorOpenResult, OpenEditorPathOptions } from './editor'
 import type { GitBranchesResult, GitBranchWorktreesResult, GitWorktreeCheckoutResult } from './git-branches'
+import type { GitStatusResult, GitDiffResult, GitCommitResult } from './git-source-control'
 import type { GitCheckpointCreateResult, GitCheckpointRestoreResult } from './git-checkpoint'
 import type {
   MergeResult,
@@ -370,6 +371,7 @@ export type KunGuiApi = ExtensionIpcApi & {
   saveSettingsSilent: (partial: AppSettingsPatch) => Promise<AppSettingsV1>
   runtimeRequest: (path: string, method?: string, body?: string) => Promise<RuntimeRequestResult>
   resolveKunApproval: (request: KunProtectedApprovalRequest) => Promise<KunProtectedApprovalResult>
+  orchestrationCommand: (path: string, method?: string) => Promise<RuntimeRequestResult>
   restartRuntime: () => Promise<void>
   fetchUpstreamModels: () => Promise<UpstreamModelsResult>
   probeModelProvider: (payload: ModelProviderProbeRequest) => Promise<ModelProviderProbeResult>
@@ -401,6 +403,7 @@ export type KunGuiApi = ExtensionIpcApi & {
   pollCodexAuth: (deviceCode: string, userCode: string) => Promise<CodexAuthPollResult>
   startCodexBrowserAuth: () => Promise<CodexBrowserAuthResult>
   pickWorkspaceDirectory: (defaultPath?: string) => Promise<WorkspacePickResult>
+  cloneRepository: (url: string, destination?: string) => Promise<WorkspacePickResult>
   pickLocalFiles: (defaultPath?: string) => Promise<LocalFilesPickResult>
   /** 在对话工作目录根下创建一个时间戳子目录作为新对话的工作目录。 */
   createConversationWorkspace: (root?: string) => Promise<ConversationWorkspaceCreateResult>
@@ -433,6 +436,11 @@ export type KunGuiApi = ExtensionIpcApi & {
   getGitBranches: (workspaceRoot: string) => Promise<GitBranchesResult>
   switchGitBranch: (workspaceRoot: string, branch: string) => Promise<GitBranchesResult>
   createAndSwitchGitBranch: (workspaceRoot: string, branch: string) => Promise<GitBranchesResult>
+  getGitStatus: (workspaceRoot: string) => Promise<GitStatusResult>
+  getGitDiff: (params: { workspaceRoot: string; path?: string; staged?: boolean }) => Promise<GitDiffResult>
+  stageGitFile: (params: { workspaceRoot: string; path: string }) => Promise<{ ok: boolean }>
+  unstageGitFile: (params: { workspaceRoot: string; path: string }) => Promise<{ ok: boolean }>
+  commitGitFiles: (params: { workspaceRoot: string; message: string }) => Promise<GitCommitResult>
   createGitCheckpoint: (params: {
     workspaceRoot: string
     threadId: string

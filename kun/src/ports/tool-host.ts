@@ -17,6 +17,7 @@ export type ToolProviderKind =
   | 'memory'
   | 'gui'
   | 'delegation'
+  | 'agent-message'
   | 'image'
   | 'audio'
   | 'video'

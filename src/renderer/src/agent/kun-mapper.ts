@@ -1283,7 +1283,27 @@ const kunEventNormalizerDeps: KunEventNormalizerDeps = {
   }),
   usage: (event) => event.usage ? usageFromCore(event.usage) : null,
   runtimeError: runtimeErrorFromEvent,
-  errorFromRuntime: errorForRuntimeEvent
+  errorFromRuntime: errorForRuntimeEvent,
+  orchestration: (event) => {
+    if (!event.graphId || !event.status) return null
+    const status = event.status
+    if (
+      status !== 'graph_started' && status !== 'task_started' &&
+      status !== 'task_completed' && status !== 'task_failed' &&
+      status !== 'graph_completed' && status !== 'graph_failed' &&
+      status !== 'graph_paused' && status !== 'graph_resumed' &&
+      status !== 'graph_aborted'
+    ) return null
+    return {
+      graphId: event.graphId,
+      ...(event.taskId ? { taskId: event.taskId } : {}),
+      ...(event.taskTitle ? { taskTitle: event.taskTitle } : {}),
+      status,
+      ...(event.profile ? { profile: event.profile } : {}),
+      ...(event.result ? { result: event.result } : {}),
+      ...(event.error ? { error: event.error } : {})
+    }
+  }
 }
 
 export function runtimeProjectionActionsFromEvent(
@@ -1314,6 +1334,7 @@ async function applyRuntimeProjectionAction(
     case 'todos_changed': sink.onTodos?.(action.payload); return
     case 'thread_metadata_changed': sink.onThreadUpdated?.(action.payload); return
     case 'usage_received': sink.onUsage?.(action.payload); return
+    case 'orchestration_changed': sink.onOrchestration?.(action.payload); return
     case 'turn_completed': sink.onTurnComplete(); return
     case 'turn_failed': sink.onError(action.error, action.options); return
   }

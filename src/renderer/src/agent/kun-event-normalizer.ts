@@ -1,6 +1,7 @@
 import type { CoreChildRuntimeMetadataJson, CoreRuntimeEventJson, CoreTurnItemJson } from './kun-contract'
 import type {
   CompactionEventPayload,
+  OrchestrationEventPayload,
   ReviewEventPayload,
   RuntimeErrorEventPayload,
   RuntimeStatusEventPayload,
@@ -33,6 +34,7 @@ export type KunEventNormalizerDeps = {
   usage: (event: CoreRuntimeEventJson) => ThreadUsageSnapshot | null
   runtimeError: (event: CoreRuntimeEventJson, fallback: string) => RuntimeErrorEventPayload
   errorFromRuntime: (payload: RuntimeErrorEventPayload) => Error
+  orchestration: (event: CoreRuntimeEventJson) => OrchestrationEventPayload | null
 }
 
 export function normalizeKunTurnItem(
@@ -136,6 +138,10 @@ export function normalizeKunRuntimeEvent(
     case 'usage': {
       const usage = deps.usage(event)
       return usage ? [{ type: 'usage_received', payload: usage }] : []
+    }
+    case 'orchestration_updated': {
+      const orchestration = deps.orchestration(event)
+      return orchestration ? [{ type: 'orchestration_changed', payload: orchestration }] : []
     }
     case 'thread_updated':
       return [{

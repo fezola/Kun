@@ -8,6 +8,12 @@ import {
   ChevronRight,
   Copy,
   FileText,
+  FileCode2,
+  FileJson,
+  FileImage,
+  FileCog,
+  FileStack,
+  File,
   Folder,
   FolderSearch,
   FolderOpen,
@@ -37,6 +43,42 @@ import {
   SidebarSectionHeader,
   SidebarTreeRow
 } from '../sidebar/SidebarPrimitives'
+import type { LucideIcon } from 'lucide-react'
+
+const FILE_ICON_MAP: Record<string, LucideIcon> = {
+  ts: FileCode2, tsx: FileCode2, mts: FileCode2, cts: FileCode2,
+  js: FileCode2, jsx: FileCode2, mjs: FileCode2, cjs: FileCode2,
+  py: FileCode2, pyw: FileCode2,
+  rs: FileCode2,
+  go: FileCode2,
+  java: FileCode2,
+  cpp: FileCode2, cc: FileCode2, cxx: FileCode2,
+  c: FileCode2, h: FileCode2, hpp: FileCode2,
+  html: FileCode2, htm: FileCode2, vue: FileCode2, svelte: FileCode2,
+  css: FileCode2, scss: FileCode2, less: FileCode2, sass: FileCode2,
+  json: FileJson, jsonc: FileJson, jsonl: FileJson,
+  md: FileText, mdx: FileText,
+  yaml: FileText, yml: FileText, toml: FileText,
+  xml: FileCode2, svg: FileCode2,
+  sql: FileCode2,
+  sh: FileCode2, bash: FileCode2, zsh: FileCode2, fish: FileCode2,
+  ps1: FileCode2, cmd: FileCode2, bat: FileCode2,
+  gitignore: FileText, gitattributes: FileText,
+  dockerignore: FileText,
+  png: FileImage, jpg: FileImage, jpeg: FileImage, gif: FileImage, webp: FileImage, bmp: FileImage, ico: FileImage,
+  pdf: FileText, doc: FileText, docx: FileText,
+  lock: FileCog, env: FileCog,
+  zip: FileStack, tar: FileStack, gz: FileStack,
+  wasm: FileCode2, sol: FileCode2,
+  graphql: FileCode2, gql: FileCode2,
+  txt: FileText, log: FileText, csv: FileText,
+}
+
+function fileIconFromPath(path: string): ReactElement {
+  const ext = path.split('.').pop()?.toLowerCase() ?? ''
+  const Icon = FILE_ICON_MAP[ext] ?? File
+  return <Icon className="h-3.5 w-3.5 shrink-0 text-ds-muted" strokeWidth={1.75} />
+}
 
 export type ChatFileTreeReference = ComposerFileReference & {
   type: 'file' | 'directory'
@@ -418,7 +460,7 @@ export function ChatFileTreePanel({
           ? entryExpanded
             ? <FolderOpen className="h-3.5 w-3.5 shrink-0 text-ds-muted" strokeWidth={1.75} />
             : <Folder className="h-3.5 w-3.5 shrink-0 text-ds-muted" strokeWidth={1.75} />
-          : <FileText className="h-3.5 w-3.5 shrink-0 text-ds-muted" strokeWidth={1.75} />
+          : fileIconFromPath(entry.path)
         const row = (
           <div
             key={entry.path}
@@ -518,7 +560,7 @@ export function ChatFileTreePanel({
                 className="flex min-w-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-left text-[12px] text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
                 title={entry.path}
               >
-                <FileText className="h-3.5 w-3.5 shrink-0" strokeWidth={1.7} />
+                {fileIconFromPath(entry.path)}
                 <span className="min-w-0 truncate">{relativeWorkspacePath(entry.path, root)}</span>
               </button>
             ))}

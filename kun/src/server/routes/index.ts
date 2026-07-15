@@ -53,6 +53,12 @@ import {
   delegationProfiles
 } from './delegation.js'
 import {
+  orchestrationGraphs,
+  orchestrationAbort,
+  orchestrationPause,
+  orchestrationResume
+} from './orchestration.js'
+import {
   backgroundShellGet,
   backgroundShellList,
   backgroundShellStop
@@ -80,6 +86,10 @@ import { registerExtensionPublicRoutes } from './extension-public.js'
  * - `GET/POST /v1/memory`, `PATCH/DELETE /v1/memory/{id}`, diagnostics (auth)
  * - `GET /v1/delegation/diagnostics` and `/v1/delegation/profiles` (auth)
  * - `POST /v1/delegation/abort/{childId}` (auth)
+ * - `GET /v1/orchestration/graphs` (auth)
+ * - `POST /v1/orchestration/graphs/{graphId}/abort` (auth)
+ * - `POST /v1/orchestration/graphs/{graphId}/pause` (auth)
+ * - `POST /v1/orchestration/graphs/{graphId}/resume` (auth)
  * - `GET /v1/workspace/status` (auth)
  * - `GET/POST /v1/threads` (auth)
  * - `GET/PATCH/DELETE /v1/threads/{id}` (auth)
@@ -206,6 +216,22 @@ export function buildRouter(runtime: ServerRuntime): Router {
   router.add('POST', '/v1/delegation/abort/:childId', async (request, ctx) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()
     return delegationAbort(runtime.delegationRuntime, ctx.params.childId)
+  })
+  router.add('GET', '/v1/orchestration/graphs', async (request) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return orchestrationGraphs(runtime.orchestrationRegistry)
+  })
+  router.add('POST', '/v1/orchestration/graphs/:graphId/abort', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return orchestrationAbort(runtime.orchestrationRegistry, ctx.params.graphId)
+  })
+  router.add('POST', '/v1/orchestration/graphs/:graphId/pause', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return orchestrationPause(runtime.orchestrationRegistry, ctx.params.graphId)
+  })
+  router.add('POST', '/v1/orchestration/graphs/:graphId/resume', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return orchestrationResume(runtime.orchestrationRegistry, ctx.params.graphId)
   })
   router.add('GET', '/v1/background-shells', async (request) => {
     if (!authorize(request, runtime)) return ERRORS.unauthorized()

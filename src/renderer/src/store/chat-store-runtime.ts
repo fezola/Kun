@@ -3,6 +3,7 @@ import type {
   ChatBlock,
   CompactionBlock,
   NormalizedThread,
+  OrchestrationEventPayload,
   ReviewBlock,
   ReviewEventPayload,
   RuntimeStatusEventPayload,
@@ -1038,6 +1039,10 @@ export function buildThreadEventSink(
     onUsage: (usage) => {
       if (!isCurrentStream()) return
       set((state) => reduce(state, { type: 'usage_received', payload: usage }))
+    },
+    onOrchestration: (event) => {
+      if (!isCurrentStream()) return
+      set((state) => reduce(state, { type: 'orchestration_changed', payload: event }))
     }
   }
 }

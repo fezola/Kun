@@ -2,6 +2,7 @@ import type {
   AttachmentReference,
   ChatBlock,
   NormalizedThread,
+  OrchestrationEventPayload,
   RuntimeConnectionStatus,
   ReviewTarget,
   ThreadGoal,
@@ -200,6 +201,8 @@ export type ChatState = {
    * occupies the window. Null until a live turn reports usage.
    */
   lastTurnUsage: { threadId: string; snapshot: ThreadUsageSnapshot } | null
+  lastOrchestrationEvent: OrchestrationEventPayload | null
+  orchestrationEventSeq: number
   busy: boolean
   error: string | null
   runtimeErrorDetail: string | null

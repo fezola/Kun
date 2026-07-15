@@ -228,10 +228,6 @@ export function handleComposerImagePaste({
   const hasImageTransfer = imageTransferHasImages(clipboardData)
   if (files.length > 0) {
     preventDefault()
-    if (onPasteClipboardImage) {
-      void onPasteClipboardImage({ silentNoImage: false })
-      return true
-    }
     onPickAttachments?.(files)
     return true
   }

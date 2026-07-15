@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
-import { Check, ChevronDown, Folder, FolderPlus, Loader2, Search } from 'lucide-react'
+import { Check, ChevronDown, Folder, FolderPlus, GitFork, Loader2, Search, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useChatStore } from '../../store/chat-store'
 import { workspaceLabelFromPath } from '../../lib/workspace-label'
@@ -113,8 +113,13 @@ export function WorkspaceProjectPicker({ currentWorkspaceRoot }: Props): ReactEl
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [acting, setActing] = useState(false)
+  const [cloneOpen, setCloneOpen] = useState(false)
+  const [cloneUrl, setCloneUrl] = useState('')
+  const [cloning, setCloning] = useState(false)
+  const [cloneError, setCloneError] = useState('')
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const inputRef = useRef<HTMLInputElement | null>(null)
+  const cloneInputRef = useRef<HTMLInputElement | null>(null)
 
   const { currentRoot, options } = useMemo(() => {
     return buildWorkspaceProjectPickerOptions({
@@ -184,6 +189,28 @@ export function WorkspaceProjectPicker({ currentWorkspaceRoot }: Props): ReactEl
       setQuery('')
     } finally {
       setActing(false)
+    }
+  }
+
+  const handleClone = async (): Promise<void> => {
+    if (cloning || !cloneUrl.trim()) return
+    setCloning(true)
+    setCloneError('')
+    try {
+      const result = await window.kunGui.cloneRepository(cloneUrl.trim())
+      if (result.canceled || !result.path) {
+        setCloneError('Clone failed. Check the URL and try again.')
+        return
+      }
+      await selectWorkspaceRoot(result.path)
+      setOpen(false)
+      setCloneOpen(false)
+      setCloneUrl('')
+      setQuery('')
+    } catch {
+      setCloneError('Clone failed. Make sure git is installed and the URL is valid.')
+    } finally {
+      setCloning(false)
     }
   }
 
@@ -266,15 +293,74 @@ export function WorkspaceProjectPicker({ currentWorkspaceRoot }: Props): ReactEl
           </div>
 
           <div className="border-t border-ds-border-muted px-3 py-3">
-            <button
-              type="button"
-              disabled={acting}
-              className="flex w-full items-center gap-3 rounded-lg px-1 py-2 text-left text-[14px] font-medium text-ds-ink transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent"
-              onClick={() => void handleAdd()}
-            >
-              <FolderPlus className="h-4 w-4 shrink-0 text-ds-muted" strokeWidth={1.9} />
-              <span className="min-w-0 truncate">{t('composerWorkspaceAdd')}</span>
-            </button>
+            {cloneOpen ? (
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-2">
+                  <input
+                    ref={cloneInputRef}
+                    value={cloneUrl}
+                    onChange={(e) => { setCloneUrl(e.target.value); setCloneError('') }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') void handleClone()
+                      if (e.key === 'Escape') { setCloneOpen(false); setCloneUrl(''); setCloneError('') }
+                    }}
+                    placeholder="https://github.com/user/repo.git"
+                    className="flex-1 rounded-lg border border-ds-border bg-ds-surface px-3 py-1.5 text-[13px] text-ds-ink outline-none focus:border-blue-500"
+                    autoFocus
+                    disabled={cloning}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => { setCloneOpen(false); setCloneUrl(''); setCloneError('') }}
+                    className="rounded p-1 text-ds-faint hover:text-ds-muted"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                {cloneError && (
+                  <div className="text-[11px] text-red-500">{cloneError}</div>
+                )}
+                <button
+                  type="button"
+                  disabled={cloning || !cloneUrl.trim()}
+                  className="flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-3 py-1.5 text-[13px] font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-45"
+                  onClick={() => void handleClone()}
+                >
+                  {cloning ? (
+                    <>
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      <span>Cloning...</span>
+                    </>
+                  ) : (
+                    <>
+                      <GitFork className="h-3.5 w-3.5" />
+                      <span>Clone</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-1">
+                <button
+                  type="button"
+                  disabled={acting}
+                  className="flex w-full items-center gap-3 rounded-lg px-1 py-2 text-left text-[14px] font-medium text-ds-ink transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent"
+                  onClick={() => void handleAdd()}
+                >
+                  <FolderPlus className="h-4 w-4 shrink-0 text-ds-muted" strokeWidth={1.9} />
+                  <span className="min-w-0 truncate">{t('composerWorkspaceAdd')}</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={acting || cloning}
+                  className="flex w-full items-center gap-3 rounded-lg px-1 py-2 text-left text-[14px] font-medium text-ds-ink transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent"
+                  onClick={() => { setCloneOpen(true); setTimeout(() => cloneInputRef.current?.focus(), 0) }}
+                >
+                  <GitFork className="h-4 w-4 shrink-0 text-ds-muted" strokeWidth={1.9} />
+                  <span className="min-w-0 truncate">Clone Repository</span>
+                </button>
+              </div>
+            )}
           </div>
         </div>
       ) : null}

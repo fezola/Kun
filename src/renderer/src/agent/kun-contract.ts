@@ -687,6 +687,11 @@ export type CoreRuntimeEventJson = {
   code?: string
   severity?: 'info' | 'warning' | 'error'
   child?: CoreChildRuntimeMetadataJson
+  graphId?: string
+  taskId?: string
+  taskTitle?: string
+  profile?: string
+  result?: string
 }
 
 export type RuntimeErrorJson = {

@@ -1,6 +1,7 @@
 import type { CoreRuntimeEventJson } from './kun-contract'
 import type {
   CompactionEventPayload,
+  OrchestrationEventPayload,
   ReviewEventPayload,
   RuntimeErrorEventPayload,
   RuntimeStatusEventPayload,
@@ -43,6 +44,7 @@ export type RuntimeProjectionAction =
   | { type: 'todos_changed'; payload: TodoProjection }
   | { type: 'thread_metadata_changed'; payload: ThreadMetadataProjection }
   | { type: 'usage_received'; payload: ThreadUsageSnapshot }
+  | { type: 'orchestration_changed'; payload: OrchestrationEventPayload }
   | {
       type: 'thread_snapshot_reconciled'
       payload: {

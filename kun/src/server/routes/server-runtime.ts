@@ -43,6 +43,7 @@ import type { RolesConfig } from '../../config/kun-config.js'
 import type { ImmutablePrefix } from '../../cache/immutable-prefix.js'
 import type { PublisherTrustStore } from '../../supplychain/publisher-trust-store.js'
 import type { ThreadEventStreamRegistry } from '../thread-event-stream-registry.js'
+import type { OrchestrationRegistry } from '../../delegation/orchestration-registry.js'
 import type {
   ArchiveValidationOptions,
   ExtensionIndexClient,
@@ -133,6 +134,8 @@ export type ServerRuntime = {
    * listing. Optional so test scaffolds can omit it.
    */
   delegationRuntime?: DelegationRuntime
+  agentMessageBus?: import('../../delegation/agent-message-bus.js').AgentMessageBus
+  orchestrationRegistry?: OrchestrationRegistry
   backgroundShellRuntime?: BackgroundShellRuntime
   supplyChainTrust?: PublisherTrustStore
   /** Single extension platform instance shared by HTTP, CLI-style services, tools, and model routing. */

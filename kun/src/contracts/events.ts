@@ -51,7 +51,9 @@ export const RuntimeEventKind = z.enum([
   'pipeline_stage',
   'usage',
   'error',
-  'heartbeat'
+  'heartbeat',
+  'agent_message',
+  'orchestration_updated'
 ])
 export type RuntimeEventKind = z.infer<typeof RuntimeEventKind>
 
@@ -283,6 +285,40 @@ export const HeartbeatEvent = RuntimeEventBase.extend({
 })
 export type HeartbeatEvent = z.infer<typeof HeartbeatEvent>
 
+export const AgentMessageEvent = RuntimeEventBase.extend({
+  kind: z.literal('agent_message'),
+  agentMessage: z.object({
+    messageId: z.string().min(1),
+    from: z.string().min(1),
+    to: z.string().min(1),
+    type: z.enum(['finding', 'request', 'context', 'result', 'status']),
+    title: z.string().min(1)
+  })
+})
+export type AgentMessageEvent = z.infer<typeof AgentMessageEvent>
+
+export const OrchestrationEvent = RuntimeEventBase.extend({
+  kind: z.literal('orchestration_updated'),
+  graphId: z.string().min(1),
+  taskId: z.string().optional(),
+  taskTitle: z.string().optional(),
+  status: z.enum([
+    'graph_started',
+    'task_started',
+    'task_completed',
+    'task_failed',
+    'graph_completed',
+    'graph_failed',
+    'graph_paused',
+    'graph_resumed',
+    'graph_aborted'
+  ]),
+  profile: z.string().optional(),
+  result: z.string().optional(),
+  error: z.string().optional()
+})
+export type OrchestrationEvent = z.infer<typeof OrchestrationEvent>
+
 export const RuntimeEvent = z.discriminatedUnion('kind', [
   ItemEvent,
   ThreadLifecycleEvent,
@@ -301,7 +337,9 @@ export const RuntimeEvent = z.discriminatedUnion('kind', [
   PipelineStageEvent,
   UsageEvent,
   ErrorEvent,
-  HeartbeatEvent
+  HeartbeatEvent,
+  AgentMessageEvent,
+  OrchestrationEvent
 ])
 export type RuntimeEvent = z.infer<typeof RuntimeEvent>
 

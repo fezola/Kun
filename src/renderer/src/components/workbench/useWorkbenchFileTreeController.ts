@@ -152,6 +152,12 @@ export function useWorkbenchFileTreeController({
     if (route !== 'chat') setComposerFileReferences([])
   }, [route])
 
+  useEffect(() => {
+    if (fileTreeWorkspaceRoot && !fileTreeSidePanelOpen) {
+      setFileTreeSidePanelOpen(true)
+    }
+  }, [fileTreeWorkspaceRoot])
+
   return {
     composerFileReferences,
     fileTreeSidePanelOpen,

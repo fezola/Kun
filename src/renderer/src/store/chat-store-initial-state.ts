@@ -34,6 +34,8 @@ export function createInitialChatStoreState(workingDirectoryLabel: string) {
     lastSeq: 0,
     usageRefreshKey: 0,
     lastTurnUsage: null,
+    lastOrchestrationEvent: null,
+    orchestrationEventSeq: 0,
     busy: false,
     error: null,
     runtimeErrorDetail: null,

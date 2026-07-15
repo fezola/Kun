@@ -2751,6 +2751,8 @@
   "enable": "启用",
   "expandSidebar": "展开侧边栏",
   "rightPanelSubagents": "子代理",
+  "rightPanelOrchestration": "编排",
+  "rightPanelSourceControl": "版本控制",
   "subagentsPanel": {
     "configModel": "配置模型",
     "delegatable": "可委派 · 可在对话里用",

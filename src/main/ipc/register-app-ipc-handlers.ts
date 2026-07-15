@@ -12,6 +12,7 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 import { access, copyFile, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { execFile } from 'node:child_process'
 import { z } from 'zod'
 import {
   getKunRuntimeSettings,
@@ -151,6 +152,11 @@ import {
   createAndSwitchGitBranch,
   createGitBranchWorktree,
   getGitBranches,
+  getGitStatus,
+  getGitDiff,
+  stageGitFile,
+  unstageGitFile,
+  commitGitFiles,
   listGitBranchWorktrees,
   removeGitBranchWorktree,
   switchGitBranch
@@ -758,6 +764,16 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     return { confirmed: true as const, response }
   })
 
+  ipcMain.handle('orchestration:command', async (event, payload: unknown) => {
+    assertTrustedWorkbenchSender(event, getMainWindow)
+    const request = parseIpcPayload(
+      'orchestration:command',
+      z.object({ path: z.string().min(1), method: z.string().default('POST') }),
+      payload
+    )
+    return runtimeRequest(request.path, request.method)
+  })
+
   ipcMain.handle('runtime:restart', async () => restartRuntime())
 
   ipcMain.handle('upstream:models', async () => fetchUpstreamModels())
@@ -1024,8 +1040,32 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       : await dialog.showOpenDialog(options)
     return {
       canceled: result.canceled,
-      paths: result.canceled ? [] : result.filePaths
+      path: result.canceled ? null : (result.filePaths[0] ?? null)
     }
+  })
+
+  ipcMain.handle('workspace:clone-repository', async (_, payload: unknown): Promise<WorkspacePickResult> => {
+    const request = parseIpcPayload(
+      'workspace:clone-repository',
+      z.object({ url: z.string().url(), destination: z.string().optional() }),
+      payload
+    )
+    const cloneDir = join(homedir(), 'Kun', 'repos')
+    await mkdir(cloneDir, { recursive: true })
+    const repoName = request.url.split('/').pop()?.replace(/\.git$/, '') ?? `repo-${Date.now().toString(36)}`
+    const dest = request.destination
+      ? resolve(cloneDir, request.destination)
+      : resolve(cloneDir, repoName)
+
+    return new Promise<WorkspacePickResult>((resolve) => {
+      execFile('git', ['clone', request.url, dest], { timeout: 120_000 }, (error) => {
+        if (error) {
+          resolve({ canceled: true, path: null })
+        } else {
+          resolve({ canceled: false, path: dest })
+        }
+      })
+    })
   })
 
   // 在对话工作目录根下创建一个 YYYYMMDD-HHmmss 时间戳子目录作为新对话的工作目录。
@@ -1385,6 +1425,41 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   ipcMain.handle('git:remove-branch-worktree', async (_, payload: unknown) => {
     const request = parseIpcPayload('git:remove-branch-worktree', gitWorktreeRemoveSchema, payload)
     return removeGitBranchWorktree(request)
+  })
+
+  ipcMain.handle('git:status', async (_, workspaceRoot: unknown) =>
+    getGitStatus(parseIpcPayload('git:status', workspaceRootSchema, workspaceRoot))
+  )
+  ipcMain.handle('git:diff', async (_, payload: unknown) => {
+    const request = parseIpcPayload('git:diff', z.object({
+      workspaceRoot: z.string(),
+      path: z.string().optional(),
+      staged: z.boolean().optional()
+    }), payload)
+    return getGitDiff(request.workspaceRoot, request.path, request.staged)
+  })
+  ipcMain.handle('git:stage', async (_, payload: unknown) => {
+    const request = parseIpcPayload('git:stage', z.object({
+      workspaceRoot: z.string(),
+      path: z.string()
+    }), payload)
+    await stageGitFile(request.workspaceRoot, request.path)
+    return { ok: true }
+  })
+  ipcMain.handle('git:unstage', async (_, payload: unknown) => {
+    const request = parseIpcPayload('git:unstage', z.object({
+      workspaceRoot: z.string(),
+      path: z.string()
+    }), payload)
+    await unstageGitFile(request.workspaceRoot, request.path)
+    return { ok: true }
+  })
+  ipcMain.handle('git:commit', async (_, payload: unknown) => {
+    const request = parseIpcPayload('git:commit', z.object({
+      workspaceRoot: z.string(),
+      message: z.string()
+    }), payload)
+    return commitGitFiles(request.workspaceRoot, request.message)
   })
 
   // Worktree pool management

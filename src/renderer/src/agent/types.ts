@@ -425,6 +425,25 @@ export type UserMessageEventPayload = {
   meta?: RuntimeDisclosureMetadata
 }
 
+export type OrchestrationEventPayload = {
+  graphId: string
+  taskId?: string
+  taskTitle?: string
+  status:
+    | 'graph_started'
+    | 'task_started'
+    | 'task_completed'
+    | 'task_failed'
+    | 'graph_completed'
+    | 'graph_failed'
+    | 'graph_paused'
+    | 'graph_resumed'
+    | 'graph_aborted'
+  profile?: string
+  result?: string
+  error?: string
+}
+
 export type ThreadDeltaEvent = {
   text: string
   kind: 'agent_message' | 'agent_reasoning'
@@ -470,6 +489,7 @@ export type ThreadEventSink = {
   onError(err: Error, options?: ThreadErrorOptions): void
   /** Optional: cumulative usage update for the thread. */
   onUsage?(usage: ThreadUsageSnapshot): void
+  onOrchestration?(ev: OrchestrationEventPayload): void
 }
 
 export interface AgentProvider {

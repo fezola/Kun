@@ -1,5 +1,6 @@
 import type {
   ChatBlock,
+  OrchestrationEventPayload,
   RuntimeErrorEventPayload,
   RuntimeStatusEventPayload,
   ToolBlock,
@@ -455,6 +456,11 @@ export function reduceChatProjection(
       return {
         usageRefreshKey: state.usageRefreshKey + 1,
         lastTurnUsage: { threadId: state.activeThreadId ?? '', snapshot: action.payload }
+      }
+    case 'orchestration_changed':
+      return {
+        lastOrchestrationEvent: action.payload,
+        orchestrationEventSeq: state.orchestrationEventSeq + 1
       }
     case 'thread_snapshot_reconciled': {
       const snapshot = action.payload

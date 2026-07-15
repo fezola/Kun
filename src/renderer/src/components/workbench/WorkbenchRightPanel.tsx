@@ -37,6 +37,12 @@ const CodeCanvasPanel = lazy(() =>
 const SubagentDetailPanel = lazy(() =>
   import('../subagents/SubagentDetailPanel').then((module) => ({ default: module.SubagentDetailPanel }))
 )
+const OrchestrationDashboard = lazy(() =>
+  import('../orchestration/OrchestrationDashboard').then((module) => ({ default: module.OrchestrationDashboard }))
+)
+const SourceControlPanel = lazy(() =>
+  import('../source-control/SourceControlPanel').then((module) => ({ default: module.SourceControlPanel }))
+)
 const WriteAssistantPanel = lazy(() =>
   import('../write/WriteAssistantPanel').then((module) => ({ default: module.WriteAssistantPanel }))
 )
@@ -114,6 +120,10 @@ export function WorkbenchRightPanel({
             <SddAssistantPanel {...sdd} draft={sdd.draft} className="h-full max-h-full w-full" />
           ) : rightPanelMode === BUILTIN_RIGHT_PANEL_IDS.subagents ? (
             <SubagentDetailPanel className="h-full max-h-full w-full" onCollapse={onCollapse} />
+          ) : rightPanelMode === BUILTIN_RIGHT_PANEL_IDS.orchestration ? (
+            <OrchestrationDashboard className="h-full max-h-full w-full" />
+          ) : rightPanelMode === BUILTIN_RIGHT_PANEL_IDS.sourceControl ? (
+            <SourceControlPanel workspaceRoot={workspaceRoot} className="h-full max-h-full w-full" />
           ) : rightPanelMode === BUILTIN_RIGHT_PANEL_IDS.changes ? (
             <ChangeInspector {...changes} className="h-full max-h-full w-full flex-col" />
           ) : rightPanelMode === BUILTIN_RIGHT_PANEL_IDS.todo ? (

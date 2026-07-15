@@ -28,6 +28,14 @@ export type TaskNode = {
   lastError?: string
   /** Earliest time (ms epoch) the task may be retried after a failure. */
   nextAttemptAt?: number
+  /** Subagent profile to use when executing this task via orchestration. */
+  profile?: string
+  /** Prompt/instructions for the child agent when executing this task. */
+  prompt?: string
+  /** Child agent thread id when the task is running via orchestration. */
+  childId?: string
+  /** Summary result from the child agent after completion. */
+  result?: string
 }
 
 export type TaskGraphData = {
@@ -44,6 +52,8 @@ export type AddTaskInput = {
   maxAttempts?: number
   worktree?: string
   tokenBudget?: number
+  profile?: string
+  prompt?: string
 }
 
 export type TaskGraphOptions = {
@@ -79,7 +89,9 @@ export class TaskGraph {
       attempts: 0,
       maxAttempts: Math.max(1, input.maxAttempts ?? 1),
       ...(input.worktree ? { worktree: input.worktree } : {}),
-      ...(input.tokenBudget ? { tokenBudget: input.tokenBudget } : {})
+      ...(input.tokenBudget ? { tokenBudget: input.tokenBudget } : {}),
+      ...(input.profile ? { profile: input.profile } : {}),
+      ...(input.prompt ? { prompt: input.prompt } : {})
     }
     this.tasks.set(input.id, node)
     const cycle = this.detectCycle()

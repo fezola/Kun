@@ -15,6 +15,7 @@ import {
   Maximize2,
   Minimize2,
   PanelRightClose,
+  Save,
   X
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
@@ -27,6 +28,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useCallback,
   type ComponentPropsWithoutRef,
   type CSSProperties,
   type ReactElement,
@@ -44,6 +46,7 @@ import {
   isWorkspaceRasterImagePreviewPath,
   isWorkspaceTextPreviewPath
 } from '../lib/workspace-text-preview'
+import { CodeMirrorEditor } from './CodeMirrorEditor'
 import {
   initialWriteMarkdownImageSrc,
   loadWriteMarkdownImage
@@ -210,6 +213,8 @@ export function WorkspaceFilePreviewPanel({
   const [svgRendered, setSvgRendered] = useState(true)
   const [readingMode, setReadingMode] = useState(false)
   const [highlightHtml, setHighlightHtml] = useState(() => renderFallbackCodeHtml(''))
+  const [editedContent, setEditedContent] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const copyResetRef = useRef<number | null>(null)
 
@@ -226,6 +231,7 @@ export function WorkspaceFilePreviewPanel({
     setLoading(true)
     setResult(null)
     setImageResult(null)
+    setEditedContent(null)
 
     const readTarget = {
       ...target,
@@ -396,6 +402,39 @@ export function WorkspaceFilePreviewPanel({
     }
   }
 
+  const isDirty = editedContent !== null && result?.ok && editedContent !== result.content
+
+  const saveFile = useCallback(async (): Promise<void> => {
+    if (!result?.ok || editedContent === null || editedContent === result.content) return
+    setSaving(true)
+    try {
+      const saveResult = await window.kunGui.writeWorkspaceFile({
+        workspaceRoot: target?.workspaceRoot ?? workspaceRoot,
+        path: result.path,
+        content: editedContent
+      })
+      if (saveResult.ok) {
+        setResult({ ...result, content: editedContent })
+        setEditedContent(null)
+      }
+    } catch {
+      // save failed silently
+    } finally {
+      setSaving(false)
+    }
+  }, [result, editedContent, target, workspaceRoot])
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent): void => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault()
+        void saveFile()
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [saveFile])
+
   return (
     <>
       <button
@@ -547,6 +586,22 @@ export function WorkspaceFilePreviewPanel({
               <Copy className="h-4 w-4" strokeWidth={1.75} />
             )}
           </button>
+          {isDirty ? (
+            <button
+              type="button"
+              onClick={() => void saveFile()}
+              disabled={saving}
+              className="ds-code-sidebar-icon-button"
+              title="Save (Ctrl+S)"
+              aria-label="Save"
+            >
+              {saving ? (
+                <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.75} />
+              ) : (
+                <Save className="h-4 w-4 text-blue-500" strokeWidth={2} />
+              )}
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={onClose}
@@ -661,36 +716,13 @@ export function WorkspaceFilePreviewPanel({
                 </div>
               </div>
             ) : (
-              <div
-                ref={scrollRef}
-                className="ds-file-preview-scroll min-h-0 flex-1 overflow-auto font-mono text-[12px] leading-[22px] text-ds-ink"
-              >
-                <div
-                  className="ds-file-preview-code-surface"
-                  style={codeSurfaceStyle}
-                >
-                  {activeLine ? (
-                    <div className="ds-file-preview-active-line" aria-hidden="true" />
-                  ) : null}
-                  <div className="ds-file-preview-gutter">
-                    {lines.map((_, index) => {
-                      const lineNo = index + 1
-                      return (
-                        <div
-                          key={lineNo}
-                          data-line={lineNo}
-                          className={`ds-file-preview-line-number ${activeLine === lineNo ? 'is-active' : ''}`}
-                        >
-                          {lineNo}
-                        </div>
-                      )
-                    })}
-                  </div>
-                  <div
-                    className="ds-file-preview-code-html"
-                    dangerouslySetInnerHTML={{ __html: highlightHtml }}
-                  />
-                </div>
+              <div className="relative min-h-0 flex-1 overflow-hidden">
+                <CodeMirrorEditor
+                  content={editedContent ?? result.content}
+                  filePath={result.path}
+                  onChange={(value) => setEditedContent(value)}
+                  onSave={() => void saveFile()}
+                />
               </div>
             )}
           </div>

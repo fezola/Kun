@@ -337,3 +337,90 @@ export async function removeGitBranchWorktree(params: {
   if (!cwd) throw new Error('No working directory selected.')
   await runGit(cwd, ['worktree', 'remove', '--force', params.worktreePath], 30_000)
 }
+
+// --- Source Control ---
+
+import type { GitStatusResult, GitDiffResult, GitCommitResult } from '../../shared/git-source-control'
+
+function parsePorcelainLine(line: string): { indexStatus: string; worktreeStatus: string; path: string } | null {
+  if (line.length < 4) return null
+  const indexStatus = line[0]
+  const worktreeStatus = line[1]
+  const path = line.slice(3)
+  return { indexStatus, worktreeStatus, path }
+}
+
+export async function getGitStatus(workspaceRoot: string): Promise<GitStatusResult> {
+  if (!workspaceRoot.trim()) {
+    return { ok: false, reason: 'no_workspace', message: 'No workspace selected.' }
+  }
+  const cwd = await resolveGitCwd(workspaceRoot)
+  try {
+    const branchResult = await runGit(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'])
+    const branch = branchResult.stdout.trim()
+
+    const statusResult = await runGit(cwd, ['status', '--porcelain=v1'])
+    const files = statusResult.stdout
+      .split('\n')
+      .filter(Boolean)
+      .map(parsePorcelainLine)
+      .filter((f): f is NonNullable<typeof f> => f !== null)
+
+    let ahead = 0
+    let behind = 0
+    try {
+      const abResult = await runGit(cwd, ['rev-list', '--left-right', '--count', `HEAD...@{upstream}`])
+      const parts = abResult.stdout.trim().split(/\s+/)
+      ahead = parseInt(parts[0] ?? '0', 10) || 0
+      behind = parseInt(parts[1] ?? '0', 10) || 0
+    } catch {
+      // no upstream — leave counts at 0
+    }
+
+    return { ok: true, branch, files, ahead, behind }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (/not a git repository/i.test(message)) {
+      return { ok: false, reason: 'not_git_repo', message: 'Not a Git repository.' }
+    }
+    if (/ENOENT/i.test(message) || /spawn git/i.test(message)) {
+      return { ok: false, reason: 'git_unavailable', message: 'Git executable not found.' }
+    }
+    return { ok: false, reason: 'error', message }
+  }
+}
+
+export async function getGitDiff(workspaceRoot: string, filePath?: string, staged?: boolean): Promise<GitDiffResult> {
+  try {
+    const cwd = await resolveGitCwd(workspaceRoot)
+    const args = ['diff']
+    if (staged) args.push('--cached')
+    if (filePath) args.push('--', filePath)
+    const result = await runGit(cwd, args)
+    return { ok: true, diff: result.stdout }
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+export async function stageGitFile(workspaceRoot: string, filePath: string): Promise<void> {
+  const cwd = await resolveGitCwd(workspaceRoot)
+  await runGit(cwd, ['add', '--', filePath])
+}
+
+export async function unstageGitFile(workspaceRoot: string, filePath: string): Promise<void> {
+  const cwd = await resolveGitCwd(workspaceRoot)
+  await runGit(cwd, ['reset', 'HEAD', '--', filePath])
+}
+
+export async function commitGitFiles(workspaceRoot: string, message: string): Promise<GitCommitResult> {
+  try {
+    const cwd = await resolveGitCwd(workspaceRoot)
+    const result = await runGit(cwd, ['commit', '-m', message])
+    const hashMatch = result.stdout.match(/\[[\w]+ ([a-f0-9]+)\]/)
+    const commitHash = hashMatch?.[1] ?? ''
+    return { ok: true, commitHash }
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : String(error) }
+  }
+}

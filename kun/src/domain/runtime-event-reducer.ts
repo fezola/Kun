@@ -175,6 +175,8 @@ export function applyRuntimeEvent(
         ...(event.message ? { message: event.message } : {})
       }
       break
+    case 'agent_message':
+      break
     case 'usage':
       next.usage = addUsage(next.usage, event.usage)
       break

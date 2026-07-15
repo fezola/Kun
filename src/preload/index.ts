@@ -35,6 +35,8 @@ const api = {
   runtimeRequest: (path, method, body) =>
     ipcRenderer.invoke('runtime:request', { path, method, body }),
   resolveKunApproval: (request) => ipcRenderer.invoke('approval:decide', request),
+  orchestrationCommand: (path, method = 'POST') =>
+    ipcRenderer.invoke('orchestration:command', { path, method }),
   restartRuntime: () => ipcRenderer.invoke('runtime:restart'),
   fetchUpstreamModels: () => ipcRenderer.invoke('upstream:models'),
   probeModelProvider: (payload) => ipcRenderer.invoke('provider:probe', payload),
@@ -69,6 +71,8 @@ const api = {
     ipcRenderer.invoke('codex:auth:browser'),
   pickWorkspaceDirectory: (defaultPath) =>
     ipcRenderer.invoke('workspace:pick-directory', defaultPath),
+  cloneRepository: (url, destination) =>
+    ipcRenderer.invoke('workspace:clone-repository', { url, destination }),
   pickLocalFiles: (defaultPath) =>
     ipcRenderer.invoke('file:pick-local-files', defaultPath),
   createConversationWorkspace: (root) =>
@@ -124,6 +128,16 @@ const api = {
     ipcRenderer.invoke('git:branch-worktrees', params),
   removeGitBranchWorktree: (params) =>
     ipcRenderer.invoke('git:remove-branch-worktree', params),
+  getGitStatus: (workspaceRoot) =>
+    ipcRenderer.invoke('git:status', workspaceRoot),
+  getGitDiff: (params) =>
+    ipcRenderer.invoke('git:diff', params),
+  stageGitFile: (params) =>
+    ipcRenderer.invoke('git:stage', params),
+  unstageGitFile: (params) =>
+    ipcRenderer.invoke('git:unstage', params),
+  commitGitFiles: (params) =>
+    ipcRenderer.invoke('git:commit', params),
   acquireWorktree: (params) =>
     ipcRenderer.invoke('worktree:acquire', params),
   releaseWorktree: (params) =>

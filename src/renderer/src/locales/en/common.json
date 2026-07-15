@@ -2751,6 +2751,8 @@
   "enable": "Enable",
   "expandSidebar": "Expand sidebar",
   "rightPanelSubagents": "Subagents",
+  "rightPanelOrchestration": "Orchestration",
+  "rightPanelSourceControl": "Source Control",
   "subagentsPanel": {
     "configModel": "configure model",
     "delegatable": "Delegatable · usable in chat",

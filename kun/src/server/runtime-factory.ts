@@ -34,7 +34,11 @@ import { buildMcpToolProviders } from '../adapters/tool/mcp-tool-provider.js'
 import { buildMemoryToolProviders } from '../adapters/tool/memory-tool-provider.js'
 import { buildSkillToolProviders } from '../adapters/tool/skill-tool-provider.js'
 import { buildDelegationToolProviders } from '../adapters/tool/delegation-tool-provider.js'
+import { buildAgentMessageToolProviders } from '../adapters/tool/agent-message-tools.js'
+import { AgentMessageBus } from '../delegation/agent-message-bus.js'
+import { buildOrchestrationToolProviders } from '../adapters/tool/orchestration-tool.js'
 import { buildWebToolProviders } from '../adapters/tool/web-tool-provider.js'
+import { OrchestrationRegistry } from '../delegation/orchestration-registry.js'
 import { buildImageGenToolProviders } from '../adapters/tool/image-gen-tool-provider.js'
 import { buildComputerUseToolProviders } from '../adapters/tool/computer-use-tool-provider.js'
 import {
@@ -569,7 +573,19 @@ export async function createKunServeRuntime(
           usageService.record(threadId, usage)
         }
       })
-    : undefined
+	    : undefined
+	  const agentMessageBus = activeOptions.capabilities?.subagents.enabled
+	    ? new AgentMessageBus({ events })
+	    : undefined
+	  const orchestrationRegistry = new OrchestrationRegistry()
+	  if (agentMessageBus) {
+	    for (const provider of buildAgentMessageToolProviders(agentMessageBus)) {
+	      childRegistry.registerProvider(provider)
+	    }
+	    for (const provider of buildOrchestrationToolProviders(delegationRuntime, agentMessageBus, orchestrationRegistry)) {
+	      childRegistry.registerProvider(provider)
+	    }
+	  }
 	  let capabilities = buildRuntimeCapabilityManifest({
 	    config: activeOptions.capabilities,
 	    model: modelCapabilities(activeOptions.model),
@@ -986,7 +1002,7 @@ export async function createKunServeRuntime(
 	    const outcomes = await Promise.allSettled(Object.values(document.extensions).map(async (entry) => {
 	      const workspaceKey = context?.workspace && isAbsolute(context.workspace)
 	        ? extensionPaths.workspaceKey(context.workspace)
-	        : undefined
+	    : undefined
 	      const enabled = workspaceKey && workspaceKey in entry.workspaceEnablement
 	        ? entry.workspaceEnablement[workspaceKey]
 	        : entry.globallyEnabled
@@ -1212,6 +1228,14 @@ export async function createKunServeRuntime(
 	      designCanvasProvider
 	    ]
 	    const nextChildRegistry = new CapabilityRegistry(nextBaseToolProviders)
+	    if (agentMessageBus) {
+	      for (const provider of buildAgentMessageToolProviders(agentMessageBus)) {
+	        nextChildRegistry.registerProvider(provider)
+	      }
+	      for (const provider of buildOrchestrationToolProviders(delegationRuntime, agentMessageBus, orchestrationRegistry)) {
+	        nextChildRegistry.registerProvider(provider)
+	      }
+	    }
 	    if (delegationRuntime && nextOptions.capabilities?.subagents) {
 	      delegationRuntime.replaceConfig(mergeBuiltinSubagentProfiles(nextOptions.capabilities.subagents))
 	    }
@@ -1239,7 +1263,9 @@ export async function createKunServeRuntime(
 	        available: true,
 	        tools: [taskGraphTool]
 	      },
-	      ...buildDelegationToolProviders(delegationRuntime)
+    ...buildDelegationToolProviders(delegationRuntime),
+    ...buildAgentMessageToolProviders(agentMessageBus),
+    ...buildOrchestrationToolProviders(delegationRuntime, agentMessageBus, orchestrationRegistry)
 	    ])
 
 	    const previousMcpProviders = mcpProviders
@@ -1361,6 +1387,12 @@ export async function createKunServeRuntime(
 	    },
 	    get delegationRuntime() {
 	      return delegationRuntime
+	    },
+	    get agentMessageBus() {
+	      return agentMessageBus
+	    },
+	    get orchestrationRegistry() {
+	      return orchestrationRegistry
 	    },
 	    backgroundShellRuntime,
 	    supplyChainTrust,

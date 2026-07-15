@@ -8,7 +8,9 @@ export const BUILTIN_RIGHT_PANEL_IDS = {
   file: 'builtin:right-panel-file',
   sddAi: 'builtin:right-panel-sdd-ai',
   canvas: 'builtin:right-panel-canvas',
-  subagents: 'builtin:right-panel-subagents'
+  subagents: 'builtin:right-panel-subagents',
+  orchestration: 'builtin:right-panel-orchestration',
+  sourceControl: 'builtin:right-panel-source-control'
 } as const
 
 export type BuiltinRightPanelId = (typeof BUILTIN_RIGHT_PANEL_IDS)[keyof typeof BUILTIN_RIGHT_PANEL_IDS]
@@ -26,7 +28,9 @@ const LEGACY_RIGHT_PANEL_IDS: Readonly<Record<string, BuiltinRightPanelId>> = {
   file: BUILTIN_RIGHT_PANEL_IDS.file,
   'sdd-ai': BUILTIN_RIGHT_PANEL_IDS.sddAi,
   canvas: BUILTIN_RIGHT_PANEL_IDS.canvas,
-  subagents: BUILTIN_RIGHT_PANEL_IDS.subagents
+  subagents: BUILTIN_RIGHT_PANEL_IDS.subagents,
+  orchestration: BUILTIN_RIGHT_PANEL_IDS.orchestration,
+  sourceControl: BUILTIN_RIGHT_PANEL_IDS.sourceControl
 }
 
 export function isExtensionContributionId(value: string): value is ExtensionContributionId {

@@ -2,6 +2,7 @@ import type { ReactElement } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useChatStore } from '../store/chat-store'
+import { useOrchestrationEventBridge } from '../stores/use-orchestration-event-bridge'
 import type { RightPanelMode } from './chat/WorkbenchTopBar'
 import { type ComposerReasoningEffort } from './chat/FloatingComposerModelPicker'
 import { WorkbenchLeftSidebar } from './workbench/WorkbenchLeftSidebar'
@@ -103,6 +104,7 @@ export function Workbench(): ReactElement {
     useState<ComposerReasoningEffort>('max')
   const [connectPhoneSidebarOpen, setConnectPhoneSidebarOpen] = useState(false)
   const designDocuments = useDesignWorkspaceStore((s) => s.documents)
+  useOrchestrationEventBridge()
   const { focusModeEnabled, runtimeLogPath, toggleTheme, uiModeCameosEnabled, updateFocusMode } =
     useWorkbenchUiRuntime()
   const contributionContext = useMemo(

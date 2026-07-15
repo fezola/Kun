@@ -133,6 +133,18 @@ export const KUN_USAGE_TEMPLATE = '/v1/usage'
 export const KUN_DEBUG_LLM_ROUNDS_PATH = '/v1/debug/llm-rounds'
 export const KUN_DEBUG_LLM_ROUNDS_TEMPLATE = '/v1/debug/llm-rounds'
 
+export const KUN_ORCHESTRATION_GRAPHS_PATH = '/v1/orchestration/graphs'
+export const KUN_ORCHESTRATION_GRAPHS_TEMPLATE = '/v1/orchestration/graphs'
+export function kunOrchestrationGraphAbortPath(graphId: string): string {
+  return `/v1/orchestration/graphs/${encodeURIComponent(graphId)}/abort`
+}
+export function kunOrchestrationGraphPausePath(graphId: string): string {
+  return `/v1/orchestration/graphs/${encodeURIComponent(graphId)}/pause`
+}
+export function kunOrchestrationGraphResumePath(graphId: string): string {
+  return `/v1/orchestration/graphs/${encodeURIComponent(graphId)}/resume`
+}
+
 export const KUN_BACKGROUND_SHELLS_PATH = '/v1/background-shells'
 export const KUN_BACKGROUND_SHELLS_TEMPLATE = '/v1/background-shells'
 export const KUN_BACKGROUND_SHELL_TEMPLATE = '/v1/background-shells/{sessionId}'

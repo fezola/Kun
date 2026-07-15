@@ -82,7 +82,13 @@ export function useWorkbenchAttachmentController({
       for (const [index, file] of files.entries()) {
         const localFilePath =
           options.localFilePaths?.[index] ||
-          (typeof window.kunGui?.getPathForFile === 'function' ? window.kunGui.getPathForFile(file) : '')
+          (() => {
+            try {
+              return typeof window.kunGui?.getPathForFile === 'function' ? window.kunGui.getPathForFile(file) : ''
+            } catch {
+              return ''
+            }
+          })()
         if (isPdfAttachmentFile(file)) {
           if (!localFilePath || typeof window.kunGui?.readLocalPdfText !== 'function') {
             throw new Error(t('composerPdfAttachmentUnavailable'))
